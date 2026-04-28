@@ -1,0 +1,17 @@
+[package]
+name = "hygiea-macros"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Procedural macros for hygiea error handling"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+quote.workspace = true
+syn.workspace = true
+proc-macro2.workspace = true

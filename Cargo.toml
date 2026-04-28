@@ -1,0 +1,45 @@
+[workspace]
+resolver = "2"
+members = [
+    "hygiea",
+    "hygiea-core",
+    "hygiea-macros",
+    "hygiea-examples",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+authors = ["wjj"]
+repository = "https://github.com/tpxxwz/hygiea"
+rust-version = "1.85"
+
+[workspace.dependencies]
+# 内部依赖（版本自动继承 workspace.package.version）
+hygiea-core = { path = "hygiea-core" }
+hygiea-macros = { path = "hygiea-macros" }
+
+# 过程宏依赖
+quote = "1.0"
+syn = { version = "2.0", features = ["full"] }
+proc-macro2 = "1.0"
+
+# 核心依赖
+serde = "1.0"
+serde_json = "1.0"
+linkme = "0.3"
+ctor = "0.10"
+minijinja = "2.19"
+parking_lot = "0.12"
+lru = "0.18"
+
+# 可选功能依赖
+tokio = { version = "1.52", features = ["full"] }
+async-trait = "0.1"
+anyhow = "1.0"
+log = "0.4"
+
+# 测试依赖
+env_logger = "0.11"
+trybuild = "1.0"

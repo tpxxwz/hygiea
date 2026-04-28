@@ -1,0 +1,18 @@
+[package]
+name = "hygiea-examples"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Examples for hygiea"
+publish = false
+
+[dev-dependencies]
+hygiea = { path = "../hygiea", features = ["full"] }
+tokio = { workspace = true, features = ["full"] }
+serde_json.workspace = true
+linkme.workspace = true
+env_logger.workspace = true
+log.workspace = true
