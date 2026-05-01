@@ -82,23 +82,24 @@ pub fn format_positional(
     // 将位置参数模板转换为 minijinja 模板：`{}` → `{{ _N }}`，`{{` → `{`，`}}` → `}`
     let mut tpl = String::with_capacity(source.len() + 32);
     let mut count = 0usize;
-    let chars: Vec<char> = source.chars().collect();
-    let mut i = 0;
+    let mut chars = source.chars().peekable();
 
-    while i < chars.len() {
-        if chars[i] == '{' && i + 1 < chars.len() && chars[i + 1] == '{' {
-            tpl.push('{');
-            i += 2;
-        } else if chars[i] == '}' && i + 1 < chars.len() && chars[i + 1] == '}' {
-            tpl.push('}');
-            i += 2;
-        } else if chars[i] == '{' && i + 1 < chars.len() && chars[i + 1] == '}' {
-            tpl.push_str(&format!("{{{{ _{} }}}}", count));
-            count += 1;
-            i += 2;
-        } else {
-            tpl.push(chars[i]);
-            i += 1;
+    while let Some(c) = chars.next() {
+        match (c, chars.peek()) {
+            ('{', Some('{')) => {
+                chars.next();
+                tpl.push('{');
+            }
+            ('}', Some('}')) => {
+                chars.next();
+                tpl.push('}');
+            }
+            ('{', Some('}')) => {
+                chars.next();
+                tpl.push_str(&format!("{{{{ _{count} }}}}"));
+                count += 1;
+            }
+            _ => tpl.push(c),
         }
     }
 

@@ -2,142 +2,316 @@
 //!
 //! Provides a component-based application framework with lifecycle management.
 
-pub use anyhow::Error;
-pub use async_trait::async_trait;
-pub use log;
+// ---- imports: std → external crates ----------------------------------------
+use std::any::{Any, TypeId};
+use std::sync::Arc;
 
+use dashmap::DashMap;
+use serde::Deserialize;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
-/// Component trait - defines the interface for application components
+use crate::log::{TracingComponent, TracingConfig};
+
+// ---- re-exports & type aliases --------------------------------------------
+pub use async_trait::async_trait;
+
+// ---- private helper types --------------------------------------------------
+
+#[derive(Hash, PartialEq, Eq)]
+struct ComponentKey {
+    type_id: TypeId,
+    name: &'static str,
+}
+
+// ---- public types ----------------------------------------------------------
+
+/// Top-level configuration for the `Registry`.
 ///
-/// The lifetime parameter 'a represents the lifetime of the configuration
-/// that components may hold references to.
-#[async_trait::async_trait]
-pub trait Component: Send {
-    /// Startup the component
+/// Each field is optional — framework-level components are only registered
+/// when their config is `Some(...)`.
+///
+/// ```
+/// use hygiea_core::app::RegistryConfig;
+/// use hygiea_core::log::TracingConfig;
+///
+/// // default: console tracing only
+/// let config = RegistryConfig::default();
+///
+/// // no tracing at all
+/// let config = RegistryConfig { tracing: None };
+///
+/// // custom tracing
+/// let config = RegistryConfig {
+///     tracing: Some(TracingConfig { ..Default::default() }),
+/// };
+/// ```
+#[derive(Deserialize, Clone, Default)]
+pub struct RegistryConfig {
+    #[serde(default)]
+    pub tracing: TracingConfig,
+}
+
+/// Error returned when a component fails to start
+#[derive(Debug)]
+pub struct LaunchError {
+    pub index: usize,
+    pub name: &'static str,
+    pub type_name: &'static str,
+    pub source: anyhow::Error,
+}
+
+impl std::fmt::Display for LaunchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "component[{}] {}({}) failed to start: {}",
+            self.index, self.type_name, self.name, self.source
+        )
+    }
+}
+
+impl std::error::Error for LaunchError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&*self.source)
+    }
+}
+
+/// Shared resource container accessible by all components
+///
+/// Components can read and write typed resources during startup.
+/// Uses type erasure internally, but provides a typed API.
+///
+/// Supports both anonymous and named resources of the same type,
+/// so multiple instances of the same type (e.g. two PgPool) can coexist.
+///
+/// # Example
+/// ```ignore
+/// // Anonymous (single instance per type)
+/// resources.insert(RedisClient::new(config));
+/// let redis = resources.get::<RedisClient>().unwrap();
+///
+/// // Named (multiple instances of same type)
+/// resources.insert_named("primary", PgPool::new(primary_config));
+/// resources.insert_named("replica", PgPool::new(replica_config));
+/// let primary = resources.get_named::<PgPool>("primary").unwrap();
+/// let replica  = resources.get_named::<PgPool>("replica").unwrap();
+/// ```
+pub struct Resources {
+    map: Arc<DashMap<ComponentKey, Arc<dyn Any + Send + Sync>>>,
+}
+
+impl Resources {
+    fn new() -> Self {
+        Self {
+            map: Arc::new(DashMap::new()),
+        }
+    }
+
+    fn key<T: 'static>(name: &'static str) -> ComponentKey {
+        ComponentKey {
+            type_id: TypeId::of::<T>(),
+            name,
+        }
+    }
+
+    /// Insert an anonymous typed resource
+    pub fn insert<T: Send + Sync + 'static>(&self, value: T) {
+        self.insert_named("", value);
+    }
+
+    /// Insert a named typed resource
+    pub fn insert_named<T: Send + Sync + 'static>(&self, name: &'static str, value: T) {
+        self.map.insert(Self::key::<T>(name), Arc::new(value));
+    }
+
+    /// Get an anonymous typed resource
+    pub fn get<T: Send + Sync + 'static>(&self) -> Option<Arc<T>> {
+        self.get_named("")
+    }
+
+    /// Get a named typed resource
+    pub fn get_named<T: Send + Sync + 'static>(&self, name: &'static str) -> Option<Arc<T>> {
+        self.map
+            .get(&Self::key::<T>(name))
+            .and_then(|arc| Arc::clone(&*arc).downcast::<T>().ok())
+    }
+
+    /// Check if an anonymous resource type exists
+    pub fn contains<T: Send + Sync + 'static>(&self) -> bool {
+        self.contains_named::<T>("")
+    }
+
+    /// Check if a named resource type exists
+    pub fn contains_named<T: Send + Sync + 'static>(&self, name: &'static str) -> bool {
+        self.map.contains_key(&Self::key::<T>(name))
+    }
+
+    /// Remove an anonymous typed resource
+    pub fn remove<T: Send + Sync + 'static>(&self) -> Option<Arc<T>> {
+        self.remove_named("")
+    }
+
+    /// Remove a named typed resource
+    pub fn remove_named<T: Send + Sync + 'static>(&self, name: &'static str) -> Option<Arc<T>> {
+        self.map
+            .remove(&Self::key::<T>(name))
+            .and_then(|(_, arc)| Arc::clone(&arc).downcast::<T>().ok())
+    }
+}
+
+impl Clone for Resources {
+    fn clone(&self) -> Self {
+        Self {
+            map: Arc::clone(&self.map),
+        }
+    }
+}
+
+// ---- public traits ---------------------------------------------------------
+
+/// Component trait - defines the full lifecycle interface for application components
+///
+/// Implement this single trait to define both how a component is built and how it starts up.
+/// `name` is the key used for named resource storage; use `""` for anonymous components.
+#[async_trait]
+pub trait Component: Send + 'static {
+    /// Configuration type for this component
+    type Config;
+
+    /// Build the component from its name and config.
+    ///
+    /// Store `name` in the struct if you need it in `startup`
+    /// (e.g. `state.insert_named(self.name, pool)`).
+    fn build(name: &'static str, config: Self::Config) -> Self;
+
+    /// Start the component.
     ///
     /// Do all initialization that might fail here (e.g., bind port, connect to DB).
-    /// If successful, spawn background task and return the JoinHandle.
-    /// Return None if no background task is needed.
-    ///
-    /// The shutdown_rx parameter receives the shutdown signal from the registry.
-    /// Components should monitor this channel and gracefully shutdown when a signal is received.
-    ///
-    /// Returns an error if startup fails - this will trigger shutdown of all previously started components.
+    /// Read dependencies from `state` and insert your own resources for later components.
+    /// Spawn a background task and return its handle if needed, or return `None`.
+    /// On error, previously started components will be shut down automatically.
     async fn startup(
         &mut self,
+        state: &Resources,
         shutdown_rx: broadcast::Receiver<()>,
-    ) -> Result<Option<JoinHandle<()>>, Error>;
+    ) -> Result<Option<JoinHandle<()>>, anyhow::Error>;
 }
 
 /// Component registry - manages component lifecycle
-///
-/// The lifetime parameter 'a represents the lifetime of component references.
-/// Components may hold references to external data (e.g., configuration),
-/// and those references must outlive the registry.
-pub struct Registry<'a> {
-    components: Vec<Box<dyn Component + 'a>>,
+pub struct Registry {
+    state: Resources,
+    components: Vec<(TypeId, &'static str, &'static str, Box<dyn ComponentObject>)>,
     handles: Vec<JoinHandle<()>>,
     shutdown_tx: broadcast::Sender<()>,
 }
 
-impl<'a> Registry<'a> {
-    /// Create a new registry with configuration and register components
-    ///
-    /// The registration function receives:
-    /// - `config`: Reference to the configuration
-    /// - `components`: Mutable vector to push components into
-    ///
-    /// Components can hold references to the configuration.
-    ///
-    /// # Example
-    /// ```ignore
-    /// let config = load_config();
-    /// Registry::new(&config, |config, components| {
-    ///     components.push(Box::new(DatabaseComponent::new(config)));
-    ///     components.push(Box::new(HttpServerComponent::new(config)));
-    /// })
-    /// .run()
-    /// .await;
-    /// ```
-    pub fn new<C, F>(config: &'a C, register_fn: F) -> Self
-    where
-        F: FnOnce(&'a C, &mut Vec<Box<dyn Component + 'a>>),
-    {
-        let (shutdown_tx, _) = broadcast::channel(1);
-        let mut components = Vec::new();
-
-        register_fn(config, &mut components);
-
-        Self {
-            components,
-            handles: Vec::new(),
-            shutdown_tx,
-        }
+impl Registry {
+    /// Create a new registry with default config (console tracing, level `info`).
+    pub fn new() -> Self {
+        Self::with_config(RegistryConfig::default())
     }
 
-    /// Run the application: startup all components, wait for shutdown, then cleanup
+    /// Create a new registry with custom config.
     ///
-    /// This method:
-    /// 1. Starts all components in registration order
-    /// 2. Waits for shutdown signal (Ctrl+C or SIGTERM)
-    /// 3. Gracefully shuts down all components in reverse order
-    ///
-    /// If any component fails to start:
-    /// - All previously started components are gracefully shut down
-    /// - Process exits with error code 1
-    ///
-    /// # Example
-    /// ```ignore
-    /// Registry::new(config, register_components)
-    ///     .run()
-    ///     .await;
-    /// ```
-    pub async fn run(mut self) {
-        // Startup all components
-        let mut started_count = 0;
+    /// Framework-level components (e.g. tracing) are registered based on
+    /// which fields in `RegistryConfig` are `Some(...)`.
+    pub fn with_config(config: RegistryConfig) -> Self {
+        Self {
+            state: Resources::new(),
+            components: Vec::new(),
+            handles: Vec::new(),
+            shutdown_tx: broadcast::channel(1).0,
+        }
+        .add::<TracingComponent>(config.tracing)
+    }
 
-        for (idx, c) in self.components.iter_mut().enumerate() {
+    /// Add an anonymous component (single instance per type)
+    pub fn add<C: Component>(self, config: C::Config) -> Self {
+        self.add_named::<C>("", config)
+    }
+
+    /// Add a named component, allowing multiple instances of the same type.
+    ///
+    /// `name` is forwarded to `Component::build` so the component can store it
+    /// and use it in `startup` (e.g. `state.insert_named(self.name, pool)`).
+    pub fn add_named<C: Component>(mut self, name: &'static str, config: C::Config) -> Self {
+        self.components.push((
+            TypeId::of::<C>(),
+            name,
+            std::any::type_name::<C>(),
+            Box::new(C::build(name, config)),
+        ));
+        self
+    }
+
+    /// Get a reference to the shared resources
+    pub fn resources(&self) -> &Resources {
+        &self.state
+    }
+
+    /// Launch all components in registration order
+    ///
+    /// Each component receives shared Resources so it can:
+    /// - Read resources inserted by previously started components
+    /// - Insert its own resources for later components to use
+    ///
+    /// After `launch()` completes, you can access resources via `resources()`.
+    ///
+    /// # Errors
+    /// Returns a `LaunchError` if any component fails to start.
+    /// Previously started components are shut down automatically on failure.
+    pub async fn launch(&mut self) -> Result<(), LaunchError> {
+        for idx in 0..self.components.len() {
+            let name = self.components[idx].1;
+            let type_name = self.components[idx].2;
             let shutdown_rx = self.shutdown_tx.subscribe();
+            let result = self.components[idx]
+                .3
+                .startup(&self.state, shutdown_rx)
+                .await;
 
-            // Startup component
-            match c.startup(shutdown_rx).await {
+            match result {
                 Ok(Some(handle)) => {
-                    log::info!("Component {} started with background task", idx);
+                    tracing::info!("{}({}) started with background task", type_name, name);
                     self.handles.push(handle);
-                    started_count += 1;
                 }
                 Ok(None) => {
-                    log::info!("Component {} started (no background task)", idx);
-                    started_count += 1;
+                    tracing::info!("{}({}) started", type_name, name);
                 }
                 Err(e) => {
-                    self.shutdown_all().await;
-                    log::error!("Component {} failed to start: {}", idx, e);
-                    std::process::exit(1);
+                    let err = LaunchError {
+                        index: idx,
+                        name,
+                        type_name,
+                        source: e,
+                    };
+                    tracing::error!("{}", err);
+                    self.shutdown().await;
+                    return Err(err);
                 }
             }
         }
 
-        log::info!("All {} components started successfully", started_count);
+        tracing::info!(
+            "All {} components started successfully",
+            self.components.len()
+        );
+        Ok(())
+    }
 
-        // Wait for shutdown signal
+    /// Wait for shutdown signal (Ctrl+C or SIGTERM), then shutdown all components
+    pub async fn await_shutdown(mut self) {
         wait_for_signal().await;
-
-        // Trigger graceful shutdown
-        log::info!("Starting graceful shutdown...");
-        self.shutdown_all().await;
+        tracing::info!("Starting graceful shutdown...");
+        self.shutdown().await;
     }
 
     /// Shutdown all components by broadcasting shutdown signal
     /// Then wait for all background tasks to complete (in reverse order)
-    async fn shutdown_all(&mut self) {
-        // Send shutdown signal to all components
+    async fn shutdown(&mut self) {
         let _ = self.shutdown_tx.send(());
 
-        // Wait for all handles to complete (graceful shutdown)
-        // Shutdown in reverse registration order
         for handle in self.handles.drain(..).rev() {
             if let Err(e) = handle.await {
                 let msg = if e.is_panic() {
@@ -145,11 +319,37 @@ impl<'a> Registry<'a> {
                 } else {
                     "Task cancelled"
                 };
-                log::warn!("{}: {:?}", msg, e);
+                tracing::warn!("{}: {:?}", msg, e);
             }
         }
     }
 }
+
+// ---- private traits & impls ------------------------------------------------
+
+/// Internal object-safe trait for storing heterogeneous components in the Registry.
+/// Only exposes `startup`; `build` and `Config` are not object-safe.
+#[async_trait]
+trait ComponentObject: Send + 'static {
+    async fn startup(
+        &mut self,
+        state: &Resources,
+        shutdown_rx: broadcast::Receiver<()>,
+    ) -> Result<Option<JoinHandle<()>>, anyhow::Error>;
+}
+
+#[async_trait]
+impl<C: Component> ComponentObject for C {
+    async fn startup(
+        &mut self,
+        state: &Resources,
+        shutdown_rx: broadcast::Receiver<()>,
+    ) -> Result<Option<JoinHandle<()>>, anyhow::Error> {
+        Component::startup(self, state, shutdown_rx).await
+    }
+}
+
+// ---- free functions --------------------------------------------------------
 
 /// Wait for Ctrl+C or SIGTERM
 async fn wait_for_signal() {
@@ -157,10 +357,10 @@ async fn wait_for_signal() {
     {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {
-                log::info!("Received Ctrl+C");
+                tracing::info!("Received Ctrl+C");
             }
             _ = unix_signal_shutdown() => {
-                log::info!("Received SIGTERM");
+                tracing::info!("Received SIGTERM");
             }
         }
     }
@@ -170,7 +370,7 @@ async fn wait_for_signal() {
         tokio::signal::ctrl_c()
             .await
             .expect("Failed to install Ctrl+C handler");
-        log::info!("Received Ctrl+C");
+        tracing::info!("Received Ctrl+C");
     }
 }
 

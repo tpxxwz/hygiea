@@ -1,0 +1,25 @@
+[package]
+name = "hygiea-component-db-pg-seaorm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "PostgreSQL (SeaORM) component for hygiea"
+
+[features]
+default = ["distributed-lock"]
+distributed-lock = ["hygiea-core/distributed-lock"]
+
+[dependencies]
+hygiea-core = { path = "../../hygiea-core", version = "0.1.1-alpha.1", features = ["app"] }
+sea-orm = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+log = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }

@@ -14,7 +14,7 @@ pub use error::{ERR_REGISTRATIONS, ErrRegistration, ErrRegistrationKind, FmtErr,
 
 #[cfg(feature = "error")]
 #[ctor::ctor]
-fn init_hygiea_core() {
+fn init_hygiea_error_env() {
     error::init();
 }
 
@@ -23,4 +23,17 @@ fn init_hygiea_core() {
 pub mod app;
 
 #[cfg(feature = "app")]
-pub use app::{Component, Registry};
+pub mod log;
+
+#[cfg(feature = "app")]
+pub use app::{Component, LaunchError, Registry, RegistryConfig, Resources};
+
+#[cfg(feature = "app")]
+pub use log::{ConsoleLayer, FileLayer, TracingConfig};
+
+// ========== ext (env_tool always, distributed-lock optional) ==========
+pub mod ext;
+pub use ext::{BuiltinKey, EnvKey, env, env_get, env_get_opt, env_get_or, env_get_or_else};
+
+#[cfg(feature = "distributed-lock")]
+pub use ext::{DistributedKey, DistributedLock};

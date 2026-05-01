@@ -102,11 +102,15 @@ mod error;
 #[doc(hidden)]
 pub use error::__private;
 #[cfg(feature = "error")]
-pub use error::{BaseFmtErrs, BaseRawErrs, FmtErr, RawErr, fmt_err, raw_err};
+pub use error::{BaseFmtErr, BaseRawErr, FmtErr, RawErr, SuccessRawErr, fmt_err, raw_err};
 
 // ========== Feature: app ==========
 #[cfg(feature = "app")]
-pub use hygiea_core::app::*;
+pub use hygiea_core::app::{
+    Component, LaunchError, Registry, RegistryConfig, Resources, async_trait,
+};
+#[cfg(feature = "app")]
+pub use hygiea_core::log::{ConsoleLayer, FileLayer, TracingConfig};
 
 // ========== Feature: string ==========
 /// String utilities module (coming soon)

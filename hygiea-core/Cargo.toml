@@ -21,7 +21,10 @@ template = ["dep:minijinja", "dep:parking_lot", "dep:serde_json", "dep:lru"]
 error = ["dep:minijinja", "dep:parking_lot", "dep:serde_json", "dep:linkme", "dep:ctor"]
 
 # Application framework module
-app = ["dep:tokio", "dep:async-trait", "dep:log"]
+app = ["dep:tokio", "dep:async-trait", "dep:anyhow", "dep:tracing", "dep:tracing-subscriber", "dep:tracing-log", "dep:tracing-appender", "dep:serde", "dep:dashmap"]
+
+# Distributed lock abstractions
+distributed-lock = ["dep:async-trait"]
 
 # Future modules (placeholder)
 string = []
@@ -46,7 +49,11 @@ ctor = { workspace = true, optional = true }
 # Optional dependencies for app feature
 tokio = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
+dashmap = { workspace = true, optional = true }
 
-# Always available (needed for public API)
-anyhow = { workspace = true }
-log = { workspace = true, optional = true }
+anyhow = { workspace = true, optional = true }
+serde = { workspace = true, features = ["derive"], optional = true }
+tracing = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, optional = true }
+tracing-log = { workspace = true, optional = true }
+tracing-appender = { workspace = true, optional = true }

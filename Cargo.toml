@@ -5,10 +5,15 @@ members = [
     "hygiea-core",
     "hygiea-macros",
     "hygiea-examples",
+    "hygiea-components/hygiea-component-http-axum",
+    "hygiea-components/hygiea-component-grpc-tonic",
+    "hygiea-components/hygiea-component-db-pg-seaorm",
+    "hygiea-components/hygiea-component-db-pg-sqlx",
+    "hygiea-components/hygiea-component-redis-fred",
 ]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.1.1-alpha.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 authors = ["wjj"]
@@ -17,8 +22,8 @@ rust-version = "1.85"
 
 [workspace.dependencies]
 # 内部依赖（版本自动继承 workspace.package.version）
-hygiea-core = { path = "hygiea-core" }
-hygiea-macros = { path = "hygiea-macros" }
+hygiea-core = { path = "hygiea-core", version = "0.1.1-alpha.1" }
+hygiea-macros = { path = "hygiea-macros", version = "0.1.1-alpha.1" }
 
 # 过程宏依赖
 quote = "1.0"
@@ -29,17 +34,36 @@ proc-macro2 = "1.0"
 serde = "1.0"
 serde_json = "1.0"
 linkme = "0.3"
-ctor = "0.10"
+ctor = "0.11"
 minijinja = "2.19"
 parking_lot = "0.12"
+dashmap = "6"
 lru = "0.18"
 
 # 可选功能依赖
 tokio = { version = "1.52", features = ["full"] }
 async-trait = "0.1"
 anyhow = "1.0"
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+tracing-log = "0.2"
 log = "0.4"
 
+# Database
+sea-orm = { version = "2.0.0-rc.37", features = ["sqlx-postgres", "runtime-tokio-rustls", "mock"] }
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "macros"] }
+
+# HTTP
+axum = "0.8"
+tower-http = { version = "0.6", features = ["timeout", "limit"] }
+http = "1.4"
+
+# gRPC
+tonic = "0.14"
+tokio-stream = { version = "0.1", features = ["sync", "net"] }
+
 # 测试依赖
-env_logger = "0.11"
 trybuild = "1.0"

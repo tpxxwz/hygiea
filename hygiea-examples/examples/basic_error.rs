@@ -63,8 +63,8 @@ fn main() {
 
     // Example 4: Using base errors
     println!("4. Base System Errors:");
-    use hygiea::BaseFmtErrs;
-    let err = BaseFmtErrs::SysFmtErr.to_err(json!({
+    use hygiea::BaseFmtErr;
+    let err = BaseFmtErr::SysFmtErr.to_err(json!({
         "cause": "network timeout"
     }));
     println!("   Error Code: {}", err.err_code);

@@ -1,0 +1,17 @@
+[package]
+name = "hygiea-component-db-pg-sqlx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "PostgreSQL (sqlx) component for hygiea"
+
+[dependencies]
+hygiea-core = { path = "../../hygiea-core", version = "0.1.1-alpha.1", features = ["app", "distributed-lock"] }
+sqlx = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
