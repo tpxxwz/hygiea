@@ -16,23 +16,24 @@ hygiea-core = { path = "../hygiea-core", version = "0.1.1-alpha.1", default-feat
 hygiea-macros = { path = "../hygiea-macros", version = "0.1.1-alpha.1" }
 
 # 宏生成的代码需要这些依赖
-serde_json = { workspace = true, optional = true }
-linkme = { workspace = true, optional = true }
+serde_json = { workspace = true }
+linkme = { workspace = true }
+
 
 [features]
 default = []  # 用户明确选择需要的功能
 
 # 功能模块（传递给 core）
-template = ["hygiea-core/template"]          # 模板渲染工具
-error = ["hygiea-core/error", "dep:serde_json", "dep:linkme"]  # 错误处理模块
+format = ["hygiea-core/format"]              # 字符串占位符 / 模板渲染
 app = ["hygiea-core/app"]      # 应用框架模块（当前已实现）
 string = ["hygiea-core/string"]                                # 字符串工具（预留）
 http = ["hygiea-core/http"]                                    # HTTP 工具（预留）
 json = ["hygiea-core/json"]                                    # JSON 工具（预留）
-time = ["hygiea-core/time"]                                    # 时间工具（预留）
+http-client = ["hygiea-core/http-client"]
+ws-client = ["hygiea-core/ws-client"]
 
 # 全功能
-full = ["template", "error", "app", "string", "http", "json", "time"]
+full = ["format", "app", "string", "http", "json", "http-client", "ws-client"]
 
 [dev-dependencies]
 trybuild.workspace = true

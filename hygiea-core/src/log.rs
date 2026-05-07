@@ -10,6 +10,7 @@ use tracing_subscriber::{EnvFilter, Layer, Registry, fmt};
 
 use crate::app::{Component, Resources, async_trait};
 
+
 // ---- config types ----------------------------------------------------------
 
 #[derive(Deserialize, Clone, Default)]
@@ -54,6 +55,7 @@ pub struct TracingConfig {
     pub layers: Vec<FileLayer>,
     pub root_env_filter: String,
     pub root_dir: String,
+    pub time_format: Option<String>,
 }
 
 impl TracingConfig {
@@ -68,6 +70,7 @@ impl Default for TracingConfig {
             layers: Vec::new(),
             root_env_filter: TracingConfig::DEFAULT_ROOT_ENV_FILTER.to_string(),
             root_dir: TracingConfig::DEFAULT_ROOT_DIR.to_string(),
+            time_format: None,
         }
     }
 }
@@ -112,6 +115,18 @@ impl Component for TracingComponent {
 // ---- init ------------------------------------------------------------------
 
 fn init_tracing(cfg: &TracingConfig) -> anyhow::Result<Vec<WorkerGuard>> {
+    use crate::date::DateFormat;
+    let fmt = if let Some(s) = cfg.time_format.as_deref().filter(|s| !s.is_empty()) {
+        time::format_description::parse_owned::<2>(s)
+            .map_err(|e| anyhow::anyhow!("Invalid time_format: {e}"))?
+    } else {
+        let items = crate::date::Formatter::ISO.pattern_time();
+        time::format_description::OwnedFormatItem::Compound(
+            items.iter().map(|i| i.clone().into()).collect(),
+        )
+    };
+    let timer = tracing_subscriber::fmt::time::UtcTime::new(fmt);
+
     let mut work_guards: Vec<WorkerGuard> = Vec::new();
 
     let effective_root_filter = if cfg.root_env_filter.is_empty() {
@@ -130,6 +145,7 @@ fn init_tracing(cfg: &TracingConfig) -> anyhow::Result<Vec<WorkerGuard>> {
             &cfg.console.env_filter
         };
         let console_layer = fmt::layer()
+            .with_timer(timer.clone())
             .with_target(true)
             .with_filter(EnvFilter::new(filter_str));
         combined_layer = Some(Box::new(console_layer));
@@ -173,6 +189,7 @@ fn init_tracing(cfg: &TracingConfig) -> anyhow::Result<Vec<WorkerGuard>> {
             let (writer, guard) = non_blocking(appender);
             work_guards.push(guard);
             let file_layer = fmt::layer()
+                .with_timer(timer.clone())
                 .with_ansi(false)
                 .with_writer(writer)
                 .with_filter(file_filter);
@@ -182,6 +199,7 @@ fn init_tracing(cfg: &TracingConfig) -> anyhow::Result<Vec<WorkerGuard>> {
             });
         } else {
             let file_layer = fmt::layer()
+                .with_timer(timer.clone())
                 .with_ansi(false)
                 .with_writer(appender)
                 .with_filter(file_filter);
@@ -197,7 +215,7 @@ fn init_tracing(cfg: &TracingConfig) -> anyhow::Result<Vec<WorkerGuard>> {
         Some(layer) => layer,
         None => {
             let default_filter = EnvFilter::new(effective_root_filter);
-            Box::new(fmt::layer().with_target(true).with_filter(default_filter))
+            Box::new(fmt::layer().with_timer(timer.clone()).with_target(true).with_filter(default_filter))
         }
     };
 

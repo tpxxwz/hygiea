@@ -88,34 +88,29 @@
 // 为了让宏生成的代码能找到 ::hygiea:: 路径
 extern crate self as hygiea;
 
-// ========== Feature: template ==========
-#[cfg(feature = "template")]
-mod template;
+// ========== Feature: format ==========
+#[cfg(feature = "format")]
+mod format;
 
-#[cfg(feature = "template")]
-pub use template::{format_positional, format_template_cached, format_template_once};
+#[cfg(feature = "format")]
+pub use format::{tpl_cached, tpl_once, tpl_pos};
 
-// ========== Feature: error ==========
-#[cfg(feature = "error")]
-mod error;
-#[cfg(feature = "error")]
+// ========== error ==========
 #[doc(hidden)]
-pub use error::__private;
-#[cfg(feature = "error")]
-pub use error::{BaseFmtErr, BaseRawErr, FmtErr, RawErr, SuccessRawErr, fmt_err, raw_err};
+pub use hygiea_core::__private;
+pub use hygiea_core::{BaseFmtErr, BaseRawErr, FmtErr, RawErr, SuccessRawErr, fmt_err, raw_err};
 
 // ========== Feature: app ==========
 #[cfg(feature = "app")]
 pub use hygiea_core::app::{
-    Component, LaunchError, Registry, RegistryConfig, Resources, async_trait,
+    Component, IntoRegistryConfig, LaunchError, Registry, RegistryConfig, Resources, async_trait,
 };
 #[cfg(feature = "app")]
 pub use hygiea_core::log::{ConsoleLayer, FileLayer, TracingConfig};
 
-// ========== Feature: string ==========
-/// String utilities module (coming soon)
-#[cfg(feature = "string")]
-pub mod string {}
+// ========== util ==========
+pub use hygiea_core::util;
+pub use hygiea_core::{BuiltinKey, EnvKey, env_get, env_get_opt, env_get_or, env_get_or_else};
 
 // ========== Feature: http ==========
 /// HTTP utilities module (coming soon)
@@ -126,8 +121,3 @@ pub mod http {}
 /// JSON utilities module (coming soon)
 #[cfg(feature = "json")]
 pub mod json {}
-
-// ========== Feature: time ==========
-/// Time utilities module (coming soon)
-#[cfg(feature = "time")]
-pub mod time {}

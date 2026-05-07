@@ -1,37 +1,36 @@
-pub use hygiea_core::format_positional;
-pub use hygiea_core::format_template_cached;
-pub use hygiea_core::format_template_once;
+pub use hygiea_core::tpl_cached;
+pub use hygiea_core::tpl_once;
+pub use hygiea_core::tpl_pos;
 
-/// 不注册模板，直接调用 minijinja 的 `env.render_str` 渲染。每次调用都会重新解析模板字符串。
+/// 渲染 minijinja 模板，不缓存，每次重新解析。
 #[macro_export]
 macro_rules! fmt_tpl_once {
     ($tpl:expr, $args:tt $(,)?) => {
-        $crate::format_template_once($tpl, serde_json::json!($args))
+        $crate::tpl_once($tpl, serde_json::json!($args))
     };
 }
 
-/// 将模板字符串注册到 minijinja 的 `env` 中，后续相同模板直接从 LRU 缓存中查找并渲染。
-/// LRU 缓存上限为 1024 条，超出后淘汰最早注册的模板。
+/// 渲染 minijinja 模板，注册到 LRU 缓存复用（上限 1024 条）。
 #[macro_export]
 macro_rules! fmt_tpl {
     ($tpl:expr, $args:tt $(,)?) => {
-        $crate::format_template_cached($tpl, serde_json::json!($args))
+        $crate::tpl_cached($tpl, serde_json::json!($args))
     };
 }
 
-/// 位置参数格式化，不注册模板，直接渲染。`{}` 按顺序填入参数，`{{` / `}}` 转义为字面量。
+/// 位置参数格式化，`{}` 按顺序填入，不缓存。
 #[macro_export]
 macro_rules! fmt_pos_once {
     ($tpl:expr $(, $arg:expr)* $(,)?) => {
-        $crate::format_positional($tpl, serde_json::json!([$($arg),*]), false)
+        $crate::tpl_pos($tpl, serde_json::json!([$($arg),*]), false)
     };
 }
 
-/// 位置参数格式化，注册到 env 缓存复用。`{}` 按顺序填入参数，`{{` / `}}` 转义为字面量。
+/// 位置参数格式化，`{}` 按顺序填入，缓存模板复用。
 #[macro_export]
 macro_rules! fmt_pos {
     ($tpl:expr $(, $arg:expr)* $(,)?) => {
-        $crate::format_positional($tpl, serde_json::json!([$($arg),*]), true)
+        $crate::tpl_pos($tpl, serde_json::json!([$($arg),*]), true)
     };
 }
 

@@ -8,6 +8,9 @@ repository.workspace = true
 rust-version.workspace = true
 description = "Redis (fred) component for hygiea"
 
+[features]
+distributed-lock = ["hygiea-core/distributed-lock"]
+
 [dependencies]
 hygiea-core = { path = "../../hygiea-core", version = "0.1.1-alpha.1", features = ["app"] }
 fred = { version = "10.1.0", features = ["sentinel-auth"] }

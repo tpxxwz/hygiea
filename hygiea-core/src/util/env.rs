@@ -12,6 +12,7 @@ pub enum BuiltinKey {
     DefaultHome,
     DefaultUser,
     DefaultPassword,
+    Developer,
     // ---- local ----
     LocalPgHost,
     LocalPgPort,
@@ -59,6 +60,7 @@ impl EnvKey for BuiltinKey {
             Self::DefaultHome => "DEFAULT_HOME",
             Self::DefaultUser => "DEFAULT_USER",
             Self::DefaultPassword => "DEFAULT_PASSWORD",
+            Self::Developer => "DEVELOPER",
             Self::LocalPgHost => "LOCAL_PG_HOST",
             Self::LocalPgPort => "LOCAL_PG_PORT",
             Self::LocalPgDb => "LOCAL_PG_DB",

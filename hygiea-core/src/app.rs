@@ -6,6 +6,7 @@
 use std::any::{Any, TypeId};
 use std::sync::Arc;
 
+use clap::Parser;
 use dashmap::DashMap;
 use serde::Deserialize;
 use tokio::sync::broadcast;
@@ -17,6 +18,15 @@ use crate::log::{TracingComponent, TracingConfig};
 pub use async_trait::async_trait;
 
 // ---- private helper types --------------------------------------------------
+
+#[derive(clap::Parser)]
+#[command(author, version, about)]
+struct AppCli {
+    #[arg(long, default_value = "dev")]
+    env: String,
+    #[arg(short = 'f', long, value_delimiter = ',')]
+    configs: Vec<String>,
+}
 
 #[derive(Hash, PartialEq, Eq)]
 struct ComponentKey {
@@ -50,6 +60,14 @@ struct ComponentKey {
 pub struct RegistryConfig {
     #[serde(default)]
     pub tracing: TracingConfig,
+}
+
+/// Trait for config types that can produce a [`RegistryConfig`].
+///
+/// Implement this on your application's top-level config struct so that
+/// [`Registry::from_file`] can initialize the registry in one call.
+pub trait IntoRegistryConfig {
+    fn registry_config(&self) -> RegistryConfig;
 }
 
 /// Error returned when a component fails to start
@@ -126,15 +144,15 @@ impl Resources {
     }
 
     /// Get an anonymous typed resource
-    pub fn get<T: Send + Sync + 'static>(&self) -> Option<Arc<T>> {
+    pub fn get<T: Send + Sync + Clone + 'static>(&self) -> Option<T> {
         self.get_named("")
     }
 
     /// Get a named typed resource
-    pub fn get_named<T: Send + Sync + 'static>(&self, name: &'static str) -> Option<Arc<T>> {
+    pub fn get_named<T: Send + Sync + Clone + 'static>(&self, name: &'static str) -> Option<T> {
         self.map
             .get(&Self::key::<T>(name))
-            .and_then(|arc| Arc::clone(&*arc).downcast::<T>().ok())
+            .and_then(|entry| (**entry).downcast_ref::<T>().map(T::clone))
     }
 
     /// Check if an anonymous resource type exists
@@ -212,11 +230,7 @@ impl Registry {
         Self::with_config(RegistryConfig::default())
     }
 
-    /// Create a new registry with custom config.
-    ///
-    /// Framework-level components (e.g. tracing) are registered based on
-    /// which fields in `RegistryConfig` are `Some(...)`.
-    pub fn with_config(config: RegistryConfig) -> Self {
+    fn with_config(config: RegistryConfig) -> Self {
         Self {
             state: Resources::new(),
             components: Vec::new(),
@@ -224,6 +238,42 @@ impl Registry {
             shutdown_tx: broadcast::channel(1).0,
         }
         .add::<TracingComponent>(config.tracing)
+    }
+
+    /// Load config from file and initialize the registry in one call.
+    ///
+    /// Load config from file and initialize the registry in one call.
+    ///
+    /// Reads `--env <name>` (default `dev`) and optional `-f <file,...>` extra files.
+    /// Config files are resolved as `config/<name>.toml` relative to the working directory.
+    /// `T` must implement [`IntoRegistryConfig`] to provide the framework-level config.
+    /// Returns `(registry, config)` so the caller can still access all config fields.
+    pub fn load_config<T>() -> (Self, T)
+    where
+        T: serde::de::DeserializeOwned + IntoRegistryConfig,
+    {
+        let cli = AppCli::parse();
+        println!("Environment: [{}]", cli.env);
+
+        let primary = format!("config/{}.toml", cli.env);
+        println!("Loading config: [{}]", primary);
+
+        let mut builder = config::Config::builder().add_source(config::File::with_name(&primary));
+
+        for extra in &cli.configs {
+            let path = format!("config/{}.toml", extra.trim_end_matches(".toml"));
+            println!("Loading extra config: [{}]", path);
+            builder = builder.add_source(config::File::with_name(&path));
+        }
+
+        let config: T = builder
+            .build()
+            .unwrap_or_else(|e| panic!("Failed to load '{}': {}", primary, e))
+            .try_deserialize()
+            .unwrap_or_else(|e| panic!("Failed to parse '{}': {}", primary, e));
+
+        let registry = Self::with_config(config.registry_config());
+        (registry, config)
     }
 
     /// Add an anonymous component (single instance per type)
@@ -245,23 +295,25 @@ impl Registry {
         self
     }
 
-    /// Get a reference to the shared resources
-    pub fn resources(&self) -> &Resources {
-        &self.state
+    /// Launch all components, build application state, then run until shutdown signal.
+    pub async fn run<F>(mut self, f: F)
+    where
+        F: FnOnce(&Resources),
+    {
+        match self.start_components().await {
+            Err(e) => tracing::error!("{}", e),
+            Ok(()) => {
+                f(&self.state);
+                tracing::info!("Application ready");
+                wait_for_signal().await;
+                tracing::info!("Starting graceful shutdown...");
+                self.shutdown().await;
+                tracing::info!("Shutdown complete.");
+            }
+        }
     }
 
-    /// Launch all components in registration order
-    ///
-    /// Each component receives shared Resources so it can:
-    /// - Read resources inserted by previously started components
-    /// - Insert its own resources for later components to use
-    ///
-    /// After `launch()` completes, you can access resources via `resources()`.
-    ///
-    /// # Errors
-    /// Returns a `LaunchError` if any component fails to start.
-    /// Previously started components are shut down automatically on failure.
-    pub async fn launch(&mut self) -> Result<(), LaunchError> {
+    async fn start_components(&mut self) -> Result<(), LaunchError> {
         for idx in 0..self.components.len() {
             let name = self.components[idx].1;
             let type_name = self.components[idx].2;
@@ -298,13 +350,6 @@ impl Registry {
             self.components.len()
         );
         Ok(())
-    }
-
-    /// Wait for shutdown signal (Ctrl+C or SIGTERM), then shutdown all components
-    pub async fn await_shutdown(mut self) {
-        wait_for_signal().await;
-        tracing::info!("Starting graceful shutdown...");
-        self.shutdown().await;
     }
 
     /// Shutdown all components by broadcasting shutdown signal

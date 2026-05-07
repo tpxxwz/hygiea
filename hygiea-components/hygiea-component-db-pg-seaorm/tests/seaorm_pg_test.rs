@@ -1,73 +1,86 @@
-use hygiea_component_db_pg_seaorm::{SeaOrmPgComponent, SeaOrmPgConfig};
-use hygiea_core::app::{Registry, RegistryConfig};
+use hygiea_component_db_pg_seaorm::{SeaOrmPgConfig, SeaOrmPgPool};
 use hygiea_core::env::{BuiltinKey, env_get, env_get_or_else};
-use hygiea_core::log::TracingConfig;
 
-fn pg_url() -> String {
-    let host = env_get(BuiltinKey::LocalPgHost);
-    let port = env_get(BuiltinKey::LocalPgPort);
-    let db = env_get_or_else(BuiltinKey::LocalPgDb, || env_get(BuiltinKey::LocalPgUser));
-    let user = env_get(BuiltinKey::LocalPgUser);
-    let password = env_get(BuiltinKey::LocalPgPassword);
-    format!("postgres://{}:{}@{}:{}/{}", user, password, host, port, db)
+fn cloud_pg_config() -> SeaOrmPgConfig {
+    SeaOrmPgConfig {
+        host: env_get(BuiltinKey::CloudPgHost),
+        port: env_get(BuiltinKey::CloudPgPort)
+            .parse()
+            .expect("CLOUD_PG_PORT must be a number"),
+        username: env_get(BuiltinKey::CloudPgUser),
+        password: env_get(BuiltinKey::CloudPgPassword),
+        database: env_get_or_else(BuiltinKey::CloudPgDb, || env_get(BuiltinKey::CloudPgUser)),
+        params: env_get(BuiltinKey::CloudPgParams),
+        schema_search_path: "dict_jp".to_string(),
+        sqlx_logging_level: "warn".to_string(),
+        ..SeaOrmPgConfig::default()
+    }
 }
 
-#[tokio::test]
-async fn component_fails_when_db_unreachable() {
-    let mut registry = Registry::with_config(RegistryConfig {
-        tracing: TracingConfig::default(),
-    })
-    .add::<SeaOrmPgComponent>(SeaOrmPgConfig::default());
-
-    assert!(registry.launch().await.is_err());
+async fn make_db() -> SeaOrmPgPool {
+    SeaOrmPgPool::connect(cloud_pg_config()).await.unwrap()
 }
 
 #[tokio::test]
 #[ignore = "requires running PostgreSQL"]
-async fn with_lock_executes_closure() {
-    use hygiea_component_db_pg_seaorm::{DistributedLock, PgDb};
+async fn distributed_lock_tests() {
+    let db = make_db().await;
+    test_lock_executes_closure(&db).await;
+    test_try_lock_returns_some_when_acquired(&db).await;
+    test_lock_serializes_concurrent_access(&db).await;
+    test_try_lock_returns_none_when_lock_held(&db).await;
+    test_concurrent_distinct_keys_under_pool_pressure().await;
+}
 
-    let conn = sea_orm::Database::connect(&pg_url()).await.unwrap();
-    let db = PgDb::new(conn, "public".to_string());
+async fn test_lock_executes_closure(db: &SeaOrmPgPool) {
+    use hygiea_component_db_pg_seaorm::DistributedLock;
 
-    let result = db
-        .with_lock(12345, || async { Ok::<_, sea_orm::sqlx::Error>(42) })
+    let r1 = db
+        .lock(12345i32, || async { Ok::<_, sea_orm::sqlx::Error>(42) })
         .await;
-    assert_eq!(result.unwrap(), 42);
-}
+    assert_eq!(r1.unwrap(), 42);
 
-#[tokio::test]
-#[ignore = "requires running PostgreSQL"]
-async fn try_with_lock_returns_some_when_acquired() {
-    use hygiea_component_db_pg_seaorm::{DistributedLock, PgDb};
-
-    let conn = sea_orm::Database::connect(&pg_url()).await.unwrap();
-    let db = PgDb::new(conn, "public".to_string());
-
-    let result = db
-        .try_with_lock(99999, || async { Ok::<_, sea_orm::sqlx::Error>("done") })
+    let r2 = db
+        .lock((1i32, 2i32), || async { Ok::<_, sea_orm::sqlx::Error>(42) })
         .await;
-    assert!(result.unwrap().is_some());
+    assert_eq!(r2.unwrap(), 42);
+
+    let r3 = db
+        .lock("test:lock", || async { Ok::<_, sea_orm::sqlx::Error>(42) })
+        .await;
+    assert_eq!(r3.unwrap(), 42);
 }
 
-#[tokio::test]
-#[ignore = "requires running PostgreSQL"]
-async fn with_lock_serializes_concurrent_access() {
-    use hygiea_component_db_pg_seaorm::{DistributedLock, PgDb};
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    };
+async fn test_try_lock_returns_some_when_acquired(db: &SeaOrmPgPool) {
+    use hygiea_component_db_pg_seaorm::DistributedLock;
 
-    let url = pg_url();
-    let db1 = Arc::new(PgDb::new(
-        sea_orm::Database::connect(&url).await.unwrap(),
-        "public".to_string(),
-    ));
-    let db2 = Arc::new(PgDb::new(
-        sea_orm::Database::connect(&url).await.unwrap(),
-        "public".to_string(),
-    ));
+    let r1 = db
+        .try_lock(99999i32, || async { Ok::<_, sea_orm::sqlx::Error>("done") })
+        .await;
+    assert!(r1.unwrap().is_some());
+
+    let r2 = db
+        .try_lock((9i32, 9i32), || async {
+            Ok::<_, sea_orm::sqlx::Error>("done")
+        })
+        .await;
+    assert!(r2.unwrap().is_some());
+
+    let r3 = db
+        .try_lock("test:try_lock", || async {
+            Ok::<_, sea_orm::sqlx::Error>("done")
+        })
+        .await;
+    assert!(r3.unwrap().is_some());
+}
+
+async fn test_lock_serializes_concurrent_access(db: &SeaOrmPgPool) {
+    use hygiea_component_db_pg_seaorm::DistributedLock;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let db1 = db.clone();
+    let db2 = db.clone();
 
     let inside = Arc::new(AtomicBool::new(false));
     let conflict = Arc::new(AtomicBool::new(false));
@@ -76,7 +89,7 @@ async fn with_lock_serializes_concurrent_access() {
     let (inside2, conflict2) = (inside.clone(), conflict.clone());
 
     let t1 = tokio::spawn(async move {
-        db1.with_lock(777i64, || async move {
+        db1.lock(777i64, || async move {
             if inside1.swap(true, Ordering::SeqCst) {
                 conflict1.store(true, Ordering::SeqCst);
             }
@@ -89,7 +102,7 @@ async fn with_lock_serializes_concurrent_access() {
     });
 
     let t2 = tokio::spawn(async move {
-        db2.with_lock(777i64, || async move {
+        db2.lock(777i64, || async move {
             if inside2.swap(true, Ordering::SeqCst) {
                 conflict2.store(true, Ordering::SeqCst);
             }
@@ -110,28 +123,61 @@ async fn with_lock_serializes_concurrent_access() {
     );
 }
 
-#[tokio::test]
-#[ignore = "requires running PostgreSQL"]
-async fn try_with_lock_returns_none_when_lock_held() {
-    use hygiea_component_db_pg_seaorm::{DistributedLock, PgDb};
+async fn test_concurrent_distinct_keys_under_pool_pressure() {
+    use hygiea_component_db_pg_seaorm::DistributedLock;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    const TASKS: u32 = 100;
+    const MAX_CONNECTIONS: u32 = 50;
+
+    let mut config = cloud_pg_config();
+    config.max_connections = Some(MAX_CONNECTIONS);
+    let db = SeaOrmPgPool::connect(config).await.unwrap();
+
+    let completed = Arc::new(AtomicU32::new(0));
+    let start = std::time::Instant::now();
+
+    let handles: Vec<_> = (0..TASKS)
+        .map(|i| {
+            let db = db.clone();
+            let completed = completed.clone();
+            tokio::spawn(async move {
+                let key = format!("order_id:{i}");
+                db.lock(key, || async {
+                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                    Ok::<_, sea_orm::sqlx::Error>(())
+                })
+                .await
+                .unwrap();
+                completed.fetch_add(1, Ordering::Relaxed);
+            })
+        })
+        .collect();
+
+    for h in handles {
+        h.await.unwrap();
+    }
+
+    let elapsed = start.elapsed();
+    let count = completed.load(Ordering::Relaxed);
+    println!("{count}/{TASKS} locks completed in {elapsed:?} (max_connections={MAX_CONNECTIONS})");
+    assert_eq!(count, TASKS);
+}
+
+async fn test_try_lock_returns_none_when_lock_held(db: &SeaOrmPgPool) {
+    use hygiea_component_db_pg_seaorm::DistributedLock;
     use std::sync::Arc;
     use tokio::sync::Barrier;
 
-    let url = pg_url();
-    let db1 = Arc::new(PgDb::new(
-        sea_orm::Database::connect(&url).await.unwrap(),
-        "public".to_string(),
-    ));
-    let db2 = Arc::new(PgDb::new(
-        sea_orm::Database::connect(&url).await.unwrap(),
-        "public".to_string(),
-    ));
+    let db1 = db.clone();
+    let db2 = db.clone();
 
     let barrier = Arc::new(Barrier::new(2));
     let barrier_clone = barrier.clone();
 
     let t1 = tokio::spawn(async move {
-        db1.with_lock(888i64, || async move {
+        db1.lock(888i64, || async move {
             barrier.wait().await;
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
             Ok::<_, sea_orm::sqlx::Error>(())
@@ -143,7 +189,7 @@ async fn try_with_lock_returns_none_when_lock_held() {
     barrier_clone.wait().await;
 
     let result = db2
-        .try_with_lock(888i64, || async {
+        .try_lock(888i64, || async {
             Ok::<_, sea_orm::sqlx::Error>("should not run")
         })
         .await
@@ -151,7 +197,7 @@ async fn try_with_lock_returns_none_when_lock_held() {
 
     assert!(
         result.is_none(),
-        "try_with_lock should return None when lock is already held"
+        "try_lock should return None when lock is already held"
     );
 
     t1.await.unwrap();

@@ -12,7 +12,7 @@
 //! cargo run -p hygiea-examples --example app_framework --features app
 //! ```
 
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 use hygiea::{Component, Registry, Resources, async_trait};
 use tokio::time::{Duration, interval};
@@ -20,12 +20,12 @@ use tracing;
 
 // ========== Shared Resources (stored in Resources) ==========
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DbPool {
     pub url: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RedisClient {
     pub url: String,
 }
@@ -184,9 +184,9 @@ impl Component for HttpServerComponent {
 
 #[derive(Clone, Debug)]
 pub struct AppState {
-    pub primary_db: Arc<DbPool>,
-    pub replica_db: Arc<DbPool>,
-    pub redis: Arc<RedisClient>,
+    pub primary_db: DbPool,
+    pub replica_db: DbPool,
+    pub redis: RedisClient,
 }
 
 static APP_STATE: OnceLock<AppState> = OnceLock::new();
@@ -200,13 +200,13 @@ impl AppState {
         APP_STATE.get().expect("AppState not initialized")
     }
 
-    pub fn primary_db() -> &'static Arc<DbPool> {
+    pub fn primary_db() -> &'static DbPool {
         &Self::global().primary_db
     }
-    pub fn replica_db() -> &'static Arc<DbPool> {
+    pub fn replica_db() -> &'static DbPool {
         &Self::global().replica_db
     }
-    pub fn redis() -> &'static Arc<RedisClient> {
+    pub fn redis() -> &'static RedisClient {
         &Self::global().redis
     }
 }
@@ -219,7 +219,7 @@ async fn main() {
     println!("║  Hygiea Application Framework Example     ║");
     println!("╚════════════════════════════════════════════╝\n");
 
-    let mut registry = Registry::new()
+    let registry = Registry::new()
         .add_named::<DatabaseComponent>(
             "primary",
             DatabaseConfig {
@@ -241,26 +241,20 @@ async fn main() {
         .add::<HttpServerComponent>(HttpConfig { port: 8080 });
 
     println!("━━━━ Starting components ━━━━\n");
-    if let Err(e) = registry.launch().await {
-        tracing::error!("{}", e);
-        std::process::exit(1);
-    }
+    registry
+        .run(|resources| {
+            AppState::init(AppState {
+                primary_db: resources.get_named::<DbPool>("primary").unwrap(),
+                replica_db: resources.get_named::<DbPool>("replica").unwrap(),
+                redis: resources.get_named::<RedisClient>("cache").unwrap(),
+            });
 
-    let resources = registry.resources();
-    AppState::init(AppState {
-        primary_db: resources.get_named::<DbPool>("primary").unwrap(),
-        replica_db: resources.get_named::<DbPool>("replica").unwrap(),
-        redis: resources.get_named::<RedisClient>("cache").unwrap(),
-    });
-
-    println!("\n━━━━ AppState (global) ━━━━");
-    println!("  primary DB : {}", AppState::primary_db().url);
-    println!("  replica  DB: {}", AppState::replica_db().url);
-    println!("  Redis      : {}", AppState::redis().url);
-    println!("\n  Press Ctrl+C to shutdown");
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-
-    registry.await_shutdown().await;
-
-    println!("\nShutdown complete! Goodbye!");
+            println!("\n━━━━ AppState (global) ━━━━");
+            println!("  primary DB : {}", AppState::primary_db().url);
+            println!("  replica  DB: {}", AppState::replica_db().url);
+            println!("  Redis      : {}", AppState::redis().url);
+            println!("\n  Press Ctrl+C to shutdown");
+            println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+        })
+        .await;
 }

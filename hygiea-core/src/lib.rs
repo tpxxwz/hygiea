@@ -1,19 +1,21 @@
-// ========== Feature: template ==========
-#[cfg(feature = "template")]
-mod template;
+// 让宏生成的代码能找到 ::hygiea:: 路径
+extern crate self as hygiea;
 
-#[cfg(feature = "template")]
-pub use template::{format_positional, format_template_cached, format_template_once};
+// ========== Feature: format ==========
+#[cfg(feature = "format")]
+pub use util::format::{tpl_cached, tpl_once, tpl_pos};
 
-// ========== Feature: error ==========
-#[cfg(feature = "error")]
+// ========== error ==========
 mod error;
 
-#[cfg(feature = "error")]
-pub use error::{ERR_REGISTRATIONS, ErrRegistration, ErrRegistrationKind, FmtErr, RawErr};
+#[doc(hidden)]
+pub use error::__private;
+pub use error::{
+    BaseFmtErr, BaseRawErr, ERR_REGISTRATIONS, ErrRegistration, ErrRegistrationKind, FmtErr,
+    RawErr, SuccessRawErr, fmt_err, raw_err,
+};
 
-#[cfg(feature = "error")]
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 fn init_hygiea_error_env() {
     error::init();
 }
@@ -31,9 +33,14 @@ pub use app::{Component, LaunchError, Registry, RegistryConfig, Resources};
 #[cfg(feature = "app")]
 pub use log::{ConsoleLayer, FileLayer, TracingConfig};
 
-// ========== ext (env_tool always, distributed-lock optional) ==========
+// ========== date ==========
+pub mod date;
+
+// ========== ext / util ==========
 pub mod ext;
-pub use ext::{BuiltinKey, EnvKey, env, env_get, env_get_opt, env_get_or, env_get_or_else};
+pub mod util;
+pub use util::env;
+pub use util::{BuiltinKey, EnvKey, env_get, env_get_opt, env_get_or, env_get_or_else};
 
 #[cfg(feature = "distributed-lock")]
 pub use ext::{DistributedKey, DistributedLock};

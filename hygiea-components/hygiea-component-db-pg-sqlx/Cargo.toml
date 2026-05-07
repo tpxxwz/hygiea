@@ -8,9 +8,12 @@ repository.workspace = true
 rust-version.workspace = true
 description = "PostgreSQL (sqlx) component for hygiea"
 
+[features]
+distributed-lock = ["hygiea-core/distributed-lock"]
+
 [dependencies]
-hygiea-core = { path = "../../hygiea-core", version = "0.1.1-alpha.1", features = ["app", "distributed-lock"] }
-sqlx = { workspace = true }
+hygiea-core = { path = "../../hygiea-core", version = "0.1.1-alpha.1", features = ["app"] }
+sqlx = { workspace = true, features = ["time"] }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }

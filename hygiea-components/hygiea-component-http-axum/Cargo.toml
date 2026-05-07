@@ -9,8 +9,8 @@ rust-version.workspace = true
 description = "HTTP (axum) component for hygiea"
 
 [dependencies]
-hygiea-core = { path = "../../hygiea-core", version = "0.1.1-alpha.1", features = ["app", "error"] }
-hygiea = { path = "../../hygiea", version = "0.1.1-alpha.1", features = ["error"] }
+hygiea-core = { path = "../../hygiea-core", version = "0.1.1-alpha.1", features = ["app"] }
+hygiea = { path = "../../hygiea", version = "0.1.1-alpha.1" }
 axum = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }

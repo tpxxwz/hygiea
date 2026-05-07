@@ -32,11 +32,11 @@ static TEMPLATES: LazyLock<RwLock<TemplateEngine>> = LazyLock::new(|| {
     })
 });
 
-pub fn format_template_once(source: &str, args: serde_json::Value) -> Result<String, Error> {
+pub fn tpl_once(source: &str, args: serde_json::Value) -> Result<String, Error> {
     TEMPLATES.read().env.render_str(source, args)
 }
 
-pub fn format_template_cached(source: &str, args: serde_json::Value) -> Result<String, Error> {
+pub fn tpl_cached(source: &str, args: serde_json::Value) -> Result<String, Error> {
     if let Some(result) = try_render_from_cache(source, &args) {
         return result;
     }
@@ -74,11 +74,7 @@ fn try_render_from_cache(source: &str, args: &serde_json::Value) -> Option<Resul
 
 /// 位置参数格式化。模板中 `{}` 为占位符，`{{` / `}}` 转义为字面量 `{` / `}`。
 /// `cached` 为 true 时注册到 env 缓存复用，为 false 时直接渲染。
-pub fn format_positional(
-    source: &str,
-    args: serde_json::Value,
-    cached: bool,
-) -> Result<String, Error> {
+pub fn tpl_pos(source: &str, args: serde_json::Value, cached: bool) -> Result<String, Error> {
     // 将位置参数模板转换为 minijinja 模板：`{}` → `{{ _N }}`，`{{` → `{`，`}}` → `}`
     let mut tpl = String::with_capacity(source.len() + 32);
     let mut count = 0usize;
@@ -131,9 +127,9 @@ pub fn format_positional(
     let named_args = serde_json::Value::Object(map);
 
     if cached {
-        format_template_cached(&tpl, named_args)
+        tpl_cached(&tpl, named_args)
     } else {
-        format_template_once(&tpl, named_args)
+        tpl_once(&tpl, named_args)
     }
 }
 
@@ -141,94 +137,89 @@ pub fn format_positional(
 mod tests {
     use super::*;
 
-    // ===== format_template_once / format_template_cached =====
+    // ===== tpl_once / tpl_cached =====
 
     #[test]
-    fn test_template_once_basic() {
-        let result =
-            format_template_once("Hello {{ name }}", serde_json::json!({"name": "Alice"})).unwrap();
+    fn test_tpl_once_basic() {
+        let result = tpl_once("Hello {{ name }}", serde_json::json!({"name": "Alice"})).unwrap();
         assert_eq!(result, "Hello Alice");
     }
 
     #[test]
-    fn test_template_cached_basic() {
-        let result =
-            format_template_cached("Hello {{ name }}", serde_json::json!({"name": "Bob"})).unwrap();
+    fn test_tpl_cached_basic() {
+        let result = tpl_cached("Hello {{ name }}", serde_json::json!({"name": "Bob"})).unwrap();
         assert_eq!(result, "Hello Bob");
     }
 
     #[test]
-    fn test_template_cached_hits_cache() {
+    fn test_tpl_cached_hits_cache() {
         let tpl = "value is {{ v }}";
-        let r1 = format_template_cached(tpl, serde_json::json!({"v": 1})).unwrap();
-        let r2 = format_template_cached(tpl, serde_json::json!({"v": 2})).unwrap();
+        let r1 = tpl_cached(tpl, serde_json::json!({"v": 1})).unwrap();
+        let r2 = tpl_cached(tpl, serde_json::json!({"v": 2})).unwrap();
         assert_eq!(r1, "value is 1");
         assert_eq!(r2, "value is 2");
     }
 
     #[test]
-    fn test_template_undefined_strict() {
-        let result = format_template_once("{{ missing }}", serde_json::json!({}));
+    fn test_tpl_once_undefined_strict() {
+        let result = tpl_once("{{ missing }}", serde_json::json!({}));
         assert!(result.is_err());
     }
 
-    // ===== format_positional =====
+    // ===== tpl_pos =====
 
     #[test]
-    fn test_positional_basic() {
-        let result = format_positional("Hello {}", serde_json::json!(["Alice"]), false).unwrap();
+    fn test_tpl_pos_basic() {
+        let result = tpl_pos("Hello {}", serde_json::json!(["Alice"]), false).unwrap();
         assert_eq!(result, "Hello Alice");
     }
 
     #[test]
-    fn test_positional_multiple_args() {
-        let result =
-            format_positional("{} has {} messages", serde_json::json!(["Alice", 3]), false)
-                .unwrap();
+    fn test_tpl_pos_multiple_args() {
+        let result = tpl_pos("{} has {} messages", serde_json::json!(["Alice", 3]), false).unwrap();
         assert_eq!(result, "Alice has 3 messages");
     }
 
     #[test]
-    fn test_positional_cached() {
+    fn test_tpl_pos_cached() {
         let tpl = "Hi {}";
-        let r1 = format_positional(tpl, serde_json::json!(["A"]), true).unwrap();
-        let r2 = format_positional(tpl, serde_json::json!(["B"]), true).unwrap();
+        let r1 = tpl_pos(tpl, serde_json::json!(["A"]), true).unwrap();
+        let r2 = tpl_pos(tpl, serde_json::json!(["B"]), true).unwrap();
         assert_eq!(r1, "Hi A");
         assert_eq!(r2, "Hi B");
     }
 
     #[test]
-    fn test_positional_escape_braces() {
-        let result =
-            format_positional("score: {}%, literal: {{}}", serde_json::json!([95]), false).unwrap();
+    fn test_tpl_pos_escape_braces() {
+        let result = tpl_pos("score: {}%, literal: {{}}", serde_json::json!([95]), false).unwrap();
         assert_eq!(result, "score: 95%, literal: {}");
     }
 
     #[test]
-    fn test_positional_no_placeholder() {
-        let result = format_positional("no placeholders", serde_json::json!([]), false).unwrap();
+    fn test_tpl_pos_no_placeholder() {
+        let result = tpl_pos("no placeholders", serde_json::json!([]), false).unwrap();
         assert_eq!(result, "no placeholders");
     }
 
     #[test]
-    fn test_positional_not_enough_args() {
-        let result = format_positional("{} and {}", serde_json::json!(["only_one"]), false);
+    fn test_tpl_pos_not_enough_args() {
+        let result = tpl_pos("{} and {}", serde_json::json!(["only_one"]), false);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.kind(), minijinja::ErrorKind::MissingArgument);
     }
 
     #[test]
-    fn test_positional_too_many_args() {
-        let result = format_positional("{}", serde_json::json!(["a", "b"]), false);
+    fn test_tpl_pos_too_many_args() {
+        let result = tpl_pos("{}", serde_json::json!(["a", "b"]), false);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.kind(), minijinja::ErrorKind::TooManyArguments);
     }
 
     #[test]
-    fn test_positional_not_array() {
-        let result = format_positional("{}", serde_json::json!("not array"), false);
+    fn test_tpl_pos_not_array() {
+        let result = tpl_pos("{}", serde_json::json!("not array"), false);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.kind(), minijinja::ErrorKind::BadSerialization);

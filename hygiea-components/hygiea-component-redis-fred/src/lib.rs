@@ -3,6 +3,7 @@ use fred::prelude::*;
 use fred::types::config::ClusterDiscoveryPolicy;
 use hygiea_core::app::{Component, Resources, async_trait};
 use serde::Deserialize;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
@@ -11,13 +12,13 @@ use tokio::task::JoinHandle;
 // Config
 // ============================================================
 
-#[derive(Deserialize, Clone)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct RedisNode {
     pub host: String,
     pub port: u16,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(default)]
 pub struct RedisConfig {
     /// Server mode: "standalone", "cluster", or "sentinel"
@@ -63,8 +64,8 @@ pub struct RedisConfig {
     pub reconnect_multiplier: u32,
 
     // ========== 分布式锁 ==========
-    /// Default TTL for locks in seconds; watchdog renews every timeout/3
-    pub lock_watchdog_timeout: u64,
+    /// Default TTL for distributed locks in seconds
+    pub default_lock_timeout: u64,
 }
 
 impl Default for RedisConfig {
@@ -89,8 +90,54 @@ impl Default for RedisConfig {
             reconnect_min_delay_ms: 1,
             reconnect_max_delay_ms: 30_000,
             reconnect_multiplier: 2,
-            lock_watchdog_timeout: 30,
+            default_lock_timeout: 30,
         }
+    }
+}
+
+// ============================================================
+// Pool wrapper
+// ============================================================
+
+#[derive(Clone, Debug)]
+pub struct FredRedisPool {
+    inner: Pool,
+    #[cfg_attr(not(feature = "distributed-lock"), allow(dead_code))]
+    config: Arc<RedisConfig>,
+}
+
+impl FredRedisPool {
+    pub fn new(inner: Pool, config: Arc<RedisConfig>) -> Self {
+        Self { inner, config }
+    }
+
+    pub async fn connect(config: RedisConfig) -> Result<Self> {
+        let fred_config = build_fred_config(&config)?;
+        let perf = build_perf_config(&config);
+        let connection = build_connection_config(&config);
+        let policy = ReconnectPolicy::new_exponential(
+            config.reconnect_max_attempts,
+            config.reconnect_min_delay_ms,
+            config.reconnect_max_delay_ms,
+            config.reconnect_multiplier,
+        );
+        let pool = Pool::new(
+            fred_config,
+            Some(perf),
+            Some(connection),
+            Some(policy),
+            config.pool_size,
+        )
+        .context("Failed to create Redis pool")?;
+        pool.init().await.context("Failed to connect to Redis")?;
+        Ok(Self::new(pool, Arc::new(config)))
+    }
+}
+
+impl std::ops::Deref for FredRedisPool {
+    type Target = Pool;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
     }
 }
 
@@ -115,42 +162,20 @@ impl Component for RedisComponent {
         resources: &Resources,
         _shutdown_rx: broadcast::Receiver<()>,
     ) -> Result<Option<JoinHandle<()>>> {
-        let config = build_fred_config(&self.config)?;
-        let perf = build_perf_config(&self.config);
-        let connection = build_connection_config(&self.config);
-        let policy = ReconnectPolicy::new_exponential(
-            self.config.reconnect_max_attempts,
-            self.config.reconnect_min_delay_ms,
-            self.config.reconnect_max_delay_ms,
-            self.config.reconnect_multiplier,
-        );
-
         tracing::info!(
             "Connecting to Redis [mode={}] with pool_size={}",
             self.config.mode,
             self.config.pool_size
         );
-
-        let pool = Pool::new(
-            config,
-            Some(perf),
-            Some(connection),
-            Some(policy),
-            self.config.pool_size,
-        )
-        .context("Failed to create Redis pool")?;
-
-        pool.init().await.context("Failed to connect to Redis")?;
+        let pool = FredRedisPool::connect(self.config.clone()).await?;
         tracing::info!("Redis connection pool established");
-
         resources.insert(pool);
-
         Ok(None)
     }
 }
 
 // ============================================================
-// Config Builders
+// Build helpers
 // ============================================================
 
 fn build_fred_config(config: &RedisConfig) -> Result<Config> {
@@ -241,4 +266,69 @@ fn build_connection_config(config: &RedisConfig) -> ConnectionConfig {
     conn.max_command_attempts = config.max_command_attempts;
     conn.max_redirections = config.max_redirections;
     conn
+}
+
+// ============================================================
+// DistributedLock
+// ============================================================
+
+#[cfg(feature = "distributed-lock")]
+pub use hygiea_core::{DistributedKey, DistributedLock};
+
+#[cfg(feature = "distributed-lock")]
+mod distributed_lock {
+    use super::*;
+    use hygiea_core::{DistributedKey, DistributedLock};
+    fn key_to_string(key: DistributedKey) -> String {
+        match key {
+            DistributedKey::Advisory(n) => format!("hygiea:distributed:lock:{n}"),
+            DistributedKey::Advisory2(a, b) => format!("hygiea:distributed:lock:{a}:{b}"),
+            DistributedKey::Named(s) => s,
+        }
+    }
+
+    #[async_trait]
+    impl DistributedLock for FredRedisPool {
+        type Error = fred::error::Error;
+
+        async fn lock<K, F, Fut, T>(&self, _key: K, _f: F) -> Result<T, Self::Error>
+        where
+            K: Into<DistributedKey> + Send,
+            F: FnOnce() -> Fut + Send,
+            Fut: std::future::Future<Output = Result<T, Self::Error>> + Send,
+            T: Send + 'static,
+        {
+            unimplemented!("blocking lock is not yet implemented for Redis; use try_lock instead")
+        }
+
+        async fn try_lock<K, F, Fut, T>(&self, key: K, f: F) -> Result<Option<T>, Self::Error>
+        where
+            K: Into<DistributedKey> + Send,
+            F: FnOnce() -> Fut + Send,
+            Fut: std::future::Future<Output = Result<T, Self::Error>> + Send,
+            T: Send + 'static,
+        {
+            let redis_key = key_to_string(key.into());
+            let ttl_ms = self.config.default_lock_timeout * 1000;
+
+            let acquired: Option<String> = self
+                .inner
+                .set(
+                    &redis_key,
+                    1i64,
+                    Some(Expiration::PX(ttl_ms as i64)),
+                    Some(SetOptions::NX),
+                    false,
+                )
+                .await?;
+
+            if acquired.is_none() {
+                return Ok(None);
+            }
+
+            let result = f().await;
+            let _: () = self.inner.del(&redis_key).await?;
+            result.map(Some)
+        }
+    }
 }
