@@ -35,6 +35,7 @@ pub use log::{ConsoleLayer, FileLayer, TracingConfig};
 
 // ========== date ==========
 pub mod date;
+pub use date::{DateFormat, DateTimeUtcExt, Formatter, OffsetDateTimeExt, now_offset_utc, now_utc, set_now_utc};
 
 // ========== ext / util ==========
 pub mod ext;

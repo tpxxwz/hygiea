@@ -26,6 +26,9 @@ pub enum Formatter {
     ///   +08:00 => 2024-01-15T13:30:00+08:00
     ///   +00:00 => 2024-01-15T13:30:00+00:00
     ISO,
+    /// ISO 8601 UTC with milliseconds and Z suffix:
+    ///   2024-01-15T13:30:00.123Z
+    IsoMillisZ,
 }
 
 impl DateFormat for Formatter {
@@ -40,6 +43,7 @@ impl DateFormat for Formatter {
             Formatter::YmdHMS3F => format_description!("[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]"),
             Formatter::YmdHMSnosep => format_description!("[year][month][day][hour][minute][second]"),
             Formatter::ISO => format_description!("[year]-[month]-[day]T[hour]:[minute]:[second][offset_hour sign:mandatory]:[offset_minute]"),
+            Formatter::IsoMillisZ => format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"),
         }
     }
 
@@ -54,6 +58,7 @@ impl DateFormat for Formatter {
         static YMDHMS3F: OnceLock<Vec<Item<'static>>> = OnceLock::new();
         static YMDHMSNOSEP: OnceLock<Vec<Item<'static>>> = OnceLock::new();
         static ISO: OnceLock<Vec<Item<'static>>> = OnceLock::new();
+        static ISO_MILLIS_Z: OnceLock<Vec<Item<'static>>> = OnceLock::new();
         let (cell, pattern): (&OnceLock<Vec<Item<'static>>>, &'static str) = match self {
             Formatter::Y => (&Y, "%Y"),
             Formatter::HMS => (&HMS, "%T"),
@@ -63,6 +68,7 @@ impl DateFormat for Formatter {
             Formatter::YmdHMS3F => (&YMDHMS3F, "%F %T%.3f"),
             Formatter::YmdHMSnosep => (&YMDHMSNOSEP, "%Y%m%d%H%M%S"),
             Formatter::ISO => (&ISO, "%+"),
+            Formatter::IsoMillisZ => (&ISO_MILLIS_Z, "%FT%T%.3fZ"),
         };
         cell.get_or_init(|| StrftimeItems::new(pattern).collect())
     }
@@ -196,7 +202,7 @@ mod chrono_ext {
         static NOW_FN: std::cell::Cell<fn() -> DateTime<Utc>> = const { std::cell::Cell::new(Utc::now) };
     }
 
-    #[cfg(test)]
+    #[doc(hidden)]
     pub fn set_now_utc(f: fn() -> DateTime<Utc>) {
         NOW_FN.set(f);
     }
@@ -209,14 +215,14 @@ mod chrono_ext {
         fn to_offset_datetime(&self) -> Result<time::OffsetDateTime, FmtErr>;
         fn from_offset_datetime(odt: time::OffsetDateTime) -> Result<DateTime<Utc>, FmtErr>;
 
-        fn format(&self, fmt: &dyn DateFormat) -> String;
-        fn format_default(&self) -> String {
-            self.format(&Formatter::ISO)
+        fn format_ext(&self, fmt: &dyn DateFormat) -> String;
+        fn format_ext_default(&self) -> String {
+            self.format_ext(&Formatter::ISO)
         }
 
-        fn parse(s: &str, fmt: &dyn DateFormat) -> Result<DateTime<Utc>, FmtErr>;
-        fn parse_default(s: &str) -> Result<DateTime<Utc>, FmtErr> {
-            Self::parse(s, &Formatter::ISO)
+        fn parse_ext(s: &str, fmt: &dyn DateFormat) -> Result<DateTime<Utc>, FmtErr>;
+        fn parse_ext_default(s: &str) -> Result<DateTime<Utc>, FmtErr> {
+            Self::parse_ext(s, &Formatter::ISO)
         }
 
         fn shift(&self, duration: TimeDelta) -> DateTime<Utc>;
@@ -250,10 +256,10 @@ mod chrono_ext {
                 }))
             })
         }
-        fn format(&self, fmt: &dyn DateFormat) -> String {
+        fn format_ext(&self, fmt: &dyn DateFormat) -> String {
             self.format_with_items(fmt.pattern_chrono().iter()).to_string()
         }
-        fn parse(s: &str, fmt: &dyn DateFormat) -> Result<DateTime<Utc>, FmtErr> {
+        fn parse_ext(s: &str, fmt: &dyn DateFormat) -> Result<DateTime<Utc>, FmtErr> {
             use chrono::format::Parsed;
             let mut parsed = Parsed::new();
             chrono::format::parse(&mut parsed, s, fmt.pattern_chrono().iter())
