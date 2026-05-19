@@ -9,7 +9,7 @@ rust-version.workspace = true
 description = "gRPC (tonic) component for hygiea"
 
 [dependencies]
-hygiea-core = { path = "../../hygiea-core", version = "0.1.1-alpha.1", features = ["app"] }
+hygiea-core = { workspace = true, features = ["app"] }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 anyhow = { workspace = true }

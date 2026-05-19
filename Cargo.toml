@@ -21,8 +21,9 @@ repository = "https://github.com/tpxxwz/hygiea"
 rust-version = "1.85"
 
 [workspace.dependencies]
-# 内部依赖（版本自动继承 workspace.package.version）
-hygiea-core = { path = "hygiea-core", version = "0.1.1-alpha.1" }
+# 内部依赖，版本由 cargo-release 发布时自动对齐，无需手动修改
+hygiea = { path = "hygiea", version = "0.1.1-alpha.1" }
+hygiea-core = { path = "hygiea-core", version = "0.1.1-alpha.1", default-features = false }
 hygiea-macros = { path = "hygiea-macros", version = "0.1.1-alpha.1" }
 
 # 过程宏依赖
@@ -78,4 +79,4 @@ chrono = { version = "0.4", features = ["serde"] }
 time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
 
 # 测试依赖
-trybuild = "1.0"
+serial_test = "3.4"

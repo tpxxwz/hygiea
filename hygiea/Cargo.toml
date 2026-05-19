@@ -11,13 +11,8 @@ keywords = ["error", "utility", "std", "toolkit"]
 categories = ["development-tools"]
 
 [dependencies]
-# 内部依赖
-hygiea-core = { path = "../hygiea-core", version = "0.1.1-alpha.1", default-features = false }
-hygiea-macros = { path = "../hygiea-macros", version = "0.1.1-alpha.1" }
-
-# 宏生成的代码需要这些依赖
+hygiea-core = { workspace = true }
 serde_json = { workspace = true }
-linkme = { workspace = true }
 
 
 [features]
@@ -35,5 +30,3 @@ ws-client = ["hygiea-core/ws-client"]
 # 全功能
 full = ["format", "app", "string", "http", "json", "http-client", "ws-client"]
 
-[dev-dependencies]
-trybuild.workspace = true

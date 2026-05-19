@@ -68,3 +68,4 @@ tokio-tungstenite = { workspace = true, optional = true }
 [dev-dependencies]
 tokio = { workspace = true }
 futures-util = { workspace = true }
+serial_test = { workspace = true }

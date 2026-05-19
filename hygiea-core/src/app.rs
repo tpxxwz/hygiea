@@ -48,12 +48,9 @@ struct ComponentKey {
 /// // default: console tracing only
 /// let config = RegistryConfig::default();
 ///
-/// // no tracing at all
-/// let config = RegistryConfig { tracing: None };
-///
 /// // custom tracing
 /// let config = RegistryConfig {
-///     tracing: Some(TracingConfig { ..Default::default() }),
+///     tracing: TracingConfig { ..Default::default() },
 /// };
 /// ```
 #[derive(Deserialize, Clone, Default)]

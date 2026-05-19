@@ -13,7 +13,7 @@ default = ["distributed-lock"]
 distributed-lock = ["hygiea-core/distributed-lock"]
 
 [dependencies]
-hygiea-core = { path = "../../hygiea-core", version = "0.1.1-alpha.1", features = ["app"] }
+hygiea-core = { workspace = true, features = ["app"] }
 sea-orm = { workspace = true, features = ["with-time"] }
 tokio = { workspace = true }
 anyhow = { workspace = true }

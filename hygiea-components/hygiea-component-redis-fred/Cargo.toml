@@ -12,7 +12,7 @@ description = "Redis (fred) component for hygiea"
 distributed-lock = ["hygiea-core/distributed-lock"]
 
 [dependencies]
-hygiea-core = { path = "../../hygiea-core", version = "0.1.1-alpha.1", features = ["app"] }
+hygiea-core = { workspace = true, features = ["app"] }
 fred = { version = "10.1.0", features = ["sentinel-auth"] }
 tokio = { workspace = true }
 anyhow = { workspace = true }

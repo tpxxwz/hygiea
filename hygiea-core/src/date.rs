@@ -198,17 +198,15 @@ mod chrono_ext {
         Timelike, Utc,
     };
 
-    thread_local! {
-        static NOW_FN: std::cell::Cell<fn() -> DateTime<Utc>> = const { std::cell::Cell::new(Utc::now) };
-    }
+    static NOW_FN: parking_lot::RwLock<fn() -> DateTime<Utc>> = parking_lot::RwLock::new(Utc::now);
 
     #[doc(hidden)]
     pub fn set_now_utc(f: fn() -> DateTime<Utc>) {
-        NOW_FN.set(f);
+        *NOW_FN.write() = f;
     }
 
     pub fn now_utc() -> DateTime<Utc> {
-        NOW_FN.with(|f| f.get()())
+        NOW_FN.read()()
     }
 
     pub trait DateTimeUtcExt {
