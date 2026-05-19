@@ -8,6 +8,9 @@ set -euo pipefail
 
 BUMP="${1:-patch}"
 
+cargo audit --ignore RUSTSEC-2023-0071
+cargo test --workspace
+
 if [ "${2:-}" = "--execute" ]; then
     cargo release "$BUMP" --workspace --config release/release.toml --execute
 else
