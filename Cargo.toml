@@ -13,7 +13,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.1-alpha.1"
+version = "0.1.1-alpha.2"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 authors = ["wjj"]
@@ -22,9 +22,9 @@ rust-version = "1.85"
 
 [workspace.dependencies]
 # 内部依赖，版本由 cargo-release 发布时自动对齐，无需手动修改
-hygiea = { path = "hygiea", version = "0.1.1-alpha.1" }
-hygiea-core = { path = "hygiea-core", version = "0.1.1-alpha.1", default-features = false }
-hygiea-macros = { path = "hygiea-macros", version = "0.1.1-alpha.1" }
+hygiea = { path = "hygiea", version = "0.1.1-alpha.2" }
+hygiea-core = { path = "hygiea-core", version = "0.1.1-alpha.2", default-features = false }
+hygiea-macros = { path = "hygiea-macros", version = "0.1.1-alpha.2" }
 
 # 过程宏依赖
 quote = "1.0"
