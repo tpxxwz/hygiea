@@ -18,13 +18,10 @@ default = []
 format = ["dep:lru"]
 
 # Application framework module
-app = ["dep:tokio", "dep:async-trait", "dep:anyhow", "dep:tracing", "dep:tracing-subscriber", "dep:tracing-log", "dep:tracing-appender", "dep:serde", "dep:dashmap", "dep:clap", "dep:config"]
+app = ["dep:async-trait", "dep:anyhow", "dep:tracing", "dep:tracing-subscriber", "dep:tracing-log", "dep:tracing-appender", "dep:serde", "dep:dashmap", "dep:clap", "dep:config"]
 
 # Distributed lock abstractions
 distributed-lock = ["dep:async-trait"]
-
-# Simulation clock for backtest / testing
-sim = ["dep:tokio"]
 
 # Future modules (placeholder)
 string = []
@@ -51,7 +48,7 @@ lru = { workspace = true, optional = true }
 # Optional dependencies for app feature
 clap   = { workspace = true, optional = true }
 config = { workspace = true, optional = true }
-tokio = { workspace = true, optional = true }
+tokio = { workspace = true }
 async-trait = { workspace = true, optional = true }
 dashmap = { workspace = true, optional = true }
 

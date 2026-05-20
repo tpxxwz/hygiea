@@ -38,9 +38,7 @@ pub mod date;
 pub use date::{DateFormat, DateTimeUtcExt, Formatter, OffsetDateTime, OffsetDateTimeExt, now_utc, set_now_utc};
 
 // ========== sim ==========
-#[cfg(feature = "sim")]
 pub mod sim;
-#[cfg(feature = "sim")]
 pub use sim::{SimClock, TokenBucket};
 
 // ========== ext / util ==========

@@ -26,8 +26,7 @@ http = ["hygiea-core/http"]                                    # HTTP 工具（�
 json = ["hygiea-core/json"]                                    # JSON 工具（预留）
 http-client = ["hygiea-core/http-client"]
 ws-client = ["hygiea-core/ws-client"]
-sim = ["hygiea-core/sim"]
 
 # 全功能
-full = ["format", "app", "string", "http", "json", "http-client", "ws-client", "sim"]
+full = ["format", "app", "string", "http", "json", "http-client", "ws-client"]
 

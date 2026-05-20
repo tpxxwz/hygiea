@@ -314,4 +314,305 @@ mod tests {
         clock.advance_to(next).await;
         assert_eq!(bucket.try_consume(), Duration::ZERO);
     }
+
+    // ---- tokio 虚拟时间 API 演示 ---------------------------------------------
+    //
+    // 以下测试仅演示 tokio::time 的虚拟时间 API（start_paused / advance /
+    // sleep / timeout / interval / sleep_until），不涉及 SimClock 或 now_utc。
+
+    /// 时间暂停后 sleep 永远不会自动完成，必须主动 advance 才会唤醒。
+    #[tokio::test(start_paused = true)]
+    async fn tokio_paused_time_never_wakes_sleep() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let woken = Arc::new(AtomicBool::new(false));
+        let woken_c = woken.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            woken_c.store(true, Ordering::SeqCst);
+        });
+        // 让 spawned task 被调度，跑到 sleep.await 处挂起注册定时器；
+        // 之后时间不推进，定时器永远不到期，woken 不会被设置。
+        tokio::task::yield_now().await;
+        assert!(!woken.load(Ordering::SeqCst));
+    }
+
+    /// tokio::time::advance 推进虚拟时间，到期 sleep 被唤醒。
+    #[tokio::test(start_paused = true)]
+    async fn tokio_advance_wakes_sleep() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let woken = Arc::new(AtomicBool::new(false));
+        let woken_c = woken.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            woken_c.store(true, Ordering::SeqCst);
+        });
+        tokio::task::yield_now().await;
+
+        tokio::time::advance(Duration::from_secs(2)).await;
+        tokio::task::yield_now().await;
+        assert!(!woken.load(Ordering::SeqCst), "推进 2s 不足以唤醒 3s sleep");
+
+        tokio::time::advance(Duration::from_secs(1)).await;
+        tokio::task::yield_now().await;
+        assert!(woken.load(Ordering::SeqCst), "累计 3s 后应被唤醒");
+    }
+
+    /// timeout 到期（inner > deadline）→ 返回 Err
+    #[tokio::test(start_paused = true)]
+    async fn tokio_timeout_expires() {
+        let handle = tokio::spawn(async {
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                tokio::time::sleep(Duration::from_secs(10)),
+            )
+            .await
+            .is_err()
+        });
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(5)).await;
+        assert!(handle.await.unwrap(), "5s deadline 已到，inner 10s 未完成");
+    }
+
+    /// timeout 在 deadline 之前完成 → 返回 Ok(value)
+    #[tokio::test(start_paused = true)]
+    async fn tokio_timeout_succeeds() {
+        let handle = tokio::spawn(async {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                42u32
+            })
+            .await
+        });
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(5)).await;
+        assert_eq!(handle.await.unwrap().unwrap(), 42);
+    }
+
+    /// tokio::time::interval 随虚拟时间逐步 tick；第一次 tick 立即返回。
+    #[tokio::test(start_paused = true)]
+    async fn tokio_interval_ticks() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let count = Arc::new(AtomicU32::new(0));
+        let count_c = count.clone();
+        tokio::spawn(async move {
+            let mut iv = tokio::time::interval(Duration::from_secs(10));
+            loop {
+                iv.tick().await;
+                count_c.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        tokio::task::yield_now().await;
+        assert_eq!(count.load(Ordering::SeqCst), 1, "第一次 tick 立即触发");
+
+        tokio::time::advance(Duration::from_secs(10)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(count.load(Ordering::SeqCst), 2);
+
+        tokio::time::advance(Duration::from_secs(10)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(count.load(Ordering::SeqCst), 3);
+    }
+
+    /// tokio::time::sleep_until 接受绝对 Instant。
+    #[tokio::test(start_paused = true)]
+    async fn tokio_sleep_until_absolute_instant() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let woken = Arc::new(AtomicBool::new(false));
+        let woken_c = woken.clone();
+        let wake_at = tokio::time::Instant::now() + Duration::from_secs(7);
+        tokio::spawn(async move {
+            tokio::time::sleep_until(wake_at).await;
+            woken_c.store(true, Ordering::SeqCst);
+        });
+        tokio::task::yield_now().await;
+
+        tokio::time::advance(Duration::from_secs(6)).await;
+        tokio::task::yield_now().await;
+        assert!(!woken.load(Ordering::SeqCst));
+
+        tokio::time::advance(Duration::from_secs(1)).await;
+        tokio::task::yield_now().await;
+        assert!(woken.load(Ordering::SeqCst));
+    }
+
+    /// tokio::time::timeout_at 接受绝对 Instant 截止时刻。
+    #[tokio::test(start_paused = true)]
+    async fn tokio_timeout_at_absolute_deadline() {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let handle = tokio::spawn(async move {
+            tokio::time::timeout_at(deadline, tokio::time::sleep(Duration::from_secs(10)))
+                .await
+                .is_err()
+        });
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(5)).await;
+        assert!(handle.await.unwrap(), "deadline 已过，应超时");
+    }
+
+    /// tokio::time::interval_at 第一次 tick 不立即触发，而是等到指定 Instant。
+    #[tokio::test(start_paused = true)]
+    async fn tokio_interval_at_starts_at_specific_time() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let count = Arc::new(AtomicU32::new(0));
+        let count_c = count.clone();
+        let start = tokio::time::Instant::now() + Duration::from_secs(5);
+        tokio::spawn(async move {
+            let mut iv = tokio::time::interval_at(start, Duration::from_secs(10));
+            loop {
+                iv.tick().await;
+                count_c.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        tokio::task::yield_now().await;
+        assert_eq!(count.load(Ordering::SeqCst), 0, "interval_at 不立即触发");
+
+        tokio::time::advance(Duration::from_secs(5)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(count.load(Ordering::SeqCst), 1, "t+5s 第一次 tick");
+
+        tokio::time::advance(Duration::from_secs(10)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(count.load(Ordering::SeqCst), 2, "t+15s 第二次 tick");
+    }
+
+    /// pause() / resume() 显式控制虚拟/真实时钟切换。
+    #[tokio::test(start_paused = true)]
+    async fn tokio_pause_resume_explicit() {
+        // 初始 paused，切回真实时钟后短 sleep 真的会等
+        tokio::time::resume();
+        let start = std::time::Instant::now();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(15),
+            "resume 后 sleep 是真实时间, 实际 {:?}",
+            elapsed
+        );
+
+        // 重新 pause，sleep 又得靠 advance 才能完成
+        tokio::time::pause();
+        let h = tokio::spawn(tokio::time::sleep(Duration::from_secs(1)));
+        tokio::task::yield_now().await;
+        assert!(!h.is_finished(), "重新 pause 后 sleep 不自完成");
+
+        tokio::time::advance(Duration::from_secs(1)).await;
+        h.await.unwrap(); // JoinHandle 同步比 yield+atomic 可靠
+    }
+
+    /// Sleep::reset 修改一个已创建 Sleep future 的目标时刻。
+    #[tokio::test(start_paused = true)]
+    async fn tokio_sleep_reset() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let woken = Arc::new(AtomicBool::new(false));
+        let woken_c = woken.clone();
+        tokio::spawn(async move {
+            let sleep = tokio::time::sleep(Duration::from_secs(10));
+            tokio::pin!(sleep);
+            // 改主意：3s 后就醒
+            sleep
+                .as_mut()
+                .reset(tokio::time::Instant::now() + Duration::from_secs(3));
+            sleep.await;
+            woken_c.store(true, Ordering::SeqCst);
+        });
+        tokio::task::yield_now().await;
+
+        tokio::time::advance(Duration::from_secs(3)).await;
+        tokio::task::yield_now().await;
+        assert!(woken.load(Ordering::SeqCst), "reset 后 3s 而非 10s 醒来");
+    }
+
+    /// Interval::reset_after 重新对齐下一次 tick 的时刻。
+    #[tokio::test(start_paused = true)]
+    async fn tokio_interval_reset_after() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let count = Arc::new(AtomicU32::new(0));
+        let count_c = count.clone();
+        tokio::spawn(async move {
+            let mut iv = tokio::time::interval(Duration::from_secs(10));
+            iv.tick().await; // 第一次立即
+            count_c.fetch_add(1, Ordering::SeqCst);
+            // 本来下次在 t+10s，改成 3s 后
+            iv.reset_after(Duration::from_secs(3));
+            iv.tick().await;
+            count_c.fetch_add(1, Ordering::SeqCst);
+        });
+        tokio::task::yield_now().await;
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+
+        tokio::time::advance(Duration::from_secs(3)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(count.load(Ordering::SeqCst), 2, "reset_after 让第二次 tick 提前到 3s");
+    }
+
+    /// MissedTickBehavior::Burst（默认）：advance 跨多个周期时，连续立即返回补齐错过的 tick。
+    #[tokio::test(start_paused = true)]
+    async fn tokio_interval_missed_burst() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let count = Arc::new(AtomicU32::new(0));
+        let count_c = count.clone();
+        tokio::spawn(async move {
+            let mut iv = tokio::time::interval(Duration::from_secs(10));
+            // 默认就是 Burst，显式写出来更清楚
+            iv.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Burst);
+            loop {
+                iv.tick().await;
+                count_c.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        tokio::task::yield_now().await;
+        assert_eq!(count.load(Ordering::SeqCst), 1, "第一次 tick 立即");
+
+        // 一口气跨 35s，期间错过 t=10, t=20, t=30 共 3 次
+        tokio::time::advance(Duration::from_secs(35)).await;
+        tokio::task::yield_now().await;
+        // Burst 把 3 次错过的连续补齐
+        assert_eq!(count.load(Ordering::SeqCst), 4, "Burst: 立即补齐 3 次");
+    }
+
+    /// MissedTickBehavior::Delay：错过 tick 只补一次，下一周期从"补这次的时刻"重新计。
+    #[tokio::test(start_paused = true)]
+    async fn tokio_interval_missed_delay() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let count = Arc::new(AtomicU32::new(0));
+        let count_c = count.clone();
+        tokio::spawn(async move {
+            let mut iv = tokio::time::interval(Duration::from_secs(10));
+            iv.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                iv.tick().await;
+                count_c.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        tokio::task::yield_now().await;
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+
+        tokio::time::advance(Duration::from_secs(35)).await;
+        tokio::task::yield_now().await;
+        // Delay 只补一次，新 deadline = 此刻 + 10s = t=45
+        assert_eq!(count.load(Ordering::SeqCst), 2, "Delay: 只补一次");
+    }
+
+    /// MissedTickBehavior::Skip：错过 tick 只补一次，下一次对齐到原周期网格上的下一个点。
+    #[tokio::test(start_paused = true)]
+    async fn tokio_interval_missed_skip() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let count = Arc::new(AtomicU32::new(0));
+        let count_c = count.clone();
+        tokio::spawn(async move {
+            let mut iv = tokio::time::interval(Duration::from_secs(10));
+            iv.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                iv.tick().await;
+                count_c.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        tokio::task::yield_now().await;
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+
+        tokio::time::advance(Duration::from_secs(35)).await;
+        tokio::task::yield_now().await;
+        // Skip 只补一次，下次对齐到 t=40（原周期网格上的下一个）
+        assert_eq!(count.load(Ordering::SeqCst), 2, "Skip: 只补一次");
+    }
 }
