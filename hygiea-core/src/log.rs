@@ -115,15 +115,13 @@ impl Component for TracingComponent {
 // ---- init ------------------------------------------------------------------
 
 fn init_tracing(cfg: &TracingConfig) -> anyhow::Result<Vec<WorkerGuard>> {
-    use crate::date::DateFormat;
     let fmt = if let Some(s) = cfg.time_format.as_deref().filter(|s| !s.is_empty()) {
         time::format_description::parse_owned::<2>(s)
             .map_err(|e| anyhow::anyhow!("Invalid time_format: {e}"))?
     } else {
-        let items = crate::date::Formatter::ISO.pattern_time();
-        time::format_description::OwnedFormatItem::Compound(
-            items.iter().map(|i| i.clone().into()).collect(),
-        )
+        time::format_description::parse_owned::<2>(
+            "[year]-[month]-[day]T[hour]:[minute]:[second][offset_hour sign:mandatory]:[offset_minute]"
+        ).map_err(|e| anyhow::anyhow!("Invalid default time_format: {e}"))?
     };
     let timer = tracing_subscriber::fmt::time::UtcTime::new(fmt);
 

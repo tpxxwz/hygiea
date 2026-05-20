@@ -1,8 +1,6 @@
 // ---- formats ----------------------------------------------------------------
 
 pub trait DateFormat: Send + Sync {
-    fn pattern_time(&self) -> &'static [time::format_description::BorrowedFormatItem<'static>];
-
     fn pattern_chrono(&self) -> &'static [chrono::format::Item<'static>];
 }
 
@@ -32,21 +30,6 @@ pub enum Formatter {
 }
 
 impl DateFormat for Formatter {
-    fn pattern_time(&self) -> &'static [time::format_description::BorrowedFormatItem<'static>] {
-        use time::macros::format_description;
-        match self {
-            Formatter::Y => format_description!("[year]"),
-            Formatter::HMS => format_description!("[hour]:[minute]:[second]"),
-            Formatter::Ymd => format_description!("[year]-[month]-[day]"),
-            Formatter::Ymdnosep => format_description!("[year][month][day]"),
-            Formatter::YmdHMS => format_description!("[year]-[month]-[day] [hour]:[minute]:[second]"),
-            Formatter::YmdHMS3F => format_description!("[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]"),
-            Formatter::YmdHMSnosep => format_description!("[year][month][day][hour][minute][second]"),
-            Formatter::ISO => format_description!("[year]-[month]-[day]T[hour]:[minute]:[second][offset_hour sign:mandatory]:[offset_minute]"),
-            Formatter::IsoMillisZ => format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"),
-        }
-    }
-
     fn pattern_chrono(&self) -> &'static [chrono::format::Item<'static>] {
         use chrono::format::{Item, StrftimeItems};
         use std::sync::OnceLock;
@@ -74,117 +57,6 @@ impl DateFormat for Formatter {
     }
 }
 
-// ---- time -------------------------------------------------------------------
-
-pub use time_ext::*;
-
-mod time_ext {
-    use crate::{BaseFmtErr, FmtErr};
-    use super::{DateFormat, Formatter};
-
-    pub use time::OffsetDateTime;
-
-    thread_local! {
-        static NOW_FN: std::cell::Cell<fn() -> OffsetDateTime> = const { std::cell::Cell::new(OffsetDateTime::now_utc) };
-    }
-
-    #[cfg(test)]
-    pub fn set_now_offset_utc(f: fn() -> OffsetDateTime) {
-        NOW_FN.set(f);
-    }
-
-    pub fn now_offset_utc() -> OffsetDateTime {
-        NOW_FN.with(|f| f.get()())
-    }
-
-    pub trait OffsetDateTimeExt {
-        fn format(&self, fmt: &dyn DateFormat) -> Result<String, FmtErr>;
-        fn format_default(&self) -> Result<String, FmtErr> {
-            self.format(&Formatter::ISO)
-        }
-
-        fn parse(s: &str, fmt: &dyn DateFormat) -> Result<OffsetDateTime, FmtErr>;
-        fn parse_default(s: &str) -> Result<OffsetDateTime, FmtErr> {
-            Self::parse(s, &Formatter::ISO)
-        }
-
-        fn shift(&self, duration: time::Duration) -> OffsetDateTime;
-
-        fn from_millis(ms: i64) -> Result<OffsetDateTime, FmtErr>;
-        fn from_secs(s: i64) -> Result<OffsetDateTime, FmtErr>;
-
-        fn start_of_day(&self) -> OffsetDateTime;
-        fn end_of_day(&self) -> OffsetDateTime;
-        fn start_of_week(&self) -> OffsetDateTime;
-        fn start_of_month(&self) -> Result<OffsetDateTime, FmtErr>;
-        fn start_of_year(&self) -> Result<OffsetDateTime, FmtErr>;
-    }
-
-    impl OffsetDateTimeExt for OffsetDateTime {
-        fn format(&self, fmt: &dyn DateFormat) -> Result<String, FmtErr> {
-            OffsetDateTime::format(*self, fmt.pattern_time()).map_err(|e| {
-                BaseFmtErr::DateError.to_err(serde_json::json!({
-                    "cause": format!("format datetime failed: {e}")
-                }))
-            })
-        }
-        fn parse(s: &str, fmt: &dyn DateFormat) -> Result<OffsetDateTime, FmtErr> {
-            OffsetDateTime::parse(s, fmt.pattern_time()).map_err(|e| {
-                BaseFmtErr::DateError.to_err(serde_json::json!({
-                    "cause": format!("parse datetime failed: {e}, input={s}")
-                }))
-            })
-        }
-        fn shift(&self, duration: time::Duration) -> OffsetDateTime {
-            *self + duration
-        }
-        fn from_millis(ms: i64) -> Result<OffsetDateTime, FmtErr> {
-            OffsetDateTime::from_unix_timestamp_nanos(ms as i128 * 1_000_000).map_err(|e| {
-                BaseFmtErr::DateError.to_err(
-                    serde_json::json!({ "cause": format!("timestamp millis out of range: {ms}, {e}") }),
-                )
-            })
-        }
-        fn from_secs(s: i64) -> Result<OffsetDateTime, FmtErr> {
-            OffsetDateTime::from_unix_timestamp(s).map_err(|e| {
-                BaseFmtErr::DateError.to_err(
-                    serde_json::json!({ "cause": format!("timestamp secs out of range: {s}, {e}") }),
-                )
-            })
-        }
-        fn start_of_day(&self) -> OffsetDateTime {
-            self.date().with_time(time::Time::MIDNIGHT).assume_utc()
-        }
-        fn end_of_day(&self) -> OffsetDateTime {
-            self.date().with_time(time::Time::MAX).assume_utc()
-        }
-        fn start_of_week(&self) -> OffsetDateTime {
-            let weekday = self.weekday().number_from_monday();
-            let monday = *self - time::Duration::days(weekday.into());
-            monday.start_of_day()
-        }
-        fn start_of_month(&self) -> Result<OffsetDateTime, FmtErr> {
-            self.replace_day(1)
-                .map(|dt| dt.date().with_time(time::Time::MIDNIGHT).assume_utc())
-                .map_err(|e| {
-                    BaseFmtErr::DateError.to_err(serde_json::json!({
-                        "cause": format!("start_of_month failed: {e}")
-                    }))
-                })
-        }
-        fn start_of_year(&self) -> Result<OffsetDateTime, FmtErr> {
-            self.replace_month(time::Month::January)
-                .and_then(|dt| dt.replace_day(1))
-                .map(|dt| dt.date().with_time(time::Time::MIDNIGHT).assume_utc())
-                .map_err(|e| {
-                    BaseFmtErr::DateError.to_err(serde_json::json!({
-                        "cause": format!("start_of_year failed: {e}")
-                    }))
-                })
-        }
-    }
-}
-
 // ---- chrono -----------------------------------------------------------------
 
 pub use chrono_ext::*;
@@ -192,13 +64,15 @@ pub use chrono_ext::*;
 mod chrono_ext {
     use crate::{BaseFmtErr, FmtErr};
     use super::{DateFormat, Formatter};
+    use parking_lot::RwLock;
 
     pub use chrono::{
         DateTime, Datelike, FixedOffset, Local, NaiveDate, NaiveDateTime, TimeDelta, TimeZone,
         Timelike, Utc,
     };
+    pub use time::OffsetDateTime;
 
-    static NOW_FN: parking_lot::RwLock<fn() -> DateTime<Utc>> = parking_lot::RwLock::new(Utc::now);
+    static NOW_FN: RwLock<fn() -> DateTime<Utc>> = RwLock::new(Utc::now);
 
     #[doc(hidden)]
     pub fn set_now_utc(f: fn() -> DateTime<Utc>) {
@@ -209,10 +83,33 @@ mod chrono_ext {
         NOW_FN.read()()
     }
 
-    pub trait DateTimeUtcExt {
-        fn to_offset_datetime(&self) -> Result<time::OffsetDateTime, FmtErr>;
-        fn from_offset_datetime(odt: time::OffsetDateTime) -> Result<DateTime<Utc>, FmtErr>;
+    pub trait OffsetDateTimeExt {
+        fn to_datetime_utc(&self) -> Result<DateTime<Utc>, FmtErr>;
+        fn from_datetime_utc(dt: DateTime<Utc>) -> Result<OffsetDateTime, FmtErr>;
+    }
 
+    impl OffsetDateTimeExt for OffsetDateTime {
+        fn to_datetime_utc(&self) -> Result<DateTime<Utc>, FmtErr> {
+            DateTime::from_timestamp(self.unix_timestamp(), self.nanosecond()).ok_or_else(|| {
+                BaseFmtErr::DateError.to_err(serde_json::json!({
+                    "cause": "to_datetime_utc: timestamp out of range"
+                }))
+            })
+        }
+        fn from_datetime_utc(dt: DateTime<Utc>) -> Result<OffsetDateTime, FmtErr> {
+            let secs = dt.timestamp();
+            let nanos = dt.timestamp_subsec_nanos();
+            OffsetDateTime::from_unix_timestamp(secs)
+                .map(|odt| odt + time::Duration::nanoseconds(nanos as i64))
+                .map_err(|e| {
+                    BaseFmtErr::DateError.to_err(serde_json::json!({
+                        "cause": format!("from_datetime_utc out of range: {e}")
+                    }))
+                })
+        }
+    }
+
+    pub trait DateTimeUtcExt {
         fn format_ext(&self, fmt: &dyn DateFormat) -> String;
         fn format_ext_default(&self) -> String {
             self.format_ext(&Formatter::ISO)
@@ -236,24 +133,6 @@ mod chrono_ext {
     }
 
     impl DateTimeUtcExt for DateTime<Utc> {
-        fn to_offset_datetime(&self) -> Result<time::OffsetDateTime, FmtErr> {
-            let secs = self.timestamp();
-            let nanos = self.timestamp_subsec_nanos();
-            time::OffsetDateTime::from_unix_timestamp(secs)
-                .map(|odt| odt + time::Duration::nanoseconds(nanos as i64))
-                .map_err(|e| {
-                    BaseFmtErr::DateError.to_err(serde_json::json!({
-                        "cause": format!("to_offset_datetime out of range: {e}")
-                    }))
-                })
-        }
-        fn from_offset_datetime(odt: time::OffsetDateTime) -> Result<DateTime<Utc>, FmtErr> {
-            DateTime::from_timestamp(odt.unix_timestamp(), odt.nanosecond()).ok_or_else(|| {
-                BaseFmtErr::DateError.to_err(serde_json::json!({
-                    "cause": "from_offset_datetime: timestamp out of range"
-                }))
-            })
-        }
         fn format_ext(&self, fmt: &dyn DateFormat) -> String {
             self.format_with_items(fmt.pattern_chrono().iter()).to_string()
         }

@@ -23,6 +23,9 @@ app = ["dep:tokio", "dep:async-trait", "dep:anyhow", "dep:tracing", "dep:tracing
 # Distributed lock abstractions
 distributed-lock = ["dep:async-trait"]
 
+# Simulation clock for backtest / testing
+sim = ["dep:tokio"]
+
 # Future modules (placeholder)
 string = []
 http = []

@@ -46,7 +46,7 @@ clap   = { version = "4.5", features = ["derive"] }
 config = "0.15"
 
 # 可选功能依赖
-tokio = { version = "1.52", features = ["full"] }
+tokio = { version = "1.52", features = ["full", "test-util"] }
 async-trait = "0.1"
 anyhow = "1.0"
 

@@ -35,7 +35,13 @@ pub use log::{ConsoleLayer, FileLayer, TracingConfig};
 
 // ========== date ==========
 pub mod date;
-pub use date::{DateFormat, DateTimeUtcExt, Formatter, OffsetDateTimeExt, now_offset_utc, now_utc, set_now_utc};
+pub use date::{DateFormat, DateTimeUtcExt, Formatter, OffsetDateTime, OffsetDateTimeExt, now_utc, set_now_utc};
+
+// ========== sim ==========
+#[cfg(feature = "sim")]
+pub mod sim;
+#[cfg(feature = "sim")]
+pub use sim::{SimClock, TokenBucket};
 
 // ========== ext / util ==========
 pub mod ext;

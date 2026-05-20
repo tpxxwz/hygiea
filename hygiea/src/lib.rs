@@ -113,7 +113,9 @@ pub use hygiea_core::util;
 pub use hygiea_core::{BuiltinKey, EnvKey, env_get, env_get_opt, env_get_or, env_get_or_else};
 
 // ========== date ==========
-pub use hygiea_core::{DateFormat, DateTimeUtcExt, Formatter, OffsetDateTimeExt, now_offset_utc, now_utc, set_now_utc};
+pub use hygiea_core::{DateFormat, DateTimeUtcExt, Formatter, OffsetDateTime, OffsetDateTimeExt, now_utc, set_now_utc};
+#[cfg(feature = "sim")]
+pub use hygiea_core::{SimClock, TokenBucket};
 
 // ========== Feature: http ==========
 /// HTTP utilities module (coming soon)
