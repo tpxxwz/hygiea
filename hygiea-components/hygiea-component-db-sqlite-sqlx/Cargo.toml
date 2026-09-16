@@ -1,19 +1,19 @@
 [package]
-name = "hygiea-component-db-pg-sqlx"
+name = "hygiea-component-db-sqlite-sqlx"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "PostgreSQL (sqlx) component for hygiea"
+description = "SQLite (sqlx) component for hygiea"
 
 [features]
 distributed-lock = ["hygiea-core/distributed-lock"]
 
 [dependencies]
 hygiea-core = { workspace = true, features = ["app"] }
-sqlx = { workspace = true, features = ["postgres", "time"] }
+sqlx = { workspace = true, features = ["sqlite", "time"] }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }

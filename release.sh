@@ -4,7 +4,7 @@ set -euo pipefail
 # 用法：
 #   ./release.sh patch              # dry-run
 #   ./release.sh patch --execute    # 正式发布
-#   ./release.sh 0.1.1-alpha.3 --execute
+#   ./release.sh 0.1.1-alpha.4 --execute
 
 BUMP="${1:-patch}"
 

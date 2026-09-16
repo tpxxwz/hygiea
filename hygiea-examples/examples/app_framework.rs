@@ -14,7 +14,10 @@
 
 use std::sync::OnceLock;
 
-use hygiea::{async_trait, Component, DateTimeFormatter, Registry, RegistryConfig, Resources, TracingConfig, WithoutOffsetFormatter};
+use hygiea::{
+    Component, DateTimeFormatter, Registry, RegistryConfig, Resources, TracingConfig,
+    WithoutOffsetFormatter, async_trait,
+};
 use tokio::time::{Duration, interval};
 use tracing;
 
@@ -220,7 +223,9 @@ async fn main() {
     println!("╚════════════════════════════════════════════╝\n");
 
     let tracing = TracingConfig {
-        time_format: Some(DateTimeFormatter::WithoutOffset(WithoutOffsetFormatter::YmdHMS3F)),
+        time_format: Some(DateTimeFormatter::WithoutOffset(
+            WithoutOffsetFormatter::YmdHMS3F,
+        )),
         ..Default::default()
     };
 

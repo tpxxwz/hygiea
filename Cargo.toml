@@ -9,6 +9,7 @@ members = [
     "hygiea-components/hygiea-component-grpc-tonic",
     "hygiea-components/hygiea-component-db-pg-seaorm",
     "hygiea-components/hygiea-component-db-pg-sqlx",
+    "hygiea-components/hygiea-component-db-sqlite-sqlx",
     "hygiea-components/hygiea-component-redis-fred",
 ]
 
@@ -59,7 +60,7 @@ log = "0.4.34"
 
 # Database
 sea-orm = { version = "2.0.3", features = ["sqlx-postgres", "runtime-tokio-rustls", "mock"] }
-sqlx = { version = "0.9.0", features = ["runtime-tokio", "tls-rustls-ring-webpki", "postgres", "macros"] }
+sqlx = { version = "0.9.0", features = ["runtime-tokio", "tls-rustls-ring-webpki", "macros"] }
 
 # HTTP
 axum = "0.8.9"
