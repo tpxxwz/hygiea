@@ -192,7 +192,7 @@ mod distributed_lock {
             "CREATE TABLE IF NOT EXISTS {} (key VARCHAR(255) PRIMARY KEY)",
             table
         );
-        sqlx::query(&sql)
+        sqlx::query(sqlx::AssertSqlSafe(sql))
             .execute(pool)
             .await
             .context("Failed to create lock table")?;
@@ -255,17 +255,17 @@ mod distributed_lock {
                     .await?;
             }
             DistributedKey::Named(k) => {
-                sqlx::query(&format!(
+                sqlx::query(sqlx::AssertSqlSafe(format!(
                     "INSERT INTO {} (key) VALUES ($1) ON CONFLICT DO NOTHING",
                     lock_table
-                ))
+                )))
                 .bind(&k)
                 .execute(&mut **tx)
                 .await?;
-                sqlx::query(&format!(
+                sqlx::query(sqlx::AssertSqlSafe(format!(
                     "SELECT key FROM {} WHERE key = $1 FOR UPDATE",
                     lock_table
-                ))
+                )))
                 .bind(&k)
                 .execute(&mut **tx)
                 .await?;
@@ -296,17 +296,17 @@ mod distributed_lock {
                 Ok(ok)
             }
             DistributedKey::Named(k) => {
-                sqlx::query(&format!(
+                sqlx::query(sqlx::AssertSqlSafe(format!(
                     "INSERT INTO {} (key) VALUES ($1) ON CONFLICT DO NOTHING",
                     lock_table
-                ))
+                )))
                 .bind(&k)
                 .execute(&mut **tx)
                 .await?;
-                let result = sqlx::query(&format!(
+                let result = sqlx::query(sqlx::AssertSqlSafe(format!(
                     "SELECT key FROM {} WHERE key = $1 FOR UPDATE NOWAIT",
                     lock_table
-                ))
+                )))
                 .bind(&k)
                 .execute(&mut **tx)
                 .await;

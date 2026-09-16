@@ -13,7 +13,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.1-alpha.2"
+version = "0.1.1-alpha.3"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 authors = ["wjj"]
@@ -22,61 +22,62 @@ rust-version = "1.85"
 
 [workspace.dependencies]
 # 内部依赖，版本由 cargo-release 发布时自动对齐，无需手动修改
-hygiea = { path = "hygiea", version = "0.1.1-alpha.2" }
-hygiea-core = { path = "hygiea-core", version = "0.1.1-alpha.2", default-features = false }
-hygiea-macros = { path = "hygiea-macros", version = "0.1.1-alpha.2" }
+hygiea = { path = "hygiea", version = "0.1.1-alpha.3" }
+hygiea-core = { path = "hygiea-core", version = "0.1.1-alpha.3", default-features = false }
+hygiea-macros = { path = "hygiea-macros", version = "0.1.1-alpha.3" }
 
 # 过程宏依赖
-quote = "1.0"
-syn = { version = "2.0", features = ["full"] }
-proc-macro2 = "1.0"
+quote = "1.0.47"
+syn = { version = "3.0.5", features = ["full"] }
+proc-macro2 = "1.0.107"
 
 # 核心依赖
-serde = "1.0"
-serde_json = "1.0"
-linkme = "0.3"
-ctor = "1.0"
-minijinja = "2.19"
-parking_lot = "0.12"
-dashmap = "6"
-lru = "0.18"
+serde = "1.0.229"
+serde_json = "1.0.151"
+linkme = "0.3.37"
+ctor = "1.0.13"
+minijinja = "2.24.0"
+parking_lot = "0.12.5"
+dashmap = "6.2.1"
+lru = "0.18.4"
 
 # CLI & 配置文件加载
-clap   = { version = "4.5", features = ["derive"] }
-config = "0.15"
+clap   = { version = "4.6.7", features = ["derive"] }
+config = "0.15.25"
 
 # 可选功能依赖
-tokio = { version = "1.52", features = ["full"] }
-async-trait = "0.1"
-anyhow = "1.0"
+tokio = { version = "1.53.1", features = ["full", "test-util"] }
+async-trait = "0.1.92"
+anyhow = "1.0.104"
 
 # Observability
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
-tracing-appender = "0.2"
-tracing-log = "0.2"
-log = "0.4"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "time"] }
+tracing-appender = "0.2.5"
+tracing-log = "0.2.0"
+log = "0.4.34"
 
 # Database
-sea-orm = { version = "2.0.0-rc.37", features = ["sqlx-postgres", "runtime-tokio-rustls", "mock"] }
-sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "macros"] }
+sea-orm = { version = "2.0.3", features = ["sqlx-postgres", "runtime-tokio-rustls", "mock"] }
+sqlx = { version = "0.9.0", features = ["runtime-tokio", "tls-rustls-ring-webpki", "postgres", "macros"] }
 
 # HTTP
-axum = "0.8"
-tower-http = { version = "0.6", features = ["timeout", "limit"] }
-http = "1.4"
-reqwest = { version = "0.13", features = ["json", "rustls", "webpki-roots"], default-features = false }
-tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
-futures-util = "0.3"
-regex = "1"
+axum = "0.8.9"
+tower-http = { version = "0.7.1", features = ["timeout", "limit"] }
+http = "1.5.0"
+reqwest = { version = "0.13.5", features = ["json", "rustls"], default-features = false }
+tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3.34"
+regex = "1.13.1"
 
 # gRPC
-tonic = "0.14"
-tokio-stream = { version = "0.1", features = ["sync", "net"] }
+tonic = "0.14.6"
+tokio-stream = { version = "0.1.19", features = ["sync", "net"] }
 
 # Time
-chrono = { version = "0.4", features = ["serde"] }
-time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
+chrono = { version = "0.4.45", features = ["serde"] }
+time = { version = "0.3.55", features = ["formatting", "parsing", "macros"] }
+time-tz = { version = "2.0.0", features = ["system"] }
 
 # 测试依赖
-serial_test = "3.4"
+serial_test = "4.0.1"

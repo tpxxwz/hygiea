@@ -16,8 +16,11 @@ pub use error::{
 };
 
 #[ctor::ctor(unsafe)]
-fn init_hygiea_error_env() {
+fn init_hygiea() {
     error::init();
+
+    #[cfg(feature = "date-iana")]
+    date::iana::init();
 }
 
 // ========== Feature: app ==========
@@ -35,7 +38,22 @@ pub use log::{ConsoleLayer, FileLayer, TracingConfig};
 
 // ========== date ==========
 pub mod date;
-pub use date::{DateFormat, DateTimeUtcExt, Formatter, OffsetDateTimeExt, now_offset_utc, now_utc, set_now_utc};
+#[cfg(feature = "date-chrono")]
+pub use date::DateTimeUtcExt;
+#[cfg(any(test, feature = "date-sim-clock"))]
+pub use date::set_now_utc;
+pub use date::{
+    DateTimeFormatter, HygieaDateTimeExt, HygieaUtcDateTimeExt, WithOffsetFormatter,
+    WithOffsetParser, WithoutOffsetFormatter, WithoutOffsetParser, now, now_utc,
+};
+#[cfg(feature = "date-iana")]
+pub use date::{HygieaOffsetDateTimeExt, now_local};
+
+// ========== sim ==========
+pub mod sim;
+#[cfg(any(test, feature = "date-sim-clock"))]
+pub use sim::SimClock;
+pub use sim::TokenBucket;
 
 // ========== ext / util ==========
 pub mod ext;

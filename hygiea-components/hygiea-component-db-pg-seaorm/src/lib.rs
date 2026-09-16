@@ -227,7 +227,7 @@ mod distributed_lock {
             "CREATE TABLE IF NOT EXISTS {} (key VARCHAR(255) PRIMARY KEY)",
             table
         );
-        sea_orm::sqlx::query(&sql)
+        sea_orm::sqlx::query(sea_orm::sqlx::AssertSqlSafe(sql))
             .execute(conn.get_postgres_connection_pool())
             .await
             .context("Failed to create lock table")?;
@@ -292,17 +292,17 @@ mod distributed_lock {
                     .await?;
             }
             DistributedKey::Named(k) => {
-                sea_orm::sqlx::query(&format!(
+                sea_orm::sqlx::query(sea_orm::sqlx::AssertSqlSafe(format!(
                     "INSERT INTO {} (key) VALUES ($1) ON CONFLICT DO NOTHING",
                     lock_table
-                ))
+                )))
                 .bind(&k)
                 .execute(&mut **tx)
                 .await?;
-                sea_orm::sqlx::query(&format!(
+                sea_orm::sqlx::query(sea_orm::sqlx::AssertSqlSafe(format!(
                     "SELECT key FROM {} WHERE key = $1 FOR UPDATE",
                     lock_table
-                ))
+                )))
                 .bind(&k)
                 .execute(&mut **tx)
                 .await?;
@@ -335,17 +335,17 @@ mod distributed_lock {
                 Ok(ok)
             }
             DistributedKey::Named(k) => {
-                sea_orm::sqlx::query(&format!(
+                sea_orm::sqlx::query(sea_orm::sqlx::AssertSqlSafe(format!(
                     "INSERT INTO {} (key) VALUES ($1) ON CONFLICT DO NOTHING",
                     lock_table
-                ))
+                )))
                 .bind(&k)
                 .execute(&mut **tx)
                 .await?;
-                let result = sea_orm::sqlx::query(&format!(
+                let result = sea_orm::sqlx::query(sea_orm::sqlx::AssertSqlSafe(format!(
                     "SELECT key FROM {} WHERE key = $1 FOR UPDATE NOWAIT",
                     lock_table
-                ))
+                )))
                 .bind(&k)
                 .execute(&mut **tx)
                 .await;

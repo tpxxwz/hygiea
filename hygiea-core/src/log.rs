@@ -5,11 +5,13 @@ use tracing_appender::non_blocking;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_log::LogTracer;
+use tracing_subscriber::fmt::format::Writer;
+use tracing_subscriber::fmt::time::FormatTime;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{EnvFilter, Layer, Registry, fmt};
 
 use crate::app::{Component, Resources, async_trait};
-
+use crate::date::{DateTimeFormatter, HygieaDateTimeExt, now_local};
 
 // ---- config types ----------------------------------------------------------
 
@@ -55,7 +57,7 @@ pub struct TracingConfig {
     pub layers: Vec<FileLayer>,
     pub root_env_filter: String,
     pub root_dir: String,
-    pub time_format: Option<String>,
+    pub time_format: Option<DateTimeFormatter>,
 }
 
 impl TracingConfig {
@@ -114,18 +116,27 @@ impl Component for TracingComponent {
 
 // ---- init ------------------------------------------------------------------
 
+#[derive(Clone)]
+struct LocalTime {
+    format: Option<DateTimeFormatter>,
+}
+
+impl FormatTime for LocalTime {
+    fn format_time(&self, writer: &mut Writer<'_>) -> std::fmt::Result {
+        let now = now_local();
+        let timestamp = match self.format {
+            Some(formatter) => formatter.format(&now),
+            None => now.format_ext_rfc3339(),
+        }
+        .map_err(|_| std::fmt::Error)?;
+        writer.write_str(&timestamp)
+    }
+}
+
 fn init_tracing(cfg: &TracingConfig) -> anyhow::Result<Vec<WorkerGuard>> {
-    use crate::date::DateFormat;
-    let fmt = if let Some(s) = cfg.time_format.as_deref().filter(|s| !s.is_empty()) {
-        time::format_description::parse_owned::<2>(s)
-            .map_err(|e| anyhow::anyhow!("Invalid time_format: {e}"))?
-    } else {
-        let items = crate::date::Formatter::ISO.pattern_time();
-        time::format_description::OwnedFormatItem::Compound(
-            items.iter().map(|i| i.clone().into()).collect(),
-        )
+    let timer = LocalTime {
+        format: cfg.time_format,
     };
-    let timer = tracing_subscriber::fmt::time::UtcTime::new(fmt);
 
     let mut work_guards: Vec<WorkerGuard> = Vec::new();
 
@@ -215,7 +226,12 @@ fn init_tracing(cfg: &TracingConfig) -> anyhow::Result<Vec<WorkerGuard>> {
         Some(layer) => layer,
         None => {
             let default_filter = EnvFilter::new(effective_root_filter);
-            Box::new(fmt::layer().with_timer(timer.clone()).with_target(true).with_filter(default_filter))
+            Box::new(
+                fmt::layer()
+                    .with_timer(timer.clone())
+                    .with_target(true)
+                    .with_filter(default_filter),
+            )
         }
     };
 

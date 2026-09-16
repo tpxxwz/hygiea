@@ -227,7 +227,8 @@ impl Registry {
         Self::with_config(RegistryConfig::default())
     }
 
-    fn with_config(config: RegistryConfig) -> Self {
+    /// Create a registry with explicit framework-level configuration.
+    pub fn with_config(config: RegistryConfig) -> Self {
         Self {
             state: Resources::new(),
             components: Vec::new(),

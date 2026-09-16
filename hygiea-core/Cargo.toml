@@ -18,10 +18,19 @@ default = []
 format = ["dep:lru"]
 
 # Application framework module
-app = ["dep:tokio", "dep:async-trait", "dep:anyhow", "dep:tracing", "dep:tracing-subscriber", "dep:tracing-log", "dep:tracing-appender", "dep:serde", "dep:dashmap", "dep:clap", "dep:config"]
+app = ["date-iana", "dep:async-trait", "dep:anyhow", "dep:tracing", "dep:tracing-subscriber", "dep:tracing-log", "dep:tracing-appender", "dep:serde", "dep:dashmap", "dep:clap", "dep:config"]
 
 # Distributed lock abstractions
 distributed-lock = ["dep:async-trait"]
+
+# chrono 互转桥（DateTimeUtcExt）；默认全 time，不需要 chrono 可不启用
+date-chrono = ["dep:chrono"]
+
+# Simulation clock; enables replacing the UTC clock source
+date-sim-clock = []
+
+# IANA timezone and system-local datetime support
+date-iana = ["dep:time-tz"]
 
 # Future modules (placeholder)
 string = []
@@ -31,7 +40,7 @@ http-client = ["dep:reqwest"]
 ws-client = ["dep:tokio-tungstenite"]
 
 # All features
-full = ["format", "app", "string", "http", "json", "http-client", "ws-client"]
+full = ["format", "app", "string", "http", "json", "http-client", "ws-client", "date-chrono", "date-sim-clock", "date-iana"]
 
 [dependencies]
 # Error handling (always on)
@@ -48,7 +57,7 @@ lru = { workspace = true, optional = true }
 # Optional dependencies for app feature
 clap   = { workspace = true, optional = true }
 config = { workspace = true, optional = true }
-tokio = { workspace = true, optional = true }
+tokio = { workspace = true }
 async-trait = { workspace = true, optional = true }
 dashmap = { workspace = true, optional = true }
 
@@ -59,8 +68,9 @@ tracing-subscriber = { workspace = true, optional = true }
 tracing-log = { workspace = true, optional = true }
 tracing-appender = { workspace = true, optional = true }
 
-chrono = { workspace = true }
+chrono = { workspace = true, optional = true }
 time = { workspace = true }
+time-tz = { workspace = true, optional = true }
 regex = { workspace = true }
 reqwest = { workspace = true, optional = true }
 tokio-tungstenite = { workspace = true, optional = true }

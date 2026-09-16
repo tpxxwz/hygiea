@@ -20,13 +20,17 @@ default = []  # 用户明确选择需要的功能
 
 # 功能模块（传递给 core）
 format = ["hygiea-core/format"]              # 字符串占位符 / 模板渲染
-app = ["hygiea-core/app"]      # 应用框架模块（当前已实现）
+app = ["date-iana", "hygiea-core/app"]      # 应用框架模块（当前已实现）
 string = ["hygiea-core/string"]                                # 字符串工具（预留）
 http = ["hygiea-core/http"]                                    # HTTP 工具（预留）
 json = ["hygiea-core/json"]                                    # JSON 工具（预留）
 http-client = ["hygiea-core/http-client"]
 ws-client = ["hygiea-core/ws-client"]
 
-# 全功能
-full = ["format", "app", "string", "http", "json", "http-client", "ws-client"]
+# chrono 互转桥（DateTimeUtcExt）
+date-chrono = ["hygiea-core/date-chrono"]
+date-sim-clock = ["hygiea-core/date-sim-clock"]
+date-iana = ["hygiea-core/date-iana"]
 
+# 全功能
+full = ["format", "app", "string", "http", "json", "http-client", "ws-client", "date-chrono", "date-sim-clock", "date-iana"]
