@@ -11,7 +11,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{EnvFilter, Layer, Registry, fmt};
 
 use crate::app::{Component, Resources, async_trait};
-use crate::date::{DateTimeFormatter, HygieaDateTimeExt, now_local};
+use crate::date::{DateTimeFormatter, now_local};
 
 // ---- config types ----------------------------------------------------------
 
@@ -72,7 +72,7 @@ impl Default for TracingConfig {
             layers: Vec::new(),
             root_env_filter: TracingConfig::DEFAULT_ROOT_ENV_FILTER.to_string(),
             root_dir: TracingConfig::DEFAULT_ROOT_DIR.to_string(),
-            time_format: None,
+            time_format: Some(DateTimeFormatter::default()),
         }
     }
 }
@@ -126,7 +126,7 @@ impl FormatTime for LocalTime {
         let now = now_local();
         let timestamp = match self.format {
             Some(formatter) => formatter.format(&now),
-            None => now.format_ext_rfc3339(),
+            None => DateTimeFormatter::default().format(&now),
         }
         .map_err(|_| std::fmt::Error)?;
         writer.write_str(&timestamp)

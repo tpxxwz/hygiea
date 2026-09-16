@@ -41,9 +41,8 @@ pub enum DateTimeFormatter {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WithOffsetFormatter {
-    YmdHMS,
     YmdHMS3F,
-    YmdHMSnosep,
+    YmdTHMS3F,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,9 +87,8 @@ impl FromStr for DateTimeFormatter {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
-            "WithOffset.YmdHMS" => Ok(Self::WithOffset(WithOffsetFormatter::YmdHMS)),
             "WithOffset.YmdHMS3F" => Ok(Self::WithOffset(WithOffsetFormatter::YmdHMS3F)),
-            "WithOffset.YmdHMSnosep" => Ok(Self::WithOffset(WithOffsetFormatter::YmdHMSnosep)),
+            "WithOffset.YmdTHMS3F" => Ok(Self::WithOffset(WithOffsetFormatter::YmdTHMS3F)),
             "WithoutOffset.Y" => Ok(Self::WithoutOffset(WithoutOffsetFormatter::Y)),
             "WithoutOffset.HMS" => Ok(Self::WithoutOffset(WithoutOffsetFormatter::HMS)),
             "WithoutOffset.Ymd" => Ok(Self::WithoutOffset(WithoutOffsetFormatter::Ymd)),
@@ -102,6 +100,12 @@ impl FromStr for DateTimeFormatter {
             }
             _ => Err(format!("unsupported date time formatter: {value}")),
         }
+    }
+}
+
+impl Default for DateTimeFormatter {
+    fn default() -> Self {
+        Self::WithOffset(WithOffsetFormatter::YmdTHMS3F)
     }
 }
 
@@ -126,16 +130,6 @@ impl From<WithoutOffsetParser> for WithoutOffsetFormatter {
     }
 }
 
-impl From<WithOffsetParser> for WithOffsetFormatter {
-    fn from(parser: WithOffsetParser) -> Self {
-        match parser {
-            WithOffsetParser::YmdHMS => Self::YmdHMS,
-            WithOffsetParser::YmdHMS3F => Self::YmdHMS3F,
-            WithOffsetParser::YmdHMSnosep => Self::YmdHMSnosep,
-        }
-    }
-}
-
 impl WithoutOffsetFormatter {
     fn description(self) -> &'static [BorrowedFormatItem<'static>] {
         match self {
@@ -155,6 +149,19 @@ impl WithoutOffsetFormatter {
 impl WithOffsetFormatter {
     fn description(self) -> &'static [BorrowedFormatItem<'static>] {
         match self {
+            Self::YmdHMS3F => format_description!(
+                "[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3] [offset_hour sign:mandatory]:[offset_minute]"
+            ),
+            Self::YmdTHMS3F => format_description!(
+                "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3][offset_hour sign:mandatory]:[offset_minute]"
+            ),
+        }
+    }
+}
+
+impl WithOffsetParser {
+    fn description(self) -> &'static [BorrowedFormatItem<'static>] {
+        match self {
             Self::YmdHMS => format_description!(
                 "[year]-[month]-[day] [hour]:[minute]:[second] [offset_hour sign:mandatory]:[offset_minute]"
             ),
@@ -165,12 +172,6 @@ impl WithOffsetFormatter {
                 "[year][month][day][hour][minute][second][offset_hour sign:mandatory][offset_minute]"
             ),
         }
-    }
-}
-
-impl WithOffsetParser {
-    fn description(self) -> &'static [BorrowedFormatItem<'static>] {
-        WithOffsetFormatter::from(self).description()
     }
 
     pub fn parse(self, input: &str) -> Result<OffsetDateTime, FmtErr> {
@@ -524,16 +525,12 @@ mod tests {
 
         let cases = [
             (
-                "WithOffset.YmdHMS",
-                DateTimeFormatter::WithOffset(O::YmdHMS),
-            ),
-            (
                 "WithOffset.YmdHMS3F",
                 DateTimeFormatter::WithOffset(O::YmdHMS3F),
             ),
             (
-                "WithOffset.YmdHMSnosep",
-                DateTimeFormatter::WithOffset(O::YmdHMSnosep),
+                "WithOffset.YmdTHMS3F",
+                DateTimeFormatter::WithOffset(O::YmdTHMS3F),
             ),
             ("WithoutOffset.Y", DateTimeFormatter::WithoutOffset(W::Y)),
             (
@@ -571,8 +568,8 @@ mod tests {
     #[test]
     fn test_formatter_conversions() {
         assert_eq!(
-            DateTimeFormatter::from(WithOffsetFormatter::YmdHMS),
-            DateTimeFormatter::WithOffset(WithOffsetFormatter::YmdHMS)
+            DateTimeFormatter::from(WithOffsetFormatter::YmdTHMS3F),
+            DateTimeFormatter::default()
         );
         assert_eq!(
             DateTimeFormatter::from(WithoutOffsetFormatter::YmdHMS),
@@ -581,10 +578,6 @@ mod tests {
         assert_eq!(
             WithoutOffsetFormatter::from(WithoutOffsetParser::YmdHMS3F),
             WithoutOffsetFormatter::YmdHMS3F
-        );
-        assert_eq!(
-            WithOffsetFormatter::from(WithOffsetParser::YmdHMSnosep),
-            WithOffsetFormatter::YmdHMSnosep
         );
     }
 
@@ -611,12 +604,14 @@ mod tests {
         }
 
         let with_offset = [
-            (WithOffsetFormatter::YmdHMS, "2024-01-05 13:45:06 +00:00"),
             (
                 WithOffsetFormatter::YmdHMS3F,
                 "2024-01-05 13:45:06.789 +00:00",
             ),
-            (WithOffsetFormatter::YmdHMSnosep, "20240105134506+0000"),
+            (
+                WithOffsetFormatter::YmdTHMS3F,
+                "2024-01-05T13:45:06.789+00:00",
+            ),
         ];
         for (formatter, expected) in with_offset {
             assert_eq!(
@@ -643,12 +638,14 @@ mod tests {
         }
 
         let with_offset = [
-            (WithOffsetFormatter::YmdHMS, "2024-01-05 21:45:06 +08:00"),
             (
                 WithOffsetFormatter::YmdHMS3F,
                 "2024-01-05 21:45:06.789 +08:00",
             ),
-            (WithOffsetFormatter::YmdHMSnosep, "20240105214506+0800"),
+            (
+                WithOffsetFormatter::YmdTHMS3F,
+                "2024-01-05T21:45:06.789+08:00",
+            ),
         ];
         for (formatter, expected) in with_offset {
             assert_eq!(
@@ -1347,9 +1344,9 @@ pub(super) mod iana {
                 "2024-01-05 13:45:06.789"
             );
             assert_eq!(
-                dt.format_ext_local(WithOffsetFormatter::YmdHMS.into())
+                dt.format_ext_local(WithOffsetFormatter::YmdTHMS3F.into())
                     .unwrap(),
-                "2024-01-05 13:45:06 +08:00"
+                "2024-01-05T13:45:06.789+08:00"
             );
         }
 

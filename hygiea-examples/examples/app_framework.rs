@@ -14,10 +14,7 @@
 
 use std::sync::OnceLock;
 
-use hygiea::{
-    Component, DateTimeFormatter, Registry, RegistryConfig, Resources, TracingConfig,
-    WithoutOffsetFormatter, async_trait,
-};
+use hygiea::{Component, Registry, RegistryConfig, Resources, TracingConfig, async_trait};
 use tokio::time::{Duration, interval};
 use tracing;
 
@@ -222,12 +219,7 @@ async fn main() {
     println!("║  Hygiea Application Framework Example     ║");
     println!("╚════════════════════════════════════════════╝\n");
 
-    let tracing = TracingConfig {
-        time_format: Some(DateTimeFormatter::WithoutOffset(
-            WithoutOffsetFormatter::YmdHMS3F,
-        )),
-        ..Default::default()
-    };
+    let tracing = TracingConfig::default();
 
     let registry = Registry::with_config(RegistryConfig { tracing })
         .add_named::<DatabaseComponent>(
