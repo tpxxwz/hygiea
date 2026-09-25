@@ -12,7 +12,7 @@ use serde::Deserialize;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
-use crate::log::{TracingComponent, TracingConfig};
+use crate::log::{LogGuard, TracingConfig};
 
 // ---- re-exports & type aliases --------------------------------------------
 pub use async_trait::async_trait;
@@ -211,6 +211,34 @@ pub trait Component: Send + 'static {
         state: &Resources,
         shutdown_rx: broadcast::Receiver<()>,
     ) -> Result<Option<JoinHandle<()>>, anyhow::Error>;
+}
+
+/// 把日志接入组件框架：Registry 把它作为第一个组件注册，按配置初始化 tracing，
+/// 其他组件启动时的日志因此都能输出。guard 跟着组件活到进程结束
+pub struct TracingComponent {
+    config: TracingConfig,
+    guard: Option<LogGuard>,
+}
+
+#[async_trait]
+impl Component for TracingComponent {
+    type Config = TracingConfig;
+
+    fn build(_name: &'static str, config: Self::Config) -> Self {
+        Self {
+            config,
+            guard: None,
+        }
+    }
+
+    async fn startup(
+        &mut self,
+        _state: &Resources,
+        _shutdown_rx: broadcast::Receiver<()>,
+    ) -> Result<Option<JoinHandle<()>>, anyhow::Error> {
+        self.guard = Some(crate::log::init(&self.config)?);
+        Ok(None)
+    }
 }
 
 /// Component registry - manages component lifecycle

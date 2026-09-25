@@ -15,3 +15,9 @@ proc-macro = true
 quote.workspace = true
 syn.workspace = true
 proc-macro2.workspace = true
+# 编译期解析 err_tpl：校验语法、判断有没有模板变量
+minijinja.workspace = true
+# 编译期读调用方 Cargo.toml 里的 [package/workspace.metadata.hygiea]
+toml.workspace = true
+# 找调用方实际依赖的 hygiea / hygiea-core 叫什么名字，生成代码里的路径跟着它
+proc-macro-crate.workspace = true

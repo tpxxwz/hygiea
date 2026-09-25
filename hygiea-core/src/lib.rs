@@ -1,65 +1,37 @@
-// 让宏生成的代码能找到 ::hygiea:: 路径
-extern crate self as hygiea;
+// 宏生成的代码按调用方依赖的名字引用本 crate（见 hygiea-macros 的 krate.rs），
+// 在 hygiea-core 自己内部就是 ::hygiea_core
+extern crate self as hygiea_core;
 
-// ========== Feature: format ==========
-#[cfg(feature = "format")]
-pub use util::format::{tpl_cached, tpl_once, tpl_pos};
-
-// ========== error ==========
+// ========== 常开 ==========
+pub mod datetime;
+pub mod env;
 mod error;
+pub mod redact;
+pub mod string;
+pub mod sync;
 
+// 错误体系的核心类型放在根上：宏展开后按 ::hygiea::HyErr 等路径引用
 #[doc(hidden)]
 pub use error::__private;
+// err! / bail! 由 #[macro_export] 导出在 crate 根
 pub use error::{
-    BaseFmtErr, BaseRawErr, ERR_REGISTRATIONS, ErrRegistration, ErrRegistrationKind, FmtErr,
-    RawErr, SuccessRawErr, fmt_err, raw_err,
+    BaseErr, ERR_REGISTRATIONS, ErrKind, ErrRegistration, HyErr, ResultExt, SUCCESS_CODE, hy_err,
 };
 
 #[ctor::ctor(unsafe)]
 fn init_hygiea() {
     error::init();
 
-    #[cfg(feature = "date-iana")]
-    date::iana::init();
+    #[cfg(feature = "datetime-iana")]
+    datetime::iana::init();
 }
 
-// ========== Feature: app ==========
-#[cfg(feature = "app")]
-pub mod app;
-
-#[cfg(feature = "app")]
+// ========== 按 feature ==========
+#[cfg(feature = "log")]
 pub mod log;
 
 #[cfg(feature = "app")]
-pub use app::{Component, LaunchError, Registry, RegistryConfig, Resources};
+pub mod app;
 
-#[cfg(feature = "app")]
-pub use log::{ConsoleLayer, FileLayer, TracingConfig};
-
-// ========== date ==========
-pub mod date;
-#[cfg(feature = "date-chrono")]
-pub use date::DateTimeUtcExt;
-#[cfg(any(test, feature = "date-sim-clock"))]
-pub use date::set_now_utc;
-pub use date::{
-    DateTimeFormatter, HygieaDateTimeExt, HygieaUtcDateTimeExt, WithOffsetFormatter,
-    WithOffsetParser, WithoutOffsetFormatter, WithoutOffsetParser, now, now_utc,
-};
-#[cfg(feature = "date-iana")]
-pub use date::{HygieaOffsetDateTimeExt, now_local};
-
-// ========== sim ==========
-pub mod sim;
-#[cfg(any(test, feature = "date-sim-clock"))]
-pub use sim::SimClock;
-pub use sim::TokenBucket;
-
-// ========== ext / util ==========
-pub mod ext;
-pub mod util;
-pub use util::env;
-pub use util::{BuiltinKey, EnvKey, env_get, env_get_opt, env_get_or, env_get_or_else};
-
-#[cfg(feature = "distributed-lock")]
-pub use ext::{DistributedKey, DistributedLock};
+#[cfg(any(feature = "http", feature = "ws"))]
+pub mod net;

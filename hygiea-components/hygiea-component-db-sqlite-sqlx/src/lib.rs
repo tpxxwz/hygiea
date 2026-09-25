@@ -214,7 +214,7 @@ impl Component for SqlxSqliteComponent {
 /// SQLite lock support is process-local and keyed. It is intended for deployments
 /// where exactly one application process accesses the configured database file.
 #[cfg(feature = "distributed-lock")]
-pub use hygiea_core::{DistributedKey, DistributedLock};
+pub use hygiea_core::sync::{DistributedKey, DistributedLock};
 
 #[cfg(feature = "distributed-lock")]
 mod distributed_lock {
@@ -377,7 +377,7 @@ mod tests {
     #[cfg(feature = "distributed-lock")]
     #[tokio::test]
     async fn process_local_locks_are_keyed() {
-        use hygiea_core::DistributedLock;
+        use hygiea_core::sync::DistributedLock;
         use tokio::sync::Notify;
 
         let pool = SqlxSqlitePool::connect(SqlxSqliteConfig {

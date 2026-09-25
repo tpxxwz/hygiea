@@ -14,7 +14,8 @@
 
 use std::sync::OnceLock;
 
-use hygiea::{Component, Registry, RegistryConfig, Resources, TracingConfig, async_trait};
+use hygiea::app::{Component, Registry, RegistryConfig, Resources, async_trait};
+use hygiea::log::TracingConfig;
 use tokio::time::{Duration, interval};
 use tracing;
 

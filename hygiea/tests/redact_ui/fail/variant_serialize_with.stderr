@@ -1,0 +1,5 @@
+error: `#[redact(..)]` has no effect here: this variant is serialized by its own `serialize_with` / `with`, mask inside that function instead
+  --> tests/redact_ui/fail/variant_serialize_with.rs:12:13
+   |
+12 |     #[serde(serialize_with = "as_zero")]
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^

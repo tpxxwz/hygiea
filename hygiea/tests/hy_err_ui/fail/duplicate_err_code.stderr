@@ -1,0 +1,5 @@
+error: duplicate err_code `00000001`; first used by variant `A`
+ --> tests/hy_err_ui/fail/duplicate_err_code.rs:8:24
+  |
+8 |     #[error(err_code = "00001", err_tpl = "b")]
+  |                        ^^^^^^^

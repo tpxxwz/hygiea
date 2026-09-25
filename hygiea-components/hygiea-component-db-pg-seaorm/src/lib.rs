@@ -212,7 +212,7 @@ impl Component for SeaOrmPgComponent {
 // ---- distributed lock -------------------------------------------------------
 
 #[cfg(feature = "distributed-lock")]
-pub use hygiea_core::{DistributedKey, DistributedLock};
+pub use hygiea_core::sync::{DistributedKey, DistributedLock};
 
 #[cfg(feature = "distributed-lock")]
 mod distributed_lock {

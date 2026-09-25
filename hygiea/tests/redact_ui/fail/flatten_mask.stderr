@@ -1,0 +1,13 @@
+error: `#[redact(mask)]` can't be used on a `#[serde(flatten)]` field: a flattened field must serialize as a map, not a string. Mark the fields of the inner type instead, or use `#[redact(skip)]`
+  --> tests/redact_ui/fail/flatten_mask.rs:11:5
+   |
+11 |     #[redact(mask)]
+   |     ^^^^^^^^^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+ --> tests/redact_ui/fail/flatten_mask.rs:2:5
+  |
+2 | use std::collections::HashMap;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

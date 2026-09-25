@@ -15,22 +15,26 @@ hygiea-core = { workspace = true }
 serde_json = { workspace = true }
 
 
+[dev-dependencies]
+# #[redact] 的编译期报错回归测试：宏生成 ::hygiea:: 路径，放在 facade 里测就是下游实际的用法
+trybuild = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+
 [features]
 default = []  # 用户明确选择需要的功能
 
 # 功能模块（传递给 core）
-format = ["hygiea-core/format"]              # 字符串占位符 / 模板渲染
-app = ["date-iana", "hygiea-core/app"]      # 应用框架模块（当前已实现）
-string = ["hygiea-core/string"]                                # 字符串工具（预留）
-http = ["hygiea-core/http"]                                    # HTTP 工具（预留）
+app = ["log", "hygiea-core/app"]            # 应用框架模块（当前已实现）
+log = ["datetime-iana", "hygiea-core/log"]      # 日志配置和初始化，可脱离 app 单独用
+http = ["hygiea-core/http"]                                    # HTTP 工具
+distributed-lock = ["hygiea-core/distributed-lock"]
 json = ["hygiea-core/json"]                                    # JSON 工具（预留）
-http-client = ["hygiea-core/http-client"]
-ws-client = ["hygiea-core/ws-client"]
+ws = ["hygiea-core/ws"]
 
 # chrono 互转桥（DateTimeUtcExt）
-date-chrono = ["hygiea-core/date-chrono"]
-date-sim-clock = ["hygiea-core/date-sim-clock"]
-date-iana = ["hygiea-core/date-iana"]
+datetime-chrono = ["hygiea-core/datetime-chrono"]
+datetime-sim-clock = ["hygiea-core/datetime-sim-clock"]
+datetime-iana = ["hygiea-core/datetime-iana"]
 
 # 全功能
-full = ["format", "app", "string", "http", "json", "http-client", "ws-client", "date-chrono", "date-sim-clock", "date-iana"]
+full = ["app", "log", "http", "json", "ws", "distributed-lock", "datetime-chrono", "datetime-sim-clock", "datetime-iana"]

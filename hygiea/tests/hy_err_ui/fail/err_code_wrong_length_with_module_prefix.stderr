@@ -1,0 +1,5 @@
+error: err_code must be exactly 3 digits when the enum has `err_code_module_prefix`
+ --> tests/hy_err_ui/fail/err_code_wrong_length_with_module_prefix.rs:7:24
+  |
+7 |     #[error(err_code = "00001", err_tpl = "x")]
+  |                        ^^^^^^^

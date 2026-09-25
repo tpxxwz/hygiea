@@ -1,0 +1,5 @@
+error: `#[redact]` only takes `crate = "path"`
+ --> tests/redact_ui/fail/container_unknown_argument.rs:5:10
+  |
+5 | #[redact(mask)]
+  |          ^^^^

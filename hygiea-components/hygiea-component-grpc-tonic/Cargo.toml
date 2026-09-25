@@ -10,7 +10,7 @@ description = "gRPC (tonic) component for hygiea"
 
 [dependencies]
 hygiea-core = { workspace = true, features = ["app"] }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt", "sync", "net", "macros"] }
 tokio-stream = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }

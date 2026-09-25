@@ -1,0 +1,5 @@
+error: `err_code_module_prefix` value must be a string literal, e.g. "01"
+ --> tests/hy_err_ui/fail/module_prefix_not_string.rs:5:28
+  |
+5 | #[err_code_module_prefix = 1]
+  |                            ^

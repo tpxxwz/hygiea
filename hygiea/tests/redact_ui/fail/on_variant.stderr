@@ -1,0 +1,5 @@
+error: `#[redact(..)]` is only allowed on fields, not on enum variants
+ --> tests/redact_ui/fail/on_variant.rs:8:5
+  |
+8 |     #[redact(mask)]
+  |     ^^^^^^^^^^^^^^^

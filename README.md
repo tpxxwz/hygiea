@@ -1,28 +1,47 @@
 # Hygiea
 
-> A comprehensive Rust toolkit with error handling, template rendering, application framework, and more
+> A comprehensive Rust toolkit with error handling, log redaction, HTTP client, datetime utilities, application framework, and more
 
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
 ## Overview
 
-`hygiea` provides a unified, well-tested foundation for error handling, template rendering, application lifecycle management, and more across Rust projects.
+`hygiea` provides a unified, well-tested foundation for error handling, logging, HTTP calls, datetime handling, application lifecycle management, and more across Rust projects. Users depend on the single facade crate `hygiea` and enable only the features they need.
 
 ## Features
 
-### Currently Available
+### Always available
 
-- **Template Rendering** - Template-based string rendering with MiniJinja, with both one-shot and cached variants
-- **Error Handling** - Template-based error messages, automatic error code management with compile-time validation, distributed slice registration, two error types: `FmtErr` (template-based) and `RawErr` (fixed message)
-- **Application Framework** - Component lifecycle management, async startup hooks, graceful shutdown via broadcast signals
+These need no feature flag.
 
-### Planned
+| Module | What it provides |
+|---|---|
+| Error handling (`hygiea::{HyErr, err!, bail!, hy_err}`) | Template-based error messages, 8-digit error codes validated at compile time, a single `HyErr` type, external errors attached via `with_source` |
+| Redaction (`hygiea::redact`) | `#[redact]` attribute: fields marked `#[redact(mask)]` / `#[redact(skip)]` are masked only when serialized for logs (at any nesting depth); normal serialization is unaffected |
+| Datetime (`hygiea::datetime`) | UTC datetime helpers on top of the `time` crate: formatting, parsing, start/end of day/week/month/year |
+| Env (`hygiea::env`) | Environment variable helpers |
+| String (`hygiea::string`) | Cached regex helpers and template rendering (`fmt_tpl!`, `fmt_tpl_once!`) |
+| Sync (`hygiea::sync`) | `TokenBucket` rate limiter |
 
-- **String Utilities** - String manipulation and formatting helpers
-- **HTTP Utilities** - HTTP client and server utilities
-- **JSON Utilities** - JSON processing and manipulation
-- **Time Utilities** - Date and time operations
+### Optional features
+
+| Feature | What it enables |
+|---|---|
+| `http` | HTTP client on top of reqwest: `ClientConfig`, `RequestConfig`, request/response logging with redaction |
+| `log` | tracing setup: console and rolling file layers, filters (implies `datetime-iana`) |
+| `app` | Component-based application framework: startup hooks, shared resources, graceful shutdown (implies `log`) |
+| `distributed-lock` | `DistributedLock` trait and `DistributedKey` |
+| `datetime-iana` | IANA timezone and system-local datetime (`*_local` methods) |
+| `datetime-chrono` | Conversion bridge to and from chrono |
+| `datetime-sim-clock` | `SimClock`: replaceable clock source for backtests with tokio virtual time |
+| `ws` | WebSocket client (work in progress, currently empty) |
+| `json` | Reserved, currently empty |
+| `full` | All of the above |
+
+### Components
+
+Optional application components live in separate crates under `hygiea-components/`: `http-axum`, `grpc-tonic`, `db-pg-seaorm`, `db-pg-sqlx`, `db-sqlite-sqlx`, `redis-fred`.
 
 ## Quick Start
 
@@ -32,137 +51,174 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-hygiea = { version = "0.0.1", features = ["error"] }
+# Error handling, redaction, datetime, env and string need no features
+hygiea = "0.1.1-alpha.5"
+
+# Enable what you need
+hygiea = { version = "0.1.1-alpha.5", features = ["http"] }
+
+# Everything
+hygiea = { version = "0.1.1-alpha.5", features = ["full"] }
 ```
 
-**Available Features:**
-- `template` - Template rendering with MiniJinja
-- `error` - Error handling with template-based messages
-- `app` - Component-based application framework
-- `string` - String utilities (planned)
-- `http` - HTTP utilities (planned)
-- `json` - JSON utilities (planned)
-- `time` - Time utilities (planned)
-- `full` - Enable all features
-
-**Examples:**
-
-```toml
-# Only error handling
-hygiea = { version = "0.0.1", features = ["error"] }
-
-# Multiple features
-hygiea = { version = "0.0.1", features = ["error", "template"] }
-
-# All features
-hygiea = { version = "0.0.1", features = ["full"] }
-```
-
-### Basic Usage
+### Error handling
 
 ```rust
-use hygiea::{fmt_err, raw_err};
-use serde_json::json;
+use hygiea::{err, hy_err};
 
-// Define template-based errors
-#[derive(fmt_err)]
-#[err_code_prefix = "001"]
+// Project prefix "001" comes from Cargo.toml, see "Error Code System" below
+#[derive(hy_err)]
+#[err_code_module_prefix = "01"]
 pub enum UserErrors {
-    #[error(err_code = "00001", err_tpl = "User {{ name }} not found")]
+    #[error(err_code = "001", err_tpl = "User {{ name }} not found")]
     UserNotFound,
 
-    #[error(err_code = "00002", err_tpl = "Invalid email: {{ email }}")]
+    #[error(err_code = "002", err_tpl = "Invalid email: {{ email }} ({{ reason }})")]
     InvalidEmail,
-}
 
-// Define fixed-message errors
-#[derive(raw_err)]
-#[err_code_prefix = "002"]
-pub enum SystemErrors {
-    #[error(err_code = "00001", err_msg = "Database connection failed")]
+    // Fixed messages are just templates without variables
+    #[error(err_code = "003", err_tpl = "Database connection failed")]
     DbConnectionFailed,
 }
 
 fn main() {
-    // Use formatted error
-    let err = UserErrors::UserNotFound.to_err(json!({
-        "name": "Alice"
-    }));
-    println!("Error: {}", err);
-    // Output: User Alice not found
+    // One variable: pass the value directly
+    let e = err!(UserErrors::UserNotFound, "Alice");
+    println!("{e} [{}]", e.err_code); // User Alice not found [00101001]
 
-    // Use raw error
-    let err = SystemErrors::DbConnectionFailed.to_err();
-    println!("Error: {}", err);
-    // Output: Database connection failed
+    // Several variables: name each one
+    let e = err!(UserErrors::InvalidEmail, { "email": "a@b", "reason": "no domain" });
+    println!("{e}"); // Invalid email: a@b (no domain)
+
+    // No variables: err!(X). Using the wrong form for a template is a compile error
+    let e = err!(UserErrors::DbConnectionFailed)
+        .with_source(std::io::Error::other("connection refused"));
+    println!("{e}");   // Database connection failed
+    println!("{e:#}"); // Database connection failed: connection refused
+    assert!(e.is(UserErrors::DbConnectionFailed));
 }
+```
+
+`Display` only renders the template, which is what clients should see. `{:#}` appends the `source` chain for server-side logs.
+
+### HTTP with redacted logs
+
+Requires the `http` feature. Every request logs `http call start` / `http call success` at INFO and failures at WARN (configurable). Fields marked `#[redact(mask)]` show up as `"***"` in those logs (params, request bodies, URLs, and response bodies decoded by `send`), while the real values are sent and received. Non-2xx and undecodable responses are logged as-is, since that is what you need to debug a failure.
+
+```rust
+use hygiea::HyErr;
+use hygiea::net::http::{Client, ClientConfig, HttpResponse, Json, Method, RequestConfig};
+use hygiea::redact::redact;
+use serde::{Deserialize, Serialize};
+
+// #[redact] must be placed above #[derive(Serialize)]
+#[redact]
+#[derive(Serialize)]
+struct LoginReq {
+    user: String,
+    #[redact(mask)]
+    password: String,
+}
+
+#[redact]
+#[derive(Serialize, Deserialize)]
+struct LoginResp {
+    #[redact(mask)]
+    token: String,
+}
+
+async fn login(client: &Client) -> Result<String, HyErr> {
+    let req = LoginReq { user: "alice".into(), password: "p@ss".into() };
+    let resp: HttpResponse<Json<LoginResp>> =
+        RequestConfig::with_body(Method::POST, "https://api.example.com/login", Json(req))
+            .send(client)
+            .await?;
+    Ok(resp.body.0.token)
+}
+
+// Build the client once and share it: it owns the connection pool
+// let client = ClientConfig::default().build()?;
 ```
 
 ## Architecture
 
-This library follows a facade pattern with three internal crates:
+This library follows a facade pattern:
 
 ```
 hygiea/                    (Public API - what users depend on)
 ├── hygiea-core/           (Core implementation)
-└── hygiea-macros/         (Procedural macros)
+└── hygiea-macros/         (Procedural macros: #[derive(hy_err)], #[redact])
 ```
 
-Users only need to depend on `hygiea`, which re-exports everything needed.
+Users only need to depend on `hygiea`, which re-exports everything needed, so no extra dependencies (such as `linkme` or `serde_json`) are required downstream. Code generated by the macros follows the name you depend on: `hygiea`, a renamed dependency, or `hygiea-core` alone all work. Use `#[hy_err(crate = "path")]` / `#[redact(crate = "path")]` to override.
 
 ## Error Code System
 
-Error codes follow an **8-digit format**: `PPPNNNNN`
+Error codes are always **8 digits**, in up to three levels:
 
-- **PPP**: Prefix (3 digits) - Module/domain identifier
-- **NNNNN**: Number (5 digits) - Specific error identifier
+| Level | Digits | Where | If omitted |
+|---|---|---|---|
+| Project prefix | 3 | `err_code_project_prefix` in Cargo.toml metadata | `000` |
+| Module prefix | 2 | `#[err_code_module_prefix = ".."]` on the enum | no module level |
+| Error number | 3 with a module prefix, 5 without | `err_code` on the variant | required |
 
-### Example
+The project prefix is looked up in the crate's `[package.metadata.hygiea]`, then in the workspace root's `[workspace.metadata.hygiea]`, and defaults to `000`. It cannot be set on an enum, so every enum in a project shares it.
+
+```toml
+# workspace root Cargo.toml (a crate can override it in [package.metadata.hygiea])
+[workspace.metadata.hygiea]
+err_code_project_prefix = "001"
+```
 
 ```rust
-#[derive(fmt_err)]
-#[err_code_prefix = "001"]  // ← Prefix
+#[derive(hy_err)]
+#[err_code_module_prefix = "01"]  // ← module prefix
 pub enum UserErrors {
-    #[error(err_code = "00001", err_tpl = "...")]  // ← Number
-    //                └─────┘
-    //                5 digits
-    //  Final code: 00100001
+    #[error(err_code = "001", err_tpl = "...")]  // ← error number, 3 digits
+    //  Final code: 001 01 001 = 00101001
     UserNotFound,
+}
+
+#[derive(hy_err)]                 // no module prefix
+pub enum LegacyErrors {
+    #[error(err_code = "00001", err_tpl = "...")]  // ← 5 digits
+    //  Final code: 001 00001 = 00100001
+    Old,
 }
 ```
 
-### Built-in Error Codes
+### Reserved and built-in codes
 
-- `99909999` - Base raw system error
-- `99999999` - Base formatted system error
+- `00000000` is reserved for success (`SUCCESS_CODE`) and cannot be used by any error.
+- Project prefix `999` is used by the framework's built-in errors. `BaseErr` (modules that need no feature) has no module prefix and uses 5-digit codes, with the catch-all `SysErr` at `99999`; `hygiea::net::http::BaseHttpErr` (the `http` feature) uses module prefix `01`. Uniqueness across them is checked at startup.
 
-## Feature Flags
-
-```toml
-[dependencies]
-hygiea = { version = "0.0.1", features = ["full"] }
-```
-
-Available features:
-
-- `template` - Template rendering with MiniJinja
-- `error` - Error handling functionality
-- `app` - Component-based application framework
-- `string` - String utilities (planned)
-- `http` - HTTP utilities (planned)
-- `json` - JSON utilities (planned)
-- `time` - Time utilities (planned)
-- `full` - Enable all features
+| Code | Variant | Template |
+|---|---|---|
+| `99900001` | `BaseErr::DateError` | Date error: {{ cause }} |
+| `99900002` | `BaseErr::RegexError` | Invalid regex: {{ pattern }} |
+| `99900003` | `BaseErr::JsonError` | JSON error: {{ cause }} |
+| `99900004` | `BaseErr::TemplateError` | Template error: {{ cause }} |
+| `99901001` | `BaseHttpErr::ClientBuildFailed` | Http client build failed |
+| `99901101` | `BaseHttpErr::InvalidUrl` | Invalid url: {{ url }} |
+| `99901102` | `BaseHttpErr::InvalidParams` | Invalid query params: {{ method }} {{ url }} |
+| `99901103` | `BaseHttpErr::InvalidHeader` | Invalid header: {{ cause }} |
+| `99901104` | `BaseHttpErr::RequestBuildFailed` | Http request build failed: {{ method }} {{ url }} |
+| `99901201` | `BaseHttpErr::RequestFailed` | Http request failed: {{ method }} {{ url }} |
+| `99901202` | `BaseHttpErr::NonSuccessStatus` | Http {{ status }}: {{ method }} {{ url }} |
+| `99901203` | `BaseHttpErr::WriteFailed` | Write response body failed |
+| `99999999` | `BaseErr::SysErr` | System Error |
 
 ## Examples
 
 See the `hygiea-examples/examples/` directory for complete examples:
 
 ```bash
-# Run examples
 cargo run -p hygiea-examples --example basic_error
 cargo run -p hygiea-examples --example template
 cargo run -p hygiea-examples --example app_framework
+
+# Parallel backtests with tokio virtual time (see docs/notes/virtual-time-and-parallelism.md)
+cargo run -p hygiea-core --example backtest_parallel --release
 ```
 
 ## Development
@@ -173,36 +229,34 @@ cargo run -p hygiea-examples --example app_framework
 hygiea/
 ├── Cargo.toml                  (Workspace config)
 ├── README.md
-├── LICENSE-MIT
-├── LICENSE-APACHE
+├── docs/                       (Design notes, reviews and research, see docs/README.md)
+├── release/, release.sh        (cargo-release config and script)
 │
-├── hygiea/                     (Main facade crate)
-│   ├── Cargo.toml
-│   └── src/
-│       ├── lib.rs
-│       ├── error.rs
-│       └── template.rs
+├── hygiea/                     (Facade crate: the only one users depend on)
+│   ├── src/
+│   │   ├── lib.rs              (Re-exports from hygiea-core, feature gates)
+│   │   └── string.rs           (fmt_tpl! macros)
+│   └── tests/                  (trybuild UI tests for #[derive(hy_err)] / err! / #[redact])
 │
 ├── hygiea-core/                (Core implementation)
-│   ├── Cargo.toml
-│   └── src/
-│       ├── lib.rs
-│       ├── error.rs
-│       ├── template.rs
-│       └── app.rs
+│   ├── src/
+│   │   ├── error.rs            (HyErr, err! / bail!, BaseErr)
+│   │   ├── redact.rs           (Field masking for logs: #[redact], to_redacted_json)
+│   │   ├── datetime/           (UTC / IANA datetime helpers, SimClock)
+│   │   ├── env.rs              (Environment variable helpers)
+│   │   ├── string/             (Regex and template utilities)
+│   │   ├── sync/               (Token bucket; distributed lock trait [feature: distributed-lock])
+│   │   ├── net/                (http: reqwest wrapper; ws: WebSocket, WIP) [feature: http / ws]
+│   │   ├── log.rs              (tracing setup)                  [feature: log]
+│   │   └── app.rs              (Component-based app framework)  [feature: app]
+│   ├── tests/http/             (End-to-end tests for net::http)
+│   └── examples/               (backtest_parallel: virtual time + parallel backtests)
 │
-├── hygiea-macros/              (Procedural macros)
-│   ├── Cargo.toml
-│   └── src/
-│       └── lib.rs
-│
-├── hygiea-examples/            (Usage examples)
-│   └── examples/
-│       ├── basic_error.rs
-│       ├── template.rs
-│       └── app_framework.rs
-│
-└── target/                     (Build artifacts)
+├── hygiea-macros/              (Procedural macros: hy_err derive, redact attribute)
+├── hygiea-test-support/        (Shared test helpers, dev-dependency only, not published)
+├── hygiea-components/          (Optional app components: http-axum, grpc-tonic,
+│                                db-pg-seaorm, db-pg-sqlx, db-sqlite-sqlx, redis-fred)
+└── hygiea-examples/            (Usage examples, not published)
 ```
 
 ### Building
@@ -214,8 +268,11 @@ cargo build
 # Build with all features
 cargo build --all-features
 
-# Run tests
-cargo test
+# Run all tests, including the compile-fail (trybuild) tests in hygiea/tests
+cargo test --workspace --all-features
+
+# After changing a macro error message, regenerate the trybuild snapshots and review the diff
+TRYBUILD=overwrite cargo test -p hygiea --test hy_err_ui --test redact_ui
 
 # Check documentation
 cargo doc --open
@@ -231,12 +288,7 @@ cargo doc --open
 
 ## License
 
-Licensed under either of:
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-- MIT License ([LICENSE-MIT](LICENSE-MIT))
-
-at your option.
+Licensed under either of Apache License, Version 2.0 or MIT License, at your option.
 
 ## Contact
 
@@ -250,4 +302,3 @@ This project is inspired by:
 
 - [serde](https://github.com/serde-rs/serde) - Facade pattern and workspace organization
 - [thiserror](https://github.com/dtolnay/thiserror) - Proc-macro architecture
-- [anyhow](https://github.com/dtolnay/anyhow) - Error handling ergonomics

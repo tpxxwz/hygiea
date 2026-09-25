@@ -14,7 +14,7 @@ distributed-lock = ["hygiea-core/distributed-lock"]
 [dependencies]
 hygiea-core = { workspace = true, features = ["app"] }
 sqlx = { workspace = true, features = ["postgres", "time"] }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt", "sync"] }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

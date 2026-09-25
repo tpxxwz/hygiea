@@ -1,0 +1,5 @@
+error: `error` attribute is only allowed on enum variants
+ --> tests/hy_err_ui/fail/error_on_enum.rs:5:1
+  |
+5 | #[error(err_code = "00001", err_tpl = "x")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

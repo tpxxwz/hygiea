@@ -6,8 +6,8 @@
 //! ## Features
 //!
 //! - **Error Handling**: Template-based error generation with automatic error code management
-//! - **String Utils**: String manipulation utilities (coming soon)
-//! - **HTTP Utils**: HTTP client utilities (coming soon)
+//! - **String Utils**: String manipulation utilities
+//! - **HTTP Utils**: HTTP client utilities
 //! - **JSON Utils**: JSON processing utilities (coming soon)
 //! - **Time Utils**: Time and date utilities (coming soon)
 //!
@@ -18,40 +18,39 @@
 //! ```rust
 //! # #[cfg(feature = "error")]
 //! # {
-//! use hygiea::{fmt_err, raw_err, FmtErr, RawErr};
-//! use serde_json::json;
+//! use hygiea::{err, hy_err};
 //!
-//! // Template-based formatted error
-//! #[derive(fmt_err)]
-//! #[err_code_prefix = "001"]
+//! // Templates with variables use err!(X, { .. }); fixed messages use err!(X).
+//! // Using the wrong form is a compile error.
+//! // The project prefix comes from Cargo.toml ([package.metadata.hygiea] err_code_project_prefix);
+//! // each enum picks a 2-digit module prefix, and variants use 3-digit codes.
+//! #[derive(hy_err)]
+//! #[err_code_module_prefix = "01"]
 //! pub enum UserErrors {
-//!     #[error(err_code = "00001", err_tpl = "User {{ name }} not found")]
+//!     #[error(err_code = "001", err_tpl = "User {{ name }} not found")]
 //!     UserNotFound,
 //!
-//!     #[error(err_code = "00002", err_tpl = "Invalid email: {{ email }}")]
+//!     #[error(err_code = "002", err_tpl = "Invalid email: {{ email }}")]
 //!     InvalidEmail,
 //! }
 //!
-//! // Fixed message error
-//! #[derive(raw_err)]
-//! #[err_code_prefix = "002"]
+//! #[derive(hy_err)]
+//! #[err_code_module_prefix = "02"]
 //! pub enum SystemErrors {
-//!     #[error(err_code = "00001", err_msg = "Database connection failed")]
+//!     #[error(err_code = "001", err_tpl = "Database connection failed")]
 //!     DbConnectionFailed,
 //!
-//!     #[error(err_code = "00002", err_msg = "Configuration error")]
+//!     #[error(err_code = "002", err_tpl = "Configuration error")]
 //!     ConfigError,
 //! }
 //!
 //! fn main() {
-//!     // Use formatted error
-//!     let err = UserErrors::UserNotFound.to_err(json!({
-//!         "name": "Alice"
-//!     }));
+//!     // Template with variables
+//!     let err = err!(UserErrors::UserNotFound, "Alice");
 //!     println!("Error: {}", err);  // Error: User Alice not found
 //!
-//!     // Use raw error
-//!     let err = SystemErrors::DbConnectionFailed.to_err();
+//!     // Fixed message
+//!     let err = err!(SystemErrors::DbConnectionFailed);
 //!     println!("Error: {}", err);  // Error: Database connection failed
 //! }
 //! # }
@@ -66,12 +65,16 @@
 //!
 //! ## Feature Flags
 //!
-//! - `error`: Error handling functionality
-//! - `app`: Component-based application framework
-//! - `string`: String utilities (coming soon)
-//! - `http`: HTTP utilities (coming soon)
-//! - `json`: JSON utilities (coming soon)
-//! - `time`: Time utilities (coming soon)
+//! Always available (no feature needed): error handling, `redact`, `datetime`, `env`, `string`,
+//! `sync::TokenBucket`.
+//!
+//! - `http`: HTTP client on top of reqwest
+//! - `log`: tracing setup (implies `datetime-iana`)
+//! - `app`: Component-based application framework (implies `log`)
+//! - `distributed-lock`: `DistributedLock` trait
+//! - `datetime-iana` / `datetime-chrono` / `datetime-sim-clock`: IANA timezones, chrono bridge, SimClock
+//! - `ws`: WebSocket client (work in progress, currently empty)
+//! - `json`: Reserved, currently empty
 //! - `full`: Enable all features
 //!
 //! ## Error Code System
@@ -88,47 +91,26 @@
 // 为了让宏生成的代码能找到 ::hygiea:: 路径
 extern crate self as hygiea;
 
-// ========== Feature: format ==========
-#[cfg(feature = "format")]
-mod format;
-
-#[cfg(feature = "format")]
-pub use format::{tpl_cached, tpl_once, tpl_pos};
-
-// ========== error ==========
+// ========== 常开 ==========
 #[doc(hidden)]
 pub use hygiea_core::__private;
-pub use hygiea_core::{BaseFmtErr, BaseRawErr, FmtErr, RawErr, SuccessRawErr, fmt_err, raw_err};
-
-// ========== Feature: app ==========
-#[cfg(feature = "app")]
-pub use hygiea_core::app::{
-    Component, IntoRegistryConfig, LaunchError, Registry, RegistryConfig, Resources, async_trait,
-};
-#[cfg(feature = "app")]
-pub use hygiea_core::log::{ConsoleLayer, FileLayer, TracingConfig};
-
-// ========== util ==========
-pub use hygiea_core::util;
-pub use hygiea_core::{BuiltinKey, EnvKey, env_get, env_get_opt, env_get_or, env_get_or_else};
-
-// ========== date ==========
-#[cfg(feature = "date-chrono")]
-pub use hygiea_core::DateTimeUtcExt;
-pub use hygiea_core::TokenBucket;
 pub use hygiea_core::{
-    DateTimeFormatter, HygieaDateTimeExt, HygieaUtcDateTimeExt, WithOffsetFormatter,
-    WithOffsetParser, WithoutOffsetFormatter, WithoutOffsetParser, now, now_utc,
+    BaseErr, ErrKind, HyErr, ResultExt, SUCCESS_CODE, bail, datetime, env, err, hy_err, redact,
+    sync,
 };
-#[cfg(feature = "date-iana")]
-pub use hygiea_core::{HygieaOffsetDateTimeExt, now_local};
-#[cfg(feature = "date-sim-clock")]
-pub use hygiea_core::{SimClock, set_now_utc};
 
-// ========== Feature: http ==========
-/// HTTP utilities module (coming soon)
-#[cfg(feature = "http")]
-pub mod http {}
+// ========== 按 feature，模块名与 hygiea-core 一致 ==========
+#[cfg(feature = "log")]
+pub use hygiea_core::log;
+
+#[cfg(feature = "app")]
+pub use hygiea_core::app;
+
+#[cfg(any(feature = "http", feature = "ws"))]
+pub use hygiea_core::net;
+
+/// 字符串工具：core 的正则和模板函数，加上 `fmt_tpl!` 等宏（宏由 `#[macro_export]` 导出在 crate 根）
+pub mod string;
 
 // ========== Feature: json ==========
 /// JSON utilities module (coming soon)

@@ -1,0 +1,5 @@
+error: this field is already skipped by serde, `#[redact(..)]` has no effect
+ --> tests/redact_ui/fail/serde_skip.rs:9:5
+  |
+9 |     #[redact(mask)]
+  |     ^^^^^^^^^^^^^^^

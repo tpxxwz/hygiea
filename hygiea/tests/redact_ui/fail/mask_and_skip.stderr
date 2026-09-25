@@ -1,0 +1,5 @@
+error: only one of `mask` / `skip` is allowed
+ --> tests/redact_ui/fail/mask_and_skip.rs:8:20
+  |
+8 |     #[redact(mask, skip)]
+  |                    ^^^^

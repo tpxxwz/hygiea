@@ -1,0 +1,5 @@
+error: `#[redact(..)]` has no effect with `#[serde(into = ..)]`: the target type is serialized instead, mark its fields there
+ --> tests/redact_ui/fail/serde_into.rs:7:9
+  |
+7 | #[serde(into = "String")]
+  |         ^^^^^^^^^^^^^^^

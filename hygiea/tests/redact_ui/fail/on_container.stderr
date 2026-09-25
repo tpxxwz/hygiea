@@ -1,0 +1,5 @@
+error: `#[redact(..)]` is only allowed on fields
+ --> tests/redact_ui/fail/on_container.rs:6:1
+  |
+6 | #[redact(mask)]
+  | ^^^^^^^^^^^^^^^

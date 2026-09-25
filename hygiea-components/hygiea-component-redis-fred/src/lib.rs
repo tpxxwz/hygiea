@@ -273,12 +273,12 @@ fn build_connection_config(config: &RedisConfig) -> ConnectionConfig {
 // ============================================================
 
 #[cfg(feature = "distributed-lock")]
-pub use hygiea_core::{DistributedKey, DistributedLock};
+pub use hygiea_core::sync::{DistributedKey, DistributedLock};
 
 #[cfg(feature = "distributed-lock")]
 mod distributed_lock {
     use super::*;
-    use hygiea_core::{DistributedKey, DistributedLock};
+    use hygiea_core::sync::{DistributedKey, DistributedLock};
     fn key_to_string(key: DistributedKey) -> String {
         match key {
             DistributedKey::Advisory(n) => format!("hygiea:distributed:lock:{n}"),

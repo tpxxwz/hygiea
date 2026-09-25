@@ -1,0 +1,5 @@
+error: unknown `hy_err` option, expected `crate = "path"`
+ --> tests/hy_err_ui/fail/unknown_hy_err_option.rs:5:10
+  |
+5 | #[hy_err(krate = "::hygiea")]
+  |          ^^^^^

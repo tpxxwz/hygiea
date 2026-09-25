@@ -1,0 +1,5 @@
+error: expected identifier like `err_code = "00001"`
+ --> tests/hy_err_ui/fail/attr_key_not_ident.rs:6:13
+  |
+6 |     #[error(a::err_code = "00001", err_tpl = "x")]
+  |             ^^^^^^^^^^^

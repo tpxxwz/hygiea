@@ -12,7 +12,7 @@ description = "HTTP (axum) component for hygiea"
 hygiea-core = { workspace = true, features = ["app"] }
 hygiea = { workspace = true }
 axum = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt", "sync", "net"] }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

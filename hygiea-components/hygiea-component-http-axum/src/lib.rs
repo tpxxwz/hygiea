@@ -102,7 +102,7 @@ impl Component for AxumComponent {
 
         let listener = tokio::net::TcpListener::bind(&addr)
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to bind HTTP server to {}: {}", addr, e))?;
+            .with_context(|| format!("Failed to bind HTTP server to {addr}"))?;
 
         tracing::info!("HTTP server listener bound to {}", addr);
 
@@ -127,8 +127,9 @@ impl Component for AxumComponent {
 
 // ---- response ---------------------------------------------------------------
 
+use anyhow::Context;
 use axum::response::IntoResponse;
-use hygiea_core::{FmtErr, RawErr};
+use hygiea_core::HyErr;
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -140,10 +141,9 @@ pub struct AxumHttpResponse<T: Serialize> {
 
 impl<T: Serialize> AxumHttpResponse<T> {
     pub fn ok(data: T) -> Self {
-        let e = hygiea::SuccessRawErr::Success.to_err();
         Self {
-            code: e.err_code,
-            msg: e.err_msg.to_string(),
+            code: hygiea::SUCCESS_CODE,
+            msg: String::new(),
             data: Some(data),
         }
     }
@@ -161,49 +161,39 @@ impl<T: Serialize> From<T> for AxumHttpResponse<T> {
     }
 }
 
-pub enum AxumHttpError {
-    Raw(RawErr),
-    Fmt(FmtErr),
-}
+/// 包一层是因为 `HyErr` 和 `IntoResponse` 都是外部类型，孤儿规则不让直接 impl
+pub struct AxumHttpError(HyErr);
 
 impl IntoResponse for AxumHttpError {
+    /// 客户端只拿到 `Display` 的那句对外消息；挂了 source 的（内部故障）在服务端按 `{:#}`
+    /// 打出整条链。没有 source 的是业务错误，属于正常分支，不打日志
     fn into_response(self) -> axum::response::Response {
-        let (code, msg) = match &self {
-            AxumHttpError::Raw(e) => (e.err_code, e.to_string()),
-            AxumHttpError::Fmt(e) => (e.err_code, e.to_string()),
-        };
+        let e = self.0;
+        if std::error::Error::source(&e).is_some() {
+            tracing::error!(code = e.err_code, "{e:#}");
+        }
         axum::response::Json(AxumHttpResponse::<()> {
-            code,
-            msg,
+            code: e.err_code,
+            msg: e.to_string(),
             data: None,
         })
         .into_response()
     }
 }
 
-impl From<RawErr> for AxumHttpError {
-    fn from(e: RawErr) -> Self {
-        Self::Raw(e)
-    }
-}
-
-impl From<FmtErr> for AxumHttpError {
-    fn from(e: FmtErr) -> Self {
-        Self::Fmt(e)
+impl From<HyErr> for AxumHttpError {
+    fn from(e: HyErr) -> Self {
+        Self(e)
     }
 }
 
 impl From<anyhow::Error> for AxumHttpError {
     fn from(e: anyhow::Error) -> Self {
-        e.downcast::<RawErr>()
-            .map(|e| Self::Raw(e.into()))
-            .or_else(|e| e.downcast::<FmtErr>().map(|e| Self::Fmt(e.into())))
-            .unwrap_or_else(|e| {
-                Self::Fmt(
-                    hygiea::BaseFmtErr::SysFmtErr
-                        .to_err(serde_json::json!({ "cause": e.to_string() })),
-                )
-            })
+        // 不认识的错误对外只说 "System Error"，原错误挂 source，由 into_response 记日志
+        Self(
+            e.downcast::<HyErr>()
+                .unwrap_or_else(|e| hygiea::err!(hygiea::BaseErr::SysErr).with_source(e)),
+        )
     }
 }
 

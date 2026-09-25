@@ -1,0 +1,5 @@
+error: duplicate `redact` attribute on this field
+ --> tests/redact_ui/fail/duplicate.rs:9:5
+  |
+9 |     #[redact(skip)]
+  |     ^^^^^^^^^^^^^^^

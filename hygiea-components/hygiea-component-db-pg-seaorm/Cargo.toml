@@ -15,7 +15,7 @@ distributed-lock = ["hygiea-core/distributed-lock"]
 [dependencies]
 hygiea-core = { workspace = true, features = ["app"] }
 sea-orm = { workspace = true, features = ["with-time"] }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt", "sync"] }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 log = { workspace = true }

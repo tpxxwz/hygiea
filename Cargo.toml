@@ -4,6 +4,7 @@ members = [
     "hygiea",
     "hygiea-core",
     "hygiea-macros",
+    "hygiea-test-support",
     "hygiea-examples",
     "hygiea-components/hygiea-component-http-axum",
     "hygiea-components/hygiea-component-grpc-tonic",
@@ -26,11 +27,16 @@ rust-version = "1.85"
 hygiea = { path = "hygiea", version = "0.1.1-alpha.5" }
 hygiea-core = { path = "hygiea-core", version = "0.1.1-alpha.5", default-features = false }
 hygiea-macros = { path = "hygiea-macros", version = "0.1.1-alpha.5" }
+# 只做 dev-dependency、不发布，所以不带版本号（cargo publish 时会自动去掉没有版本号的 dev-dependency）
+hygiea-test-support = { path = "hygiea-test-support" }
 
 # 过程宏依赖
 quote = "1.0.47"
 syn = { version = "3.0.5", features = ["full"] }
 proc-macro2 = "1.0.107"
+
+# 编译期报错的回归测试（只做 dev-dependency）
+trybuild = "1"
 
 # 核心依赖
 serde = "1.0.229"
@@ -47,7 +53,8 @@ clap   = { version = "4.6.7", features = ["derive"] }
 config = "0.15.25"
 
 # 可选功能依赖
-tokio = { version = "1.53.1", features = ["full", "test-util"] }
+# 不在这里开 features：workspace 继承只能加不能减，各 crate 按实际用到的自己声明
+tokio = { version = "1.53.1", default-features = false }
 async-trait = "0.1.92"
 anyhow = "1.0.104"
 
@@ -66,8 +73,17 @@ sqlx = { version = "0.9.0", features = ["runtime-tokio", "tls-rustls-ring-webpki
 axum = "0.8.9"
 tower-http = { version = "0.7.1", features = ["timeout", "limit"] }
 http = "1.5.0"
-reqwest = { version = "0.13.5", features = ["json", "rustls"], default-features = false }
+proc-macro-crate = "3"
+toml = "1"
+encoding_rs = "0.8"
+bytes = "1"
+reqwest = { version = "0.13.5", features = [
+    "json", "query", "form", "stream", "multipart", "charset",
+    "gzip", "brotli", "zstd", "deflate",
+    "cookies", "http2", "socks", "system-proxy", "rustls",
+], default-features = false }
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
+tokio-util = { version = "0.7.19", features = ["io"] }
 futures-util = "0.3.34"
 regex = "1.13.1"
 

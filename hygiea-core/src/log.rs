@@ -1,4 +1,6 @@
-//! Tracing component for the application framework.
+//! 日志：tracing 的配置和初始化，不依赖组件框架。
+//!
+//! 组件框架里的接入（作为第一个组件启动）在 `app` 模块的 `TracingComponent`。
 
 use serde::Deserialize;
 use tracing_appender::non_blocking;
@@ -10,8 +12,9 @@ use tracing_subscriber::fmt::time::FormatTime;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{EnvFilter, Layer, Registry, fmt};
 
-use crate::app::{Component, Resources, async_trait};
-use crate::date::{DateTimeFormatter, now_local};
+use anyhow::Context;
+
+use crate::datetime::{DateTimeFormatter, now_local};
 
 // ---- config types ----------------------------------------------------------
 
@@ -77,44 +80,24 @@ impl Default for TracingConfig {
     }
 }
 
-// ---- component -------------------------------------------------------------
-
-pub struct TracingComponent {
-    config: TracingConfig,
-    guards: Vec<WorkerGuard>,
-}
-
-impl TracingComponent {
-    pub fn new(config: TracingConfig) -> Self {
-        Self {
-            config,
-            guards: Vec::new(),
-        }
-    }
-}
-
-#[async_trait]
-impl Component for TracingComponent {
-    type Config = TracingConfig;
-
-    fn build(_name: &'static str, config: Self::Config) -> Self {
-        Self {
-            config,
-            guards: Vec::new(),
-        }
-    }
-
-    async fn startup(
-        &mut self,
-        _resources: &Resources,
-        _shutdown_rx: tokio::sync::broadcast::Receiver<()>,
-    ) -> Result<Option<tokio::task::JoinHandle<()>>, anyhow::Error> {
-        self.guards = init_tracing(&self.config)?;
-        Ok(None)
-    }
-}
-
 // ---- init ------------------------------------------------------------------
+
+/// 持有非阻塞文件写入的 guard，drop 时把缓冲里的日志刷出去，所以要一直持有到进程结束
+pub struct LogGuard(#[allow(dead_code)] Vec<WorkerGuard>);
+
+/// 按配置安装全局 subscriber，并把 `log` crate 的日志桥接进来。一个进程只能成功调用一次。
+///
+/// 用 [`crate::app::Registry`] 时不用自己调，它会作为第一个组件按配置初始化；
+/// 不用组件框架的程序（脚本、CLI）直接调这个，返回的 guard 要一直持有
+pub fn init(cfg: &TracingConfig) -> anyhow::Result<LogGuard> {
+    init_tracing(cfg).map(LogGuard)
+}
+
+/// 用默认配置初始化：只输出到控制台，级别 `info`，
+/// 本地时间。脚本、小工具里一行搞定：`let _guard = hygiea::log::init_default()?;`
+pub fn init_default() -> anyhow::Result<LogGuard> {
+    init(&TracingConfig::default())
+}
 
 #[derive(Clone)]
 struct LocalTime {
@@ -187,7 +170,7 @@ fn init_tracing(cfg: &TracingConfig) -> anyhow::Result<Vec<WorkerGuard>> {
             .filename_suffix(&layer_cfg.filename_suffix)
             .max_log_files(layer_cfg.max_log_files)
             .build(&layer_cfg.dir)
-            .map_err(|e| anyhow::anyhow!("Failed to create RollingFileAppender: {}", e))?;
+            .context("Failed to create RollingFileAppender")?;
 
         let filter_str = if layer_cfg.env_filter.is_empty() {
             effective_root_filter
@@ -235,10 +218,10 @@ fn init_tracing(cfg: &TracingConfig) -> anyhow::Result<Vec<WorkerGuard>> {
         }
     };
 
-    LogTracer::init().map_err(|e| anyhow::anyhow!("Failed to init LogTracer: {}", e))?;
+    LogTracer::init().context("Failed to init LogTracer")?;
 
     let subscriber = Registry::default().with(combined_layer);
     tracing::subscriber::set_global_default(subscriber)
-        .map_err(|e| anyhow::anyhow!("Set global default subscriber failed: {}", e))?;
+        .context("Set global default subscriber failed")?;
     Ok(work_guards)
 }

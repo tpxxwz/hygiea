@@ -1,0 +1,15 @@
+error[E0080]: evaluation panicked: err!(X, value) needs a template with exactly one variable, use err!(X) or err!(X, { .. })
+  --> tests/hy_err_ui/fail/err_single_value_multi_vars.rs:15:13
+   |
+15 |     let _ = err!(E::TwoVars, "v");
+   |             ^^^^^^^^^^^^^^^^^^^^^ evaluation of `main::{constant#0}` failed here
+   |
+   = note: this error originates in the macro `$crate::panic::panic_2021` which comes from the expansion of the macro `err` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+note: erroneous constant encountered
+  --> tests/hy_err_ui/fail/err_single_value_multi_vars.rs:15:13
+   |
+15 |     let _ = err!(E::TwoVars, "v");
+   |             ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this note originates in the macro `err` (in Nightly builds, run with -Z macro-backtrace for more info)

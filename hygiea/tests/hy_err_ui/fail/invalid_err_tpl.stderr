@@ -1,0 +1,5 @@
+error: invalid err_tpl: syntax error: unexpected end of input, expected end of variable block (in <string>:1)
+ --> tests/hy_err_ui/fail/invalid_err_tpl.rs:6:43
+  |
+6 |     #[error(err_code = "00001", err_tpl = "user {{ name")]
+  |                                           ^^^^^^^^^^^^^^

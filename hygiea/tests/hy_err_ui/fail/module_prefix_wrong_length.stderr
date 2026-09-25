@@ -1,0 +1,5 @@
+error: `err_code_module_prefix` must be exactly 2 digits, e.g. "01"
+ --> tests/hy_err_ui/fail/module_prefix_wrong_length.rs:5:28
+  |
+5 | #[err_code_module_prefix = "3"]
+  |                            ^^^

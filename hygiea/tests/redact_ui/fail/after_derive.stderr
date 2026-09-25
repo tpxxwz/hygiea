@@ -1,0 +1,5 @@
+error: `#[redact(..)]` has no effect: `#[redact]` must be placed above `#[derive(Serialize)]` on a type that derives `Serialize`
+ --> tests/redact_ui/fail/after_derive.rs:8:5
+  |
+8 |     #[redact(mask)]
+  |     ^^^^^^^^^^^^^^^

@@ -1,0 +1,5 @@
+error: `err_code_module_prefix` attribute is only allowed on the enum, not on variants
+ --> tests/hy_err_ui/fail/module_prefix_on_variant.rs:6:5
+  |
+6 |     #[err_code_module_prefix = "02"]
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

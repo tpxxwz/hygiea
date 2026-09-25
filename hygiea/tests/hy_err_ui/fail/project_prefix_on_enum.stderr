@@ -1,0 +1,11 @@
+error: cannot find attribute `err_code_project_prefix` in this scope
+ --> tests/hy_err_ui/fail/project_prefix_on_enum.rs:6:3
+  |
+6 | #[err_code_project_prefix = "123"]
+  |   ^^^^^^^^^^^^^^^^^^^^^^^
+  |
+help: a derive helper attribute with a similar name exists
+  |
+6 - #[err_code_project_prefix = "123"]
+6 + #[err_code_module_prefix = "123"]
+  |

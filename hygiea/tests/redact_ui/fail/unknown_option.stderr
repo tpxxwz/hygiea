@@ -1,0 +1,5 @@
+error: unknown `redact` option, expected `mask` or `skip`
+ --> tests/redact_ui/fail/unknown_option.rs:8:14
+  |
+8 |     #[redact(hide)]
+  |              ^^^^

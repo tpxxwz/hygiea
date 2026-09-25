@@ -9,10 +9,19 @@ rust-version.workspace = true
 description = "Examples for hygiea"
 publish = false
 
+# 错误码的项目前缀，本 crate 里所有 #[derive(hy_err)] 共用
+[package.metadata.hygiea]
+err_code_project_prefix = "001"
+
 [dev-dependencies]
 hygiea = { workspace = true, features = ["full"] }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 serde_json.workspace = true
+serde = { workspace = true, features = ["derive"] }
 linkme.workspace = true
 anyhow.workspace = true
+reqwest = { workspace = true }
+tokio-util = { workspace = true }
+futures-util = { workspace = true }

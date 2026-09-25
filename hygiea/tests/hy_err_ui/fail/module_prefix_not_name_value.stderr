@@ -1,0 +1,5 @@
+error: `err_code_module_prefix` must be written as #[err_code_module_prefix = "01"]
+ --> tests/hy_err_ui/fail/module_prefix_not_name_value.rs:5:1
+  |
+5 | #[err_code_module_prefix("01")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

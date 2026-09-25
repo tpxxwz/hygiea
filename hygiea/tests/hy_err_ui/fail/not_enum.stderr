@@ -1,0 +1,5 @@
+error: hy_err only works on enums
+ --> tests/hy_err_ui/fail/not_enum.rs:5:1
+  |
+5 | struct NotEnum;
+  | ^^^^^^^^^^^^^^^

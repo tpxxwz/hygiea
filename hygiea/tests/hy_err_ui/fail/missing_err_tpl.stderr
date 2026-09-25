@@ -1,0 +1,5 @@
+error: err_tpl missing
+ --> tests/hy_err_ui/fail/missing_err_tpl.rs:7:5
+  |
+7 |     A,
+  |     ^

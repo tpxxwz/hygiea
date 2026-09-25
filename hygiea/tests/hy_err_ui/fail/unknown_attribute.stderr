@@ -1,0 +1,5 @@
+error: unknown attribute `level`, expected `err_code` or `err_tpl`
+ --> tests/hy_err_ui/fail/unknown_attribute.rs:6:48
+  |
+6 |     #[error(err_code = "00001", err_tpl = "x", level = "warn")]
+  |                                                ^^^^^

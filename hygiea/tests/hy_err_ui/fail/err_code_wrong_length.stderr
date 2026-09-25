@@ -1,0 +1,5 @@
+error: err_code must be exactly 5 digits
+ --> tests/hy_err_ui/fail/err_code_wrong_length.rs:6:24
+  |
+6 |     #[error(err_code = "0001", err_tpl = "x")]
+  |                        ^^^^^^
