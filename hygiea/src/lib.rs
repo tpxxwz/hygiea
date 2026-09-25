@@ -65,8 +65,7 @@
 //!
 //! ## Feature Flags
 //!
-//! Always available (no feature needed): error handling, `redact`, `datetime`, `env`, `string`,
-//! `sync::TokenBucket`.
+//! Always available (no feature needed): error handling, `redact`, `datetime`, `env`, `string`.
 //!
 //! - `http`: HTTP client on top of reqwest
 //! - `log`: tracing setup (implies `datetime-iana`)

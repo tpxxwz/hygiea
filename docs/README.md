@@ -6,7 +6,7 @@
 
 | 文档 | 日期 | 内容 |
 |---|---|---|
-| [2026-09-25-core-review.md](reviews/2026-09-25-core-review.md) | 2026-09-25 | hygiea-core 除 http、redact、ws、rate_limit 之外各模块的审查，问题带编号，逐项勾选处理 |
+| [2026-09-25-core-review.md](reviews/2026-09-25-core-review.md) | 2026-09-25 | hygiea-core 除 http、redact、ws 之外各模块的审查，问题带编号，逐项勾选处理 |
 | [date-design-review.md](reviews/date-design-review.md) | 较早 | date 模块的设计审查（当时文件还叫 `src/date.rs`，现在是 `src/datetime/`） |
 
 ## notes/ 调研笔记

@@ -14,7 +14,7 @@ use tracing_subscriber::{EnvFilter, Layer, Registry, fmt};
 
 use anyhow::Context;
 
-use crate::datetime::{DateTimeFormatter, now_local};
+use crate::datetime::{DateTimeFormatter, now, now_local};
 
 // ---- config types ----------------------------------------------------------
 
@@ -60,7 +60,10 @@ pub struct TracingConfig {
     pub layers: Vec<FileLayer>,
     pub root_env_filter: String,
     pub root_dir: String,
+    /// 日志时间的格式，默认 `WithOffset.YmdTHMS3F`
     pub time_format: Option<DateTimeFormatter>,
+    /// 日志时间用 UTC；默认 false，用系统时区（TZ 环境变量 → 系统设置 → UTC）
+    pub utc_time: bool,
 }
 
 impl TracingConfig {
@@ -76,6 +79,7 @@ impl Default for TracingConfig {
             root_env_filter: TracingConfig::DEFAULT_ROOT_ENV_FILTER.to_string(),
             root_dir: TracingConfig::DEFAULT_ROOT_DIR.to_string(),
             time_format: Some(DateTimeFormatter::default()),
+            utc_time: false,
         }
     }
 }
@@ -100,13 +104,14 @@ pub fn init_default() -> anyhow::Result<LogGuard> {
 }
 
 #[derive(Clone)]
-struct LocalTime {
+struct LogTime {
     format: Option<DateTimeFormatter>,
+    utc: bool,
 }
 
-impl FormatTime for LocalTime {
+impl FormatTime for LogTime {
     fn format_time(&self, writer: &mut Writer<'_>) -> std::fmt::Result {
-        let now = now_local();
+        let now = if self.utc { now() } else { now_local() };
         let timestamp = match self.format {
             Some(formatter) => formatter.format(&now),
             None => DateTimeFormatter::default().format(&now),
@@ -117,8 +122,9 @@ impl FormatTime for LocalTime {
 }
 
 fn init_tracing(cfg: &TracingConfig) -> anyhow::Result<Vec<WorkerGuard>> {
-    let timer = LocalTime {
+    let timer = LogTime {
         format: cfg.time_format,
+        utc: cfg.utc_time,
     };
 
     let mut work_guards: Vec<WorkerGuard> = Vec::new();
@@ -224,4 +230,43 @@ fn init_tracing(cfg: &TracingConfig) -> anyhow::Result<Vec<WorkerGuard>> {
     tracing::subscriber::set_global_default(subscriber)
         .context("Set global default subscriber failed")?;
     Ok(work_guards)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn format_with(utc: bool) -> String {
+        let timer = LogTime {
+            format: Some(DateTimeFormatter::default()),
+            utc,
+        };
+        let mut out = String::new();
+        timer.format_time(&mut Writer::new(&mut out)).unwrap();
+        out
+    }
+
+    #[test]
+    fn test_time_config() {
+        let cfg: TracingConfig = serde_json::from_str("{}").unwrap();
+        assert!(!cfg.utc_time);
+        assert_eq!(cfg.time_format, Some(DateTimeFormatter::default()));
+
+        let cfg: TracingConfig =
+            serde_json::from_str(r#"{"utc_time": true, "time_format": "WithoutOffset.YmdHMS"}"#)
+                .unwrap();
+        assert!(cfg.utc_time);
+        assert_eq!(
+            cfg.time_format,
+            Some("WithoutOffset.YmdHMS".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn test_log_time_utc_or_local() {
+        // 默认格式 WithOffset.YmdTHMS3F，第 23 位之后是 offset
+        assert!(format_with(true).ends_with("+00:00"));
+        let local = DateTimeFormatter::default().format(&now_local()).unwrap();
+        assert_eq!(format_with(false)[23..], local[23..]);
+    }
 }

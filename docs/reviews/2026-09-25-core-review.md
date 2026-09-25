@@ -6,11 +6,10 @@
 |---|---|
 | env | `hygiea-core/src/env.rs` |
 | sync | `hygiea-core/src/sync/lock.rs`、`sync/mod.rs` |
-| datetime | `hygiea-core/src/datetime/mod.rs` |
 | app / log | `hygiea-core/src/app.rs`、`hygiea-core/src/log.rs` |
 | facade | `hygiea/src/lib.rs` |
 
-不在范围内：`net/ws.rs`、`sync/rate_limit.rs`（另行处理）。SimClock 已移出 core，暂存在 `hygiea-examples/tests/sim_clock.rs`，相关问题不再跟踪。
+不在范围内：`net/ws.rs`（另行处理）。SimClock 和 TokenBucket 已移出 core，分别暂存在 `hygiea-examples/tests/sim_clock.rs`、`hygiea-examples/tests/rate_limit.rs`，相关问题不再跟踪。
 
 ## 约定
 
@@ -123,37 +122,6 @@
 
 ---
 
-## datetime（`hygiea-core/src/datetime/`）
-
-### 真 bug
-
-- [x] **D5 `*_local` 系列方法返回 `Result`，却会 panic**（mod.rs:925、:1012/:1017/:1029 等，已复现）
-  `to_timezone` 内部调用 `to_offset`，结果越界时 panic。比如 `UtcDateTime::MAX` 调用 `format_ext_local`；`shift_local` 在接近 MAX 时也会 panic。
-  已处理：自己取 offset 后用 time 的 `checked_to_offset`，越界返回 `DateError`；`now_local` 不会越界，保持原样。
-- [x] **D6 读取系统时区时忽略 `TZ` 环境变量**（mod.rs:908-915，已确认）
-  unix 上只读 `/etc/localtime` 这个符号链接。在 Docker 里设置 `TZ=Asia/Shanghai` 也不生效；`/etc/localtime` 是复制过来的普通文件，或者根本不存在时，会静默退回 UTC。
-  已处理：按 C 库惯例 `TZ` 优先：值原样交给 time-tz 的 IANA 数据库查，查不到再用 time-tz 读系统设置，都不行才兜底 UTC。
-
-### 设计
-
-- [ ] **D12** 在零点切换夏令时的时区，`start_of_day_local` 返回 `OffsetResult::None`（比如 America/Santiago 2024-09-08，那天实际从 01:00 开始），`end_of_day_local` 也可能返回 Ambiguous（mod.rs:1028-1042）。建议：遇到跳过的时段取切换后的第一个时刻，遇到重叠取靠后的那个。
-- [ ] **D13** `DateTimeFormattable` 和 `HygieaDateTimeExt` 两个 trait 里都有 `format_ext`，`use hygiea::datetime::*` 之后调用 `dt.format_ext(..)` 会报 E0034 歧义（mod.rs:200-213 与 252-258）。
-- [ ] **D14** 公开 API 返回了 `time_tz::OffsetResult`，但没有再导出，用户要 match 它就得自己加一个版本对得上的 time-tz 依赖（mod.rs:932、:955-993）。
-- [ ] **D15** 所有 `*_local` 都只能用进程级的系统时区，没有接受显式时区的 `_in(tz)` 变体，满足不了交易系统按交易所时区（比如 America/New_York）切日的需求（mod.rs:903、:944-993）。
-- [ ] **D16** `format_ext_local` 接受 `DateTimeFormatter`，而 `format_ext` 接受 `impl Into<DateTimeFormatter>`，参数类型不一致（mod.rs:960 与 256）。
-- [ ] **D17** feature 耦合（mod.rs:927-941、:948）：
-  - `WithoutOffsetParser` 总是被导出，但它的 `parse` 只在开启 datetime-iana 时才有；
-  - `parse_ext_with_offset` 跟 IANA 无关，却放在了 iana trait 里。
-- [ ] **D19** `start_of_day` 这类方法不可能失败，却返回 `Result`；`end_of_*` 返回 23:59:59.999999999 这样的闭区间终点，容易诱导调用方写 `<=`，半开区间 `[start, next_start)` 更稳（mod.rs:268-292）。
-- [ ] **D20** `shift_local` 只是把绝对时间平移后再换时区，名字却像是按本地时间计算，跨夏令时时「+1 天」实际是 23 或 25 小时（mod.rs:1015）。
-- [ ] **D21** `FromStr` 的 `Err` 是 `String`，和库里统一用的 HyErr 不一致；也没有实现 Display 或 Serialize，配置没法回写（mod.rs:90-109）。
-
-### 风格 / 其他
-
-- [ ] **D23** clippy 报的 `too_many_arguments`（mod.rs:1163）只出现在测试 fixture 里。建议改用 `time::macros::datetime!`，顺便去掉 `local`、`utc_nano` 这些辅助函数。
-
----
-
 ## facade（`hygiea/src/lib.rs`、`hygiea/Cargo.toml`）
 
 - [ ] **F1 设计** 文档里的 doctest 包在 `#[cfg(feature = "error")]` 下，而这个 feature 并不存在，所以示例从来没被编译过（lib.rs:19/66/71）。文档还列出了不存在的 `error`、`time` feature；标题仍是「WJJ Standard Library」，`html_root_url` 还是 0.0.1。
@@ -166,7 +134,3 @@
 
 - [ ] **T1** `app.rs`、`log.rs`、`env.rs`、`sync/lock.rs` 本身都没有单元测试。app 和 log 装的是全局 subscriber，测试要放在独立的集成测试二进制里，或者用子进程跑。
 - [ ] **T3** app / log：组件启动失败后的回滚、关闭顺序、资源的覆盖和读取、`load_config` 的合并和报错、rolling 和 filter 取值的解析、文件 layer 实际写出的内容、旧日志清理，都没有测试。
-- [ ] **T5** datetime：
-  - 跨夏令时的周界和月界、零点切换夏令时的时区、`shift_local` 跨夏令时；
-  - 9999 年的溢出路径；
-  - glob import 的可用性；

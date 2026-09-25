@@ -21,7 +21,7 @@ fn init_hygiea() {
     error::init();
 
     #[cfg(feature = "datetime-iana")]
-    datetime::iana::init();
+    datetime::local::init();
 }
 
 // ========== 按 feature ==========
