@@ -643,7 +643,7 @@ mod tests {
                 BaseHttpErr::InvalidUrl,
             )
             .await;
-            assert_eq!(err.err_args["url"], "not a url");
+            assert_eq!(err.err_args()["url"], "not a url");
             // url 的解析错误挂在 source 上
             assert!(err.source().is_some());
         }
@@ -691,7 +691,7 @@ mod tests {
                 BaseHttpErr::InvalidParams,
             )
             .await;
-            assert_eq!(err.err_args["url"], URL);
+            assert_eq!(err.err_args()["url"], URL);
             // 原始的 reqwest 构建错误挂在 source 上
             let source = err.source().unwrap().downcast_ref::<reqwest::Error>();
             assert!(source.unwrap().is_builder());
@@ -714,7 +714,7 @@ mod tests {
             let cfg = RequestConfig::new(Method::POST, URL, &LOGIN, Form([("a", [1, 2])]));
             let err = send_err(cfg, BaseHttpErr::RequestBuildFailed).await;
             assert_eq!(
-                err.err_args["url"],
+                err.err_args()["url"],
                 "http://127.0.0.1/login?username=alice&password=***"
             );
         }
@@ -749,7 +749,7 @@ mod tests {
         async fn url_masks_and_skips_params() {
             let (err, _) = refused(RequestConfig::with_params(Method::GET, REFUSED, &LOGIN)).await;
             assert_eq!(
-                err.err_args["url"],
+                err.err_args()["url"],
                 "http://127.0.0.1:1/login?username=alice&password=***"
             );
             let cfg = RequestConfig::with_params(Method::GET, REFUSED, &LOGIN);
@@ -765,7 +765,7 @@ mod tests {
             let cfg = RequestConfig::with_params(Method::GET, "http://127.0.0.1:1/p?a=1", &LOGIN);
             let (err, _) = refused(cfg).await;
             assert_eq!(
-                err.err_args["url"],
+                err.err_args()["url"],
                 "http://127.0.0.1:1/p?a=1&username=alice&password=***"
             );
         }
@@ -774,7 +774,7 @@ mod tests {
         #[tokio::test]
         async fn url_without_params_is_untouched() {
             let (err, _) = refused(RequestConfig::plain(Method::GET, REFUSED)).await;
-            assert_eq!(err.err_args["url"], REFUSED);
+            assert_eq!(err.err_args()["url"], REFUSED);
         }
 
         /// 什么都没有时 req 是空括号

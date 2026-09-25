@@ -10,5 +10,5 @@ pub enum E {
 }
 
 fn main() {
-    assert_eq!(err!(E::A).err_code, "00009001");
+    assert_eq!(err!(E::A).err_code(), "00009001");
 }

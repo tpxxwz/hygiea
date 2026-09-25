@@ -19,7 +19,10 @@ pub(crate) fn resolve(explicit: Option<syn::Path>) -> syn::Path {
             Ok(FoundCrate::Name(name)) => name,
             Err(_) => continue,
         };
-        return syn::parse_str(&format!("::{name}")).expect("crate name is a valid path");
+        // Cargo 的依赖名一定是合法标识符，解析不了就当没找到
+        if let Ok(path) = syn::parse_str(&format!("::{name}")) {
+            return path;
+        }
     }
     syn::parse_quote!(::hygiea)
 }

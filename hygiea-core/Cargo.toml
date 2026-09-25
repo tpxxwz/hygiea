@@ -32,8 +32,6 @@ distributed-lock = ["dep:async-trait"]
 datetime-chrono = ["dep:chrono"]
 
 # Simulation clock; enables replacing the UTC clock source
-# SimClock 推进 tokio 的虚拟时间，要 test-util
-datetime-sim-clock = ["dep:tokio", "tokio/rt", "tokio/time", "tokio/test-util"]
 
 # IANA timezone and system-local datetime support
 datetime-iana = ["dep:time-tz"]
@@ -43,7 +41,7 @@ json = []
 ws = ["dep:tokio-tungstenite"]
 
 # All features
-full = ["app", "log", "http", "json", "ws", "distributed-lock", "datetime-chrono", "datetime-sim-clock", "datetime-iana"]
+full = ["app", "log", "http", "json", "ws", "distributed-lock", "datetime-chrono", "datetime-iana"]
 
 [dependencies]
 # Error handling (always on)

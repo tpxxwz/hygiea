@@ -1,6 +1,4 @@
 use crate::{BaseErr, HyErr, ResultExt, err};
-#[cfg(any(test, feature = "datetime-sim-clock"))]
-use parking_lot::RwLock;
 use std::str::FromStr;
 use time::format_description::{BorrowedFormatItem, well_known::Rfc3339};
 use time::formatting::Formattable;
@@ -8,27 +6,7 @@ use time::macros::format_description;
 
 use time::{Duration, Month, OffsetDateTime, Time, UtcDateTime};
 
-#[cfg(any(test, feature = "datetime-sim-clock"))]
-mod clock;
-#[cfg(any(test, feature = "datetime-sim-clock"))]
-pub use clock::SimClock;
-
-#[cfg(any(test, feature = "datetime-sim-clock"))]
-static NOW_FN: RwLock<fn() -> UtcDateTime> = RwLock::new(UtcDateTime::now);
-
-#[doc(hidden)]
-#[cfg(any(test, feature = "datetime-sim-clock"))]
-pub fn set_now_utc(f: fn() -> UtcDateTime) {
-    *NOW_FN.write() = f;
-}
-
-#[cfg(any(test, feature = "datetime-sim-clock"))]
-pub fn now_utc() -> UtcDateTime {
-    let now = *NOW_FN.read();
-    now()
-}
-
-#[cfg(not(any(test, feature = "datetime-sim-clock")))]
+/// 当前 UTC 时刻。
 pub fn now_utc() -> UtcDateTime {
     UtcDateTime::now()
 }
@@ -469,8 +447,6 @@ impl HygieaDateTimeExt for OffsetDateTime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datetime::SimClock;
-    use serial_test::serial;
     use time::{Date, UtcOffset};
 
     // ---- fixtures ------------------------------------------------------------
@@ -503,17 +479,10 @@ mod tests {
     // ---- clock ---------------------------------------------------------------
 
     #[test]
-    #[serial]
-    fn test_now_utc_override_and_restore() {
-        let fixed = utc(2024, Month::January, 5, 13, 45, 6);
-        {
-            let _clock = SimClock::new(fixed);
-            assert_eq!(now_utc(), fixed);
-            assert_eq!(now(), OffsetDateTime::from(fixed));
-        }
-        // SimClock Drop 后恢复真实时钟
+    fn test_now_is_real_time() {
         let real = UtcDateTime::now();
         assert!((now_utc() - real).whole_seconds().abs() < 60);
+        assert_eq!(now().offset(), UtcOffset::UTC);
     }
 
     // ---- FromStr / From ------------------------------------------------------
@@ -883,12 +852,13 @@ pub(super) mod iana {
     use super::*;
     use std::sync::OnceLock;
     use time::PrimitiveDateTime;
-    use time_tz::{OffsetDateTimeExt, OffsetResult, PrimitiveDateTimeExt, Tz};
+    use time_tz::{Offset, OffsetDateTimeExt, OffsetResult, PrimitiveDateTimeExt, TimeZone, Tz};
 
     static LOCAL_TIMEZONE: OnceLock<&'static Tz> = OnceLock::new();
 
     #[cfg(test)]
-    static LOCAL_TIMEZONE_OVERRIDE: RwLock<Option<&'static Tz>> = RwLock::new(None);
+    static LOCAL_TIMEZONE_OVERRIDE: parking_lot::RwLock<Option<&'static Tz>> =
+        parking_lot::RwLock::new(None);
 
     /// 测试专用：覆盖 `local_timezone()` 返回的时区，`None` 恢复系统时区。
     #[cfg(test)]
@@ -905,13 +875,32 @@ pub(super) mod iana {
         if let Some(tz) = *LOCAL_TIMEZONE_OVERRIDE.read() {
             return tz;
         }
-        LOCAL_TIMEZONE.get_or_init(|| {
-            time_tz::system::get_timezone().unwrap_or_else(|error| {
-                eprintln!(
-                    "ERROR hygiea: failed to determine system local timezone: {error}; falling back to UTC"
-                );
-                time_tz::timezones::db::UTC
-            })
+        LOCAL_TIMEZONE.get_or_init(|| detect_timezone(std::env::var("TZ").ok()))
+    }
+
+    /// 顺序同 C 库的 localtime()：TZ 环境变量 → 系统设置（unix 上是 /etc/localtime 符号链接）→ UTC。
+    /// TZ 的值原样交给 time-tz 的 IANA 数据库查；查不到（拼错、POSIX 规则串等）就往下走
+    fn detect_timezone(tz_env: Option<String>) -> &'static Tz {
+        if let Some(tz) = tz_env.and_then(|name| time_tz::timezones::get_by_name(&name)) {
+            return tz;
+        }
+        time_tz::system::get_timezone().unwrap_or_else(|error| {
+            eprintln!(
+                "ERROR hygiea: failed to determine local timezone (TZ unset or unknown, system: {error}); falling back to UTC"
+            );
+            time_tz::timezones::db::UTC
+        })
+    }
+
+    /// 换到系统时区在该时刻使用的 offset。time-tz 的 `to_timezone` 在时间贴近上下界（±9999 年）、
+    /// 加上 offset 越界时会 panic，这里先取 offset，再用 time 的 `checked_to_offset`，越界返回 `DateError`
+    fn to_local(datetime: &OffsetDateTime) -> Result<OffsetDateTime, HyErr> {
+        let offset = local_timezone().get_offset_utc(datetime).to_utc();
+        datetime.checked_to_offset(offset).ok_or_else(|| {
+            err!(
+                BaseErr::DateError,
+                format!("convert to local timezone out of range: datetime={datetime}")
+            )
         })
     }
 
@@ -920,6 +909,8 @@ pub(super) mod iana {
     }
 
     /// 当前时刻转换到系统 IANA 时区在该时刻使用的本地 offset。
+    ///
+    /// 当前时间离上下界很远，不会越界，所以不返回 `Result`
     pub fn now_local() -> OffsetDateTime {
         now().to_timezone(local_timezone())
     }
@@ -1009,24 +1000,21 @@ pub(super) mod iana {
         }
 
         fn format_ext_local(&self, formatter: DateTimeFormatter) -> Result<String, HyErr> {
-            HygieaDateTimeExt::format_ext(&self.to_timezone(local_timezone()), formatter)
+            HygieaDateTimeExt::format_ext(&to_local(self)?, formatter)
         }
 
         fn shift_local(&self, duration: Duration) -> Result<OffsetDateTime, HyErr> {
-            self.checked_add(duration)
-                .map(|datetime| datetime.to_timezone(local_timezone()))
-                .ok_or_else(|| {
-                    err!(
-                        BaseErr::DateError,
-                        format!(
-                            "shift datetime out of range: datetime={self}, duration={duration}"
-                        )
-                    )
-                })
+            let shifted = self.checked_add(duration).ok_or_else(|| {
+                err!(
+                    BaseErr::DateError,
+                    format!("shift datetime out of range: datetime={self}, duration={duration}")
+                )
+            })?;
+            to_local(&shifted)
         }
 
         fn start_of_day_local(&self) -> Result<OffsetResult<OffsetDateTime>, HyErr> {
-            let local = self.to_timezone(local_timezone());
+            let local = to_local(self)?;
             Ok(resolve_local(PrimitiveDateTime::new(
                 local.date(),
                 Time::MIDNIGHT,
@@ -1034,7 +1022,7 @@ pub(super) mod iana {
         }
 
         fn end_of_day_local(&self) -> Result<OffsetResult<OffsetDateTime>, HyErr> {
-            let local = self.to_timezone(local_timezone());
+            let local = to_local(self)?;
             Ok(resolve_local(PrimitiveDateTime::new(
                 local.date(),
                 Time::MAX,
@@ -1042,7 +1030,7 @@ pub(super) mod iana {
         }
 
         fn start_of_week_local(&self) -> Result<OffsetResult<OffsetDateTime>, HyErr> {
-            let local = self.to_timezone(local_timezone());
+            let local = to_local(self)?;
             let days = local.weekday().number_days_from_monday() as i64;
             let date = local
                 .date()
@@ -1057,7 +1045,7 @@ pub(super) mod iana {
         }
 
         fn end_of_week_local(&self) -> Result<OffsetResult<OffsetDateTime>, HyErr> {
-            let local = self.to_timezone(local_timezone());
+            let local = to_local(self)?;
             let days = 6 - local.weekday().number_days_from_monday() as i64;
             let date = local
                 .date()
@@ -1072,7 +1060,7 @@ pub(super) mod iana {
         }
 
         fn start_of_month_local(&self) -> Result<OffsetResult<OffsetDateTime>, HyErr> {
-            let local = self.to_timezone(local_timezone());
+            let local = to_local(self)?;
             let date = local
                 .date()
                 .replace_day(1)
@@ -1081,7 +1069,7 @@ pub(super) mod iana {
         }
 
         fn end_of_month_local(&self) -> Result<OffsetResult<OffsetDateTime>, HyErr> {
-            let local = self.to_timezone(local_timezone());
+            let local = to_local(self)?;
             let first = PrimitiveDateTime::new(
                 local
                     .date()
@@ -1108,7 +1096,7 @@ pub(super) mod iana {
         }
 
         fn start_of_year_local(&self) -> Result<OffsetResult<OffsetDateTime>, HyErr> {
-            let local = self.to_timezone(local_timezone());
+            let local = to_local(self)?;
             let date = local
                 .date()
                 .replace_day(1)
@@ -1118,7 +1106,7 @@ pub(super) mod iana {
         }
 
         fn end_of_year_local(&self) -> Result<OffsetResult<OffsetDateTime>, HyErr> {
-            let local = self.to_timezone(local_timezone());
+            let local = to_local(self)?;
             let next_year = local.year().checked_add(1).ok_or_else(|| {
                 err!(
                     BaseErr::DateError,
@@ -1146,7 +1134,6 @@ pub(super) mod iana {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use crate::datetime::SimClock;
         use serial_test::serial;
         use time::{Date, UtcOffset};
 
@@ -1213,10 +1200,9 @@ pub(super) mod iana {
         fn test_now_local() {
             let tz = tz("Asia/Shanghai");
             let _tz_guard = TzGuard::new(tz);
-            let fixed = local(2024, Month::January, 5, 13, 45, 6, 0, off(0)).to_utc();
-            let _clock = SimClock::new(fixed);
-            assert_eq!(now_local(), OffsetDateTime::from(fixed).to_timezone(tz));
-            assert_eq!(now_local().offset(), off(8));
+            let now = now_local();
+            assert_eq!(now.offset(), off(8));
+            assert!((now - OffsetDateTime::now_utc()).whole_seconds().abs() < 60);
         }
 
         // ---- parse -----------------------------------------------------------
@@ -1346,6 +1332,63 @@ pub(super) mod iana {
                 dt.format_ext_local(WithOffsetFormatter::YmdTHMS3F.into())
                     .unwrap(),
                 "2024-01-05T13:45:06.789+08:00"
+            );
+        }
+
+        /// TZ 优先；查不到就和没设一样，走系统设置
+        #[test]
+        fn test_detect_timezone_prefers_tz_env() {
+            assert_eq!(
+                detect_timezone(Some("Asia/Shanghai".into())),
+                tz("Asia/Shanghai")
+            );
+            assert_eq!(
+                detect_timezone(Some("America/New_York".into())),
+                tz("America/New_York")
+            );
+            let system = detect_timezone(None);
+            assert_eq!(detect_timezone(Some("Not/AZone".into())), system);
+            assert_eq!(
+                detect_timezone(Some("CST-6CDT,M3.2.0,M11.1.0".into())),
+                system
+            );
+        }
+
+        /// 贴近上下界、换到本地时区后越界：返回 DateError，不 panic
+        #[test]
+        #[serial]
+        fn test_local_out_of_range_returns_err() {
+            let max = OffsetDateTime::new_utc(Date::MAX, Time::MAX);
+            let min = OffsetDateTime::new_utc(Date::MIN, Time::MIDNIGHT);
+            let formatter = DateTimeFormatter::from_str("WithOffset.YmdHMS3F").unwrap();
+
+            let _tz_guard = TzGuard::new(tz("Asia/Shanghai"));
+            assert!(
+                max.format_ext_local(formatter)
+                    .unwrap_err()
+                    .is(BaseErr::DateError)
+            );
+            assert!(max.start_of_day_local().unwrap_err().is(BaseErr::DateError));
+            assert!(max.end_of_year_local().unwrap_err().is(BaseErr::DateError));
+            let near_max = max - Duration::hours(1);
+            assert!(
+                near_max
+                    .shift_local(Duration::minutes(30))
+                    .unwrap_err()
+                    .is(BaseErr::DateError)
+            );
+            drop(_tz_guard);
+
+            let _tz_guard = TzGuard::new(tz("America/New_York"));
+            assert!(
+                min.format_ext_local(formatter)
+                    .unwrap_err()
+                    .is(BaseErr::DateError)
+            );
+            assert!(
+                min.start_of_month_local()
+                    .unwrap_err()
+                    .is(BaseErr::DateError)
             );
         }
 

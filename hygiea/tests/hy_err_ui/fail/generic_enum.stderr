@@ -1,0 +1,5 @@
+error: hy_err does not support generics
+ --> tests/hy_err_ui/fail/generic_enum.rs:5:7
+  |
+5 | enum E<T> {
+  |       ^^^

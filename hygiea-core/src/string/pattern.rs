@@ -1,20 +1,20 @@
-//! 正则工具，编译结果按 LRU 缓存。
+//! 正则工具，编译结果缓存复用（限量）。
 
 use crate::{BaseErr, HyErr, ResultExt, err};
 use lru::LruCache;
 use parking_lot::RwLock;
-use regex::Regex;
+use regex::{NoExpand, Regex};
 use std::num::NonZeroUsize;
 use std::sync::{Arc, LazyLock};
 
-/// 编译后的正则最多缓存这么多条，超出后按 LRU 淘汰最久未插入/未失效命中的条目。
-const PATTERN_CACHE_CAPACITY: usize = 1024;
+/// 编译后的正则最多缓存这么多条，超出后淘汰最早插入的（命中不调整顺序，见 [`get_pattern`]）。
+const PATTERN_CACHE_CAPACITY: NonZeroUsize = match NonZeroUsize::new(1024) {
+    Some(n) => n,
+    None => NonZeroUsize::MIN,
+};
 
-static PATTERN_CACHE: LazyLock<RwLock<LruCache<String, Arc<Regex>>>> = LazyLock::new(|| {
-    RwLock::new(LruCache::new(
-        NonZeroUsize::new(PATTERN_CACHE_CAPACITY).expect("pattern cache capacity must be non-zero"),
-    ))
-});
+static PATTERN_CACHE: LazyLock<RwLock<LruCache<String, Arc<Regex>>>> =
+    LazyLock::new(|| RwLock::new(LruCache::new(PATTERN_CACHE_CAPACITY)));
 
 /// 对应 `Regex::is_match`：`resource` 中是否存在匹配。
 pub fn is_match(regex: &str, resource: &str) -> Result<bool, HyErr> {
@@ -22,16 +22,37 @@ pub fn is_match(regex: &str, resource: &str) -> Result<bool, HyErr> {
 }
 
 /// 对应 `Regex::replace`：只替换第一个匹配。
+///
+/// `replacement` 里的 `$1`、`${name}` 会展开成捕获组（不存在的组展开成空串），`$$` 是字面量 `$`。
+/// 替换串来自用户输入或数据时用 [`replace_literal`]，否则里面的 `$` 会被悄悄吃掉
 pub fn replace(regex: &str, resource: &str, replacement: &str) -> Result<String, HyErr> {
     Ok(get_pattern(regex)?
         .replace(resource, replacement)
         .into_owned())
 }
 
-/// 对应 `Regex::replace_all`：替换所有匹配。
+/// 对应 `Regex::replace_all`：替换所有匹配。`$` 的展开规则同 [`replace`]，要字面量用 [`replace_all_literal`]
 pub fn replace_all(regex: &str, resource: &str, replacement: &str) -> Result<String, HyErr> {
     Ok(get_pattern(regex)?
         .replace_all(resource, replacement)
+        .into_owned())
+}
+
+/// 同 [`replace`]，但 `replacement` 原样插入，`$` 不做任何解析
+pub fn replace_literal(regex: &str, resource: &str, replacement: &str) -> Result<String, HyErr> {
+    Ok(get_pattern(regex)?
+        .replace(resource, NoExpand(replacement))
+        .into_owned())
+}
+
+/// 同 [`replace_all`]，但 `replacement` 原样插入，`$` 不做任何解析
+pub fn replace_all_literal(
+    regex: &str,
+    resource: &str,
+    replacement: &str,
+) -> Result<String, HyErr> {
+    Ok(get_pattern(regex)?
+        .replace_all(resource, NoExpand(replacement))
         .into_owned())
 }
 
@@ -58,6 +79,13 @@ fn capture_groups(caps: &regex::Captures) -> Vec<Option<String>> {
         .collect()
 }
 
+/// 对应 `Regex::find`：第一次匹配的整体文本（不是捕获组），没有匹配时返回 `None`。
+pub fn find(regex: &str, resource: &str) -> Result<Option<String>, HyErr> {
+    Ok(get_pattern(regex)?
+        .find(resource)
+        .map(|m| m.as_str().to_string()))
+}
+
 /// 对应 `Regex::find_iter`：所有匹配的整体文本（不是捕获组）。
 pub fn find_all(regex: &str, resource: &str) -> Result<Vec<String>, HyErr> {
     Ok(get_pattern(regex)?
@@ -66,15 +94,16 @@ pub fn find_all(regex: &str, resource: &str) -> Result<Vec<String>, HyErr> {
         .collect())
 }
 
-/// `captures` 的薄封装：只取第一个捕获组。`Regex` 本身没有这个方法。
-pub fn regex_find(regex: &str, resource: &str) -> Result<Option<String>, HyErr> {
+/// [`captures`] 的简写：第一次匹配的第 1 个捕获组。没有匹配、或这个组没捕获到时返回 `None`。
+/// 要整体匹配用 [`find`]
+pub fn first_group(regex: &str, resource: &str) -> Result<Option<String>, HyErr> {
     Ok(captures(regex, resource)?
         .and_then(|groups| groups.into_iter().next())
         .flatten())
 }
 
-/// `captures` 的薄封装：取前两个捕获组。`Regex` 本身没有这个方法。
-pub fn regex_find_double(
+/// [`captures`] 的简写：第一次匹配的第 1、2 个捕获组，规则同 [`first_group`]
+pub fn first_two_groups(
     regex: &str,
     resource: &str,
 ) -> Result<(Option<String>, Option<String>), HyErr> {
@@ -82,24 +111,37 @@ pub fn regex_find_double(
     Ok((groups.next().flatten(), groups.next().flatten()))
 }
 
-/// 命中路径只用 `peek`（不提升 LRU 顺序），避免每次命中都要抢写锁；
-/// 未命中才升级写锁，`get` 这里只是为了应对并发下两个线程同时编译同一个新正则的竞态。
+/// 用 LruCache 只是为了限制条数：命中路径只用 `peek`、只拿读锁，不调整顺序，所以淘汰按插入先后（FIFO）。
+///
+/// 没命中时在锁外编译，编译成功才拿写锁插入：大正则编译期间不会挡住其他正则调用，
+/// 非法正则也不会去拿写锁。两个线程同时编译同一个新正则时各编译一次，后插入的覆盖前一个，结果一样
 fn get_pattern(regex: &str) -> Result<Arc<Regex>, HyErr> {
     if let Some(p) = PATTERN_CACHE.read().peek(regex) {
         return Ok(Arc::clone(p));
     }
-    let mut cache = PATTERN_CACHE.write();
-    if let Some(p) = cache.get(regex) {
-        return Ok(Arc::clone(p));
-    }
     let pattern = Arc::new(Regex::new(regex).wrap_err(|| err!(BaseErr::RegexError, regex))?);
-    cache.put(regex.to_string(), Arc::clone(&pattern));
+    PATTERN_CACHE
+        .write()
+        .put(regex.to_string(), Arc::clone(&pattern));
     Ok(pattern)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ===== get_pattern =====
+
+    /// 非法正则返回 RegexError，Display 带上正则原文，regex crate 的原始错误挂在 source 上；不进缓存
+    #[test]
+    fn test_invalid_regex() {
+        let err = is_match(r"(unclosed", "x").unwrap_err();
+        assert!(err.is(BaseErr::RegexError));
+        assert_eq!(err.to_string(), "Invalid regex: (unclosed");
+        let source = std::error::Error::source(&err).unwrap();
+        assert!(source.downcast_ref::<regex::Error>().is_some());
+        assert!(!PATTERN_CACHE.read().contains("(unclosed"));
+    }
 
     // ===== is_match =====
 
@@ -136,6 +178,28 @@ mod tests {
     fn test_replace_all_no_match() {
         let result = replace_all(r"\d", "abc", "_").unwrap();
         assert_eq!(result, "abc");
+    }
+
+    /// 普通版本展开 `$`：引用捕获组，不存在的组变成空串
+    #[test]
+    fn test_replace_expands_dollar() {
+        assert_eq!(replace(r"(\w+)-(\w+)", "a-b", "$2-$1").unwrap(), "b-a");
+        assert_eq!(replace(r"\d", "a1", "$5 off").unwrap(), "a off");
+        assert_eq!(replace(r"\d", "a1", "$$5").unwrap(), "a$5");
+    }
+
+    /// literal 版本原样插入
+    #[test]
+    fn test_replace_literal() {
+        assert_eq!(
+            replace_literal(r"\d", "a1b2", "$5 off").unwrap(),
+            "a$5 offb2"
+        );
+        assert_eq!(replace_all_literal(r"\d", "a1b2", "$1").unwrap(), "a$1b$1");
+        assert_eq!(
+            replace_all_literal(r"(\d)", "a1", "${1}$$").unwrap(),
+            "a${1}$$"
+        );
     }
 
     // ===== captures =====
@@ -244,36 +308,50 @@ mod tests {
         assert!(result.is_empty());
     }
 
-    // ===== regex_find / regex_find_double =====
+    // ===== find / first_group / first_two_groups =====
+
+    /// find 取整体匹配，first_group 取捕获组
+    #[test]
+    fn test_find_vs_first_group() {
+        assert_eq!(
+            find(r"id=(\d+)", "x id=42 y").unwrap().as_deref(),
+            Some("id=42")
+        );
+        assert_eq!(
+            first_group(r"id=(\d+)", "x id=42 y").unwrap().as_deref(),
+            Some("42")
+        );
+        assert_eq!(find(r"\d", "abc").unwrap(), None);
+    }
 
     #[test]
-    fn test_regex_find_basic() {
+    fn test_first_group_basic() {
         assert_eq!(
-            regex_find(r"id=(\d+)", "id=42").unwrap(),
+            first_group(r"id=(\d+)", "id=42").unwrap(),
             Some("42".to_string())
         );
     }
 
     #[test]
-    fn test_regex_find_no_match() {
-        assert_eq!(regex_find(r"id=(\d+)", "no match").unwrap(), None);
+    fn test_first_group_no_match() {
+        assert_eq!(first_group(r"id=(\d+)", "no match").unwrap(), None);
     }
 
     #[test]
-    fn test_regex_find_double_basic() {
-        let result = regex_find_double(r"(\w+)@(\w+)", "user@host").unwrap();
+    fn test_first_two_groups_basic() {
+        let result = first_two_groups(r"(\w+)@(\w+)", "user@host").unwrap();
         assert_eq!(result, (Some("user".to_string()), Some("host".to_string())));
     }
 
     #[test]
-    fn test_regex_find_double_second_group_missing() {
-        let result = regex_find_double(r"(\w+)", "user").unwrap();
+    fn test_first_two_groups_second_group_missing() {
+        let result = first_two_groups(r"(\w+)", "user").unwrap();
         assert_eq!(result, (Some("user".to_string()), None));
     }
 
     #[test]
-    fn test_regex_find_double_no_match() {
-        let result = regex_find_double(r"(\w+)@(\w+)", "no match").unwrap();
+    fn test_first_two_groups_no_match() {
+        let result = first_two_groups(r"(\w+)@(\w+)", "no match").unwrap();
         assert_eq!(result, (None, None));
     }
 }

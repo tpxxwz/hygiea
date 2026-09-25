@@ -1,7 +1,13 @@
-//! 仿真时钟：替换 [`super::now_utc`] 的时间来源，并配合 tokio 暂停时间驱动任务。
+//! 仿真时钟（暂存，不在 hygiea-core 里维护）。
+//!
+//! 原来放在 `hygiea-core/src/datetime/clock.rs`，通过 core 里的全局钩子替换 `now_utc()` 的时间来源，
+//! 配合 tokio 暂停时间驱动任务。已知问题很多（进程级全局状态、多实例互相破坏、跟不上 tokio 自动推进、
+//! runtime 没暂停时 panic 等），core 暂时不考虑这套东西，所以挪到这里保留代码和测试。
+//!
+//! core 已经没有替换时钟的钩子了，这里用本文件自己的 [`now_utc`] 代替，不影响 `hygiea::datetime::now_utc`。
+//! 以后要重新做仿真时钟，从这里和 `docs/notes/virtual-time-and-parallelism.md` 开始。
 
-use crate::datetime::set_now_utc;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use std::collections::VecDeque;
 use std::time::Duration;
 use time::UtcDateTime;
@@ -11,6 +17,20 @@ static SIM_QUEUE: Mutex<VecDeque<UtcDateTime>> = Mutex::new(VecDeque::new());
 
 fn sim_now() -> UtcDateTime {
     SIM_TIME.lock().unwrap_or_else(UtcDateTime::now)
+}
+
+// ---- 原来在 core datetime 里的时钟钩子 ----
+
+static NOW_FN: RwLock<fn() -> UtcDateTime> = RwLock::new(UtcDateTime::now);
+
+fn set_now_utc(f: fn() -> UtcDateTime) {
+    *NOW_FN.write() = f;
+}
+
+/// 当前时间：有 SimClock 时是仿真时间，否则是真实时间
+pub fn now_utc() -> UtcDateTime {
+    let now = *NOW_FN.read();
+    now()
 }
 
 /// 仿真时钟，用于回测和测试场景。
@@ -77,7 +97,6 @@ impl Drop for SimClock {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datetime::now_utc;
     use parking_lot::Mutex as PLMutex;
     use serial_test::serial;
     use std::sync::Arc;

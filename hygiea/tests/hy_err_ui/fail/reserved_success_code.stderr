@@ -1,0 +1,5 @@
+error: err_code 00000000 is reserved for success
+ --> tests/hy_err_ui/fail/reserved_success_code.rs:6:24
+  |
+6 |     #[error(err_code = "00000", err_tpl = "x")]
+  |                        ^^^^^^^

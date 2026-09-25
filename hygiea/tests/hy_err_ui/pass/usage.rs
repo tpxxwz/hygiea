@@ -26,7 +26,7 @@ fn main() {
     let e = err!(UserErr::NotFound, "bob");
     assert!(e.is(UserErr::NotFound));
     assert!(!e.is(UserErr::Fixed));
-    assert_eq!(e.err_code, "00000002");
+    assert_eq!(e.err_code(), "00000002");
 
     assert!(check(1).is_ok());
     assert_eq!(check(-1).unwrap_err().to_string(), "user -1 not found");

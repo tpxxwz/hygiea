@@ -33,8 +33,7 @@ ws = ["hygiea-core/ws"]
 
 # chrono 互转桥（DateTimeUtcExt）
 datetime-chrono = ["hygiea-core/datetime-chrono"]
-datetime-sim-clock = ["hygiea-core/datetime-sim-clock"]
 datetime-iana = ["hygiea-core/datetime-iana"]
 
 # 全功能
-full = ["app", "log", "http", "json", "ws", "distributed-lock", "datetime-chrono", "datetime-sim-clock", "datetime-iana"]
+full = ["app", "log", "http", "json", "ws", "distributed-lock", "datetime-chrono", "datetime-iana"]

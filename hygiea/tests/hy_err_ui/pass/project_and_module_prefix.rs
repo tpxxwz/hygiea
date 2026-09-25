@@ -16,6 +16,6 @@ pub enum WithModule {
 }
 
 fn main() {
-    assert_eq!(err!(NoModule::A).err_code, "00000042");
-    assert_eq!(err!(WithModule::B).err_code, "00002007");
+    assert_eq!(err!(NoModule::A).err_code(), "00000042");
+    assert_eq!(err!(WithModule::B).err_code(), "00002007");
 }

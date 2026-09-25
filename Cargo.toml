@@ -20,7 +20,7 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 authors = ["wjj"]
 repository = "https://github.com/tpxxwz/hygiea"
-rust-version = "1.85"
+rust-version = "1.88"
 
 [workspace.dependencies]
 # 内部依赖，版本由 cargo-release 发布时自动对齐，无需手动修改

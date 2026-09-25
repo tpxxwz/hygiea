@@ -91,7 +91,7 @@ mod url {
             .send::<Json<Login>>(&client)
             .await
             .unwrap_err();
-        assert_eq!(err.err_args["url"], expected);
+        assert_eq!(err.err_args()["url"], expected);
         let log = out.text();
         assert!(
             log.contains(&expected) && !log.contains("secret-e"),
@@ -108,7 +108,7 @@ mod url {
             .send::<Bytes>(&local_config().build().unwrap())
             .await
             .unwrap_err();
-        assert_eq!(err.err_args["url"], format!("{base}/x?{MASKED_QUERY}"));
+        assert_eq!(err.err_args()["url"], format!("{base}/x?{MASKED_QUERY}"));
         let log = out.text();
         assert!(
             log.contains("token=***") && !log.contains("secret-t"),

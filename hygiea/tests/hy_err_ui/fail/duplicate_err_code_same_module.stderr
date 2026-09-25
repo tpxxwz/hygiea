@@ -1,11 +1,11 @@
-error[E0428]: the name `WJJ_STD_ERR_CODE_00000001` is defined multiple times
+error[E0428]: the name `HYGIEA_ERR_CODE_00000001` is defined multiple times
   --> tests/hy_err_ui/fail/duplicate_err_code_same_module.rs:10:10
    |
  4 | #[derive(hy_err)]
-   |          ------ previous definition of the value `WJJ_STD_ERR_CODE_00000001` here
+   |          ------ previous definition of the value `HYGIEA_ERR_CODE_00000001` here
 ...
 10 | #[derive(hy_err)]
-   |          ^^^^^^ `WJJ_STD_ERR_CODE_00000001` redefined here
+   |          ^^^^^^ `HYGIEA_ERR_CODE_00000001` redefined here
    |
-   = note: `WJJ_STD_ERR_CODE_00000001` must be defined only once in the value namespace of this module
+   = note: `HYGIEA_ERR_CODE_00000001` must be defined only once in the value namespace of this module
    = note: this error originates in the derive macro `hy_err` (in Nightly builds, run with -Z macro-backtrace for more info)

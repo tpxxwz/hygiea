@@ -61,11 +61,7 @@ pub(crate) trait VariantBuilder: Sized {
     fn match_arm(&self, enum_name: &syn::Ident, krate: &syn::Path) -> proc_macro2::TokenStream;
     fn code_arm(&self, enum_name: &syn::Ident) -> proc_macro2::TokenStream;
     fn vars_arm(&self, enum_name: &syn::Ident) -> proc_macro2::TokenStream;
-    fn generated_items(
-        &self,
-        enum_name: &syn::Ident,
-        krate: &syn::Path,
-    ) -> Vec<proc_macro2::TokenStream>;
+    fn generated_items(&self, krate: &syn::Path) -> Vec<proc_macro2::TokenStream>;
     fn build_impl(
         enum_name: &syn::Ident,
         krate: &syn::Path,
@@ -113,7 +109,7 @@ impl<V: VariantBuilder> ErrContext<V> {
         self.code_arms.push(variant.code_arm(enum_name));
         self.vars_arms.push(variant.vars_arm(enum_name));
         self.generated_items
-            .extend(variant.generated_items(enum_name, &self.krate));
+            .extend(variant.generated_items(&self.krate));
     }
 
     fn build(self, enum_name: &syn::Ident) -> proc_macro2::TokenStream {
@@ -192,6 +188,14 @@ impl VariantBuilder for HyVariant {
     ) -> Result<(), proc_macro2::TokenStream> {
         // 这里处理 #[error(...)] 里的每个 key-value。
         // hy_err 只接受 err_code 和 err_tpl。
+        let duplicated = match ident {
+            "err_code" => self.err_code_span.is_some(),
+            "err_tpl" => self.err_tpl_span.is_some(),
+            _ => false,
+        };
+        if duplicated {
+            return Err(expand_err(path_span, &format!("duplicate `{ident}`")));
+        }
         match ident {
             "err_code" => {
                 self.err_code = lit_val;
@@ -232,6 +236,13 @@ impl VariantBuilder for HyVariant {
             &self.var_name,
             self.err_code_span,
         )?;
+        // 00000000 留给成功响应（hygiea-core 的 SUCCESS_CODE）
+        if self.err_code == "00000000" {
+            return Err(expand_err(
+                self.err_code_span(),
+                "err_code 00000000 is reserved for success",
+            ));
+        }
 
         let Some(err_tpl) = &self.err_tpl else {
             return Err(expand_err_span(&self.var_name, "err_tpl missing"));
@@ -246,7 +257,14 @@ impl VariantBuilder for HyVariant {
                 &format!("invalid err_tpl: {e}"),
             )
         })?;
-        let mut vars: Vec<String> = tmpl.undeclared_variables(false).into_iter().collect();
+        // undeclared_variables 会把 range、dict 这类内置全局函数也算进去，它们不用调用方传
+        let globals: std::collections::HashSet<&str> =
+            env.globals().map(|(name, _)| name).collect();
+        let mut vars: Vec<String> = tmpl
+            .undeclared_variables(false)
+            .into_iter()
+            .filter(|name| !globals.contains(name.as_str()))
+            .collect();
         vars.sort();
         self.vars = vars;
         Ok(())
@@ -262,30 +280,20 @@ impl VariantBuilder for HyVariant {
 
     fn match_arm(&self, enum_name: &syn::Ident, krate: &syn::Path) -> proc_macro2::TokenStream {
         let err_code = &self.err_code;
-        let err_tpl = self.err_tpl.as_ref().unwrap();
+        // validate 已确认 err_tpl 存在
+        let err_tpl = self.err_tpl.as_deref().unwrap_or_default();
         let var_name = &self.var_name;
 
-        // 调没调对方法必须严格：模板要参数就只能 to_err(args)，不要参数就只能 to_err_raw()。
-        // 用 assert! 而不是 debug_assert!，release 下也生效；走 err! 宏时编译期就拦住了，到不了这里。
-        // 参数里 key 对不对不管，交给 minijinja 渲染时判断
-        let has_vars = !self.vars.is_empty();
-        let msg = if has_vars {
-            format!(
-                "{enum_name}::{var_name} has template variables, use to_err(args) / err!(X, {{ .. }})"
-            )
-        } else {
-            format!("{enum_name}::{var_name} has no template variables, use to_err_raw() / err!(X)")
-        };
+        // 参数和模板对不对得上由 err! 在编译期检查；绕过 err! 直接调 to_err / to_err_raw 传错了，
+        // 结果只是渲染失败，Display 退回输出未渲染的模板，运行时不 panic
 
         // 生成类似：
         //
         // MyErrors::UserNotFound => {
-        //     assert!(args.is_some() == true, "...");
         //     ::hygiea::HyErr::new("00100001", "User {{ name }} not found", args.unwrap_or_default())
         // }
         quote! {
             #enum_name::#var_name => {
-                assert!(args.is_some() == #has_vars, "{}", #msg);
                 #krate::HyErr::new(#err_code, #err_tpl, args.unwrap_or_default())
             }
         }
@@ -305,22 +313,22 @@ impl VariantBuilder for HyVariant {
         quote! { #enum_name::#var_name => &[#(#vars),*] }
     }
 
-    fn generated_items(
-        &self,
-        enum_name: &syn::Ident,
-        krate: &syn::Path,
-    ) -> Vec<proc_macro2::TokenStream> {
+    fn generated_items(&self, krate: &syn::Path) -> Vec<proc_macro2::TokenStream> {
         let err_code = &self.err_code;
         let err_code_span = self.err_code_span();
-        let err_tpl = self.err_tpl.as_ref().unwrap();
-        let var_name = &self.var_name;
+        // validate 已确认 err_tpl 存在
+        let err_tpl = self.err_tpl.as_deref().unwrap_or_default();
 
         // 生成重复错误码保护和 linkme 注册项。
         // linkme 注册项会被 hygiea-core 收集到 ERR_REGISTRATIONS。
-        vec![
-            build_err_code_guard(enum_name, var_name, err_code, err_code_span),
-            build_template_registration(enum_name, var_name, err_code, err_tpl, krate),
-        ]
+        let guard = build_err_code_guard(err_code, err_code_span);
+        let registration = build_template_registration(err_code, err_tpl, krate);
+        // 链接保护符号和注册项放进匿名 const 块，名字不会和别的变体撞，
+        // 同模块重复码只由 guard 报一次
+        vec![quote! {
+            #guard
+            const _: () = { #registration };
+        }]
     }
 
     fn build_impl(
@@ -376,84 +384,42 @@ impl VariantBuilder for HyVariant {
 
 // ========== Common Functions ==========
 
-fn build_err_code_guard(
-    enum_name: &syn::Ident,
-    var_name: &syn::Ident,
-    err_code: &str,
-    span: proc_macro2::Span,
-) -> proc_macro2::TokenStream {
-    let guard = format_ident!("WJJ_STD_ERR_CODE_{}", err_code, span = span);
-    let link_guard = link_guard_ident(enum_name, var_name);
-    let symbol = format!("__hygiea_err_code_{}", err_code);
-    // 这里做两层重复错误码保护：
-    //
-    // 1. const 名字里包含 err_code。
-    //    如果同一个模块里生成了两次同名 const，Rust 编译阶段会报重复定义。
-    //
-    // 2. #[unsafe(export_name = "...")] 导出固定符号名。
-    //    如果不同模块里用了同一个 err_code，Rust 层面的 const 名字不冲突，
-    //    但链接阶段会发现导出符号重复，从而报错。
+/// 同模块重复码的编译期保护：const 名字里带错误码，重复时报 E0428
+fn build_err_code_guard(err_code: &str, span: proc_macro2::Span) -> proc_macro2::TokenStream {
+    let guard = format_ident!("HYGIEA_ERR_CODE_{}", err_code, span = span);
     quote! {
         #[allow(dead_code)]
         const #guard: () = ();
-
-        #[used]
-        #[unsafe(export_name = #symbol)]
-        static #link_guard: u8 = 0;
     }
 }
 
-/// 构建模板错误注册项。
+/// 构建模板错误注册项，外加跨模块重复码的链接保护。
 ///
 /// HyErr 的 Display 会用 err_code 从 minijinja Environment 里取模板，
 /// 所以这里必须把 err_code 和 err_tpl 注册进去。
+///
+/// 链接保护：导出固定符号名 `__hygiea_err_code_<code>`，不同模块用了同一个错误码时，
+/// Linux 上链接期报重复符号；macOS 的 ld64 只给警告，由 hygiea-core 启动时的查重兜底
 fn build_template_registration(
-    enum_name: &syn::Ident,
-    var_name: &syn::Ident,
     err_code: &str,
     err_tpl: &str,
     krate: &syn::Path,
 ) -> proc_macro2::TokenStream {
-    let err_reg = registration_ident(enum_name, var_name);
+    let symbol = format!("__hygiea_err_code_{}", err_code);
     quote! {
+        #[used]
+        #[unsafe(export_name = #symbol)]
+        static LINK_GUARD: u8 = 0;
+
         // 路径都经 ::hygiea::__private 转接，下游只依赖 hygiea 就够了，不用自己再加 linkme
         #[#krate::__private::linkme::distributed_slice(#krate::__private::ERR_REGISTRATIONS)]
         #[linkme(crate = #krate::__private::linkme)]
-        static #err_reg: #krate::__private::ErrRegistration =
+        static REGISTRATION: #krate::__private::ErrRegistration =
             #krate::__private::ErrRegistration {
                 err_code: #err_code,
                 err_tpl: #err_tpl,
             };
     }
-}
-
-fn registration_ident(enum_name: &syn::Ident, var_name: &syn::Ident) -> syn::Ident {
-    let enum_name = sanitize_ident_part(&enum_name.to_string());
-    let var_name = sanitize_ident_part(&var_name.to_string());
-    format_ident!("ERR_REG_{}_{}", enum_name, var_name)
-}
-
-fn link_guard_ident(enum_name: &syn::Ident, var_name: &syn::Ident) -> syn::Ident {
-    let enum_name = sanitize_ident_part(&enum_name.to_string());
-    let var_name = sanitize_ident_part(&var_name.to_string());
-    format_ident!("WJJ_STD_ERR_CODE_LINK_GUARD_{}_{}", enum_name, var_name)
-}
-
-fn sanitize_ident_part(value: &str) -> String {
-    // 生成 Rust 标识符时只能使用合法字符。
-    // 这里把 enum/variant 名字转成大写 ASCII，并把非字母数字替换成下划线。
-    // trim_start_matches("r#") 是为了兼容 raw identifier，例如 r#type。
-    value
-        .trim_start_matches("r#")
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c.to_ascii_uppercase()
-            } else {
-                '_'
-            }
-        })
-        .collect()
 }
 
 fn expand<V, F>(
@@ -492,6 +458,12 @@ where
         return expand_err_span(&ast, &format!("{} only works on enums", derive_name));
     };
     let variants = &e.variants;
+    if !ast.generics.params.is_empty() {
+        return expand_err_span(
+            &ast.generics,
+            &format!("{} does not support generics", derive_name),
+        );
+    }
 
     // 解析 enum 上可选的 #[err_code_module_prefix = "..."]（模块级）。
     // 同时禁止把 #[error(...)] 写在 enum 上，因为 error 只允许写在 variant 上。
@@ -540,6 +512,12 @@ where
     // 逐个解析 enum variant，V 目前只有 HyVariant。
     for variant in variants {
         let var_name = &variant.ident;
+        if !matches!(variant.fields, syn::Fields::Unit) {
+            return expand_err_span(
+                &variant.fields,
+                &format!("{} only supports unit variants", derive_name),
+            );
+        }
         let mut v = variant_new(var_name.clone());
 
         for attr in &variant.attrs {

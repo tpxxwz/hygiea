@@ -72,7 +72,7 @@
 //! - `log`: tracing setup (implies `datetime-iana`)
 //! - `app`: Component-based application framework (implies `log`)
 //! - `distributed-lock`: `DistributedLock` trait
-//! - `datetime-iana` / `datetime-chrono` / `datetime-sim-clock`: IANA timezones, chrono bridge, SimClock
+//! - `datetime-iana` / `datetime-chrono`: IANA timezones, chrono bridge
 //! - `ws`: WebSocket client (work in progress, currently empty)
 //! - `json`: Reserved, currently empty
 //! - `full`: Enable all features

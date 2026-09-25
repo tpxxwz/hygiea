@@ -123,7 +123,7 @@ mod redirects {
             .await
             .unwrap_err();
         assert!(err.is(BaseHttpErr::NonSuccessStatus), "{err:#}");
-        assert_eq!(err.err_args["status"], 302);
+        assert_eq!(err.err_args()["status"], 302);
     }
 
     /// 超过上限报 BaseHttpErr::RequestFailed，原因是 reqwest 的重定向错误

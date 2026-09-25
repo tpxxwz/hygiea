@@ -179,7 +179,7 @@ mod decoding {
             .await
             .unwrap_err();
         assert!(err.is(BaseHttpErr::NonSuccessStatus));
-        assert_eq!(err.err_args["status"], 500);
+        assert_eq!(err.err_args()["status"], 500);
     }
 }
 

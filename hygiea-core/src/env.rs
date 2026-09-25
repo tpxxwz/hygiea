@@ -1,3 +1,5 @@
+use crate::{BaseErr, HyErr, err};
+
 pub trait EnvKey {
     fn key_name(&self) -> &str;
     fn default_value(&self) -> Option<String> {
@@ -140,13 +142,13 @@ impl EnvKey for BuiltinKey {
 
 // ---- functions --------------------------------------------------------------
 
-/// Returns the env var value, falling back to `default_value`. Panics if both absent.
-pub fn env_get(key: impl EnvKey) -> String {
+/// Returns the env var value, falling back to `default_value`. 两者都没有时返回 `EnvError`
+pub fn env_get(key: impl EnvKey) -> Result<String, HyErr> {
     let name = key.key_name();
     std::env::var(name)
         .ok()
         .or_else(|| key.default_value())
-        .unwrap_or_else(|| panic!("environment variable not set: {}", name))
+        .ok_or_else(|| err!(BaseErr::EnvError, name))
 }
 
 /// Returns the env var value if present, otherwise `None`.
@@ -162,4 +164,35 @@ pub fn env_get_or(key: impl EnvKey, fallback: &str) -> String {
 /// Returns the env var value, calling `f` when absent.
 pub fn env_get_or_else(key: impl EnvKey, f: impl FnOnce() -> String) -> String {
     std::env::var(key.key_name()).unwrap_or_else(|_| f())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Key(&'static str, Option<&'static str>);
+    impl EnvKey for Key {
+        fn key_name(&self) -> &str {
+            self.0
+        }
+        fn default_value(&self) -> Option<String> {
+            self.1.map(str::to_string)
+        }
+    }
+
+    #[test]
+    fn env_get_missing_returns_err() {
+        let err = env_get(Key("HYGIEA_TEST_SURELY_UNSET_VAR", None)).unwrap_err();
+        assert!(err.is(BaseErr::EnvError));
+        assert_eq!(
+            err.to_string(),
+            "Environment variable not set: HYGIEA_TEST_SURELY_UNSET_VAR"
+        );
+    }
+
+    #[test]
+    fn env_get_falls_back_to_default() {
+        let v = env_get(Key("HYGIEA_TEST_SURELY_UNSET_VAR", Some("dflt"))).unwrap();
+        assert_eq!(v, "dflt");
+    }
 }

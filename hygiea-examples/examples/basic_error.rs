@@ -44,19 +44,19 @@ fn main() {
     // Example 1: Formatted error with template
     println!("1. Formatted Error (Template-based):");
     let err = err!(UserErrors::UserNotFound, "Alice");
-    println!("   Error Code: {}", err.err_code);
+    println!("   Error Code: {}", err.err_code());
     println!("   Message: {}\n", err);
 
     // Example 2: Another formatted error
     println!("2. Invalid Email Error:");
     let err = err!(UserErrors::InvalidEmail, "invalid-email");
-    println!("   Error Code: {}", err.err_code);
+    println!("   Error Code: {}", err.err_code());
     println!("   Message: {}\n", err);
 
     // Example 3: fixed message, no template variables
     println!("3. Fixed Message Error:");
     let err = err!(OrderErrors::DbConnectionFailed);
-    println!("   Error Code: {}", err.err_code);
+    println!("   Error Code: {}", err.err_code());
     println!("   Message: {}\n", err);
 
     // Example 4: Using base errors
@@ -64,7 +64,7 @@ fn main() {
     use hygiea::BaseErr;
     // 对外消息固定为 "System Error"，原因挂在 source 上，只有 {:#} 才打出来
     let err = err!(BaseErr::SysErr).with_source("network timeout");
-    println!("   Error Code: {}", err.err_code);
+    println!("   Error Code: {}", err.err_code());
     println!("   Message: {}", err);
     println!("   With source: {:#}\n", err);
 

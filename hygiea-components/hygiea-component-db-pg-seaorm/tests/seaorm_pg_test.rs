@@ -3,14 +3,17 @@ use hygiea_core::env::{BuiltinKey, env_get, env_get_or_else};
 
 fn cloud_pg_config() -> SeaOrmPgConfig {
     SeaOrmPgConfig {
-        host: env_get(BuiltinKey::CloudPgHost),
+        host: env_get(BuiltinKey::CloudPgHost).unwrap(),
         port: env_get(BuiltinKey::CloudPgPort)
+            .unwrap()
             .parse()
             .expect("CLOUD_PG_PORT must be a number"),
-        username: env_get(BuiltinKey::CloudPgUser),
-        password: env_get(BuiltinKey::CloudPgPassword),
-        database: env_get_or_else(BuiltinKey::CloudPgDb, || env_get(BuiltinKey::CloudPgUser)),
-        params: env_get(BuiltinKey::CloudPgParams),
+        username: env_get(BuiltinKey::CloudPgUser).unwrap(),
+        password: env_get(BuiltinKey::CloudPgPassword).unwrap(),
+        database: env_get_or_else(BuiltinKey::CloudPgDb, || {
+            env_get(BuiltinKey::CloudPgUser).unwrap()
+        }),
+        params: env_get(BuiltinKey::CloudPgParams).unwrap(),
         schema_search_path: "dict_jp".to_string(),
         sqlx_logging_level: "warn".to_string(),
         ..SeaOrmPgConfig::default()

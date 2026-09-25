@@ -754,7 +754,7 @@ mod tests {
                 Json::<Token>::from_bytes(&HeaderMap::new(), Bytes::from_static(br#"{"user":1}"#))
                     .unwrap_err();
             assert!(err.is(BaseErr::JsonError));
-            assert_eq!(err.err_args["body"], r#"{"user":1}"#);
+            assert_eq!(err.err_args()["body"], r#"{"user":1}"#);
             assert_eq!(
                 err.to_string(),
                 "JSON error: deserialize response body failed"

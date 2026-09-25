@@ -10,9 +10,9 @@
 //!
 //! 两套 API：
 //! - `fmt_tpl` / `fmt_tpl_once`：命名参数，适合复杂模板（条件、循环、嵌套数据）
-//! - `fmt_pos` / `fmt_pos_once`：位置参数，适合简单模板，不用写 key，不用写字段名
+//! - `fmt_pos`：位置参数，适合简单模板，不用写 key，不用写字段名
 
-use hygiea::{fmt_pos, fmt_pos_once, fmt_tpl, fmt_tpl_once};
+use hygiea::{fmt_pos, fmt_tpl, fmt_tpl_once};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Hygiea Template Examples ===\n");
@@ -79,21 +79,19 @@ Total: {{ total }}"#
     })?;
     println!("   {}\n", msg);
 
-    // ===== fmt_pos_once 示例 =====
-
-    println!("5. fmt_pos_once — 位置参数，不用写 key:");
-    let msg = fmt_pos_once!(&pos_tpl, "Alice", 3)?;
-    println!("   {}\n", msg);
-
-    println!("6. fmt_pos_once — 动态模板，直接传值:");
-    let pos_tpl2 =
-        std::env::var("POS_TEMPLATE2").unwrap_or_else(|_| "Order {} belongs to {}".to_string());
-    let msg = fmt_pos_once!(&pos_tpl2, "ORD-002", "Bob")?;
-    println!("   {}\n", msg);
-
     // ===== fmt_pos 示例 =====
 
-    println!("7. fmt_pos — 同一模板多次渲染 (命中缓存):");
+    println!("5. fmt_pos — 位置参数，不用写 key:");
+    let msg = fmt_pos!(&pos_tpl, "Alice", 3)?;
+    println!("   {}\n", msg);
+
+    println!("6. fmt_pos — 动态模板，直接传值:");
+    let pos_tpl2 =
+        std::env::var("POS_TEMPLATE2").unwrap_or_else(|_| "Order {} belongs to {}".to_string());
+    let msg = fmt_pos!(&pos_tpl2, "ORD-002", "Bob")?;
+    println!("   {}\n", msg);
+
+    println!("7. fmt_pos — 同一模板多次渲染:");
     let greeting = std::env::var("GREETING").unwrap_or_else(|_| "Hi {}!".to_string());
     let first = fmt_pos!(&greeting, "Carol")?;
     let second = fmt_pos!(&greeting, "Dave")?;

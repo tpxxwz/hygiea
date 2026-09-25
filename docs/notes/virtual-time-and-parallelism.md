@@ -459,7 +459,7 @@ async fn main() {
 
 | 文件 | 内容 |
 |---|---|
-| `hygiea-core/src/datetime/clock.rs` | `SimClock` 实现，配套测试 |
+| `hygiea-examples/tests/sim_clock.rs` | `SimClock` 实现，配套测试（已移出 core，暂存） |
 | `hygiea-core/src/sync/rate_limit.rs` | `TokenBucket` 实现，配套测试 |
 | `hygiea-core/src/datetime/clock.rs` 内 `tests::tokio_*` | tokio::time 各 API 的虚拟时间演示测试 |
 | `hygiea-core/examples/backtest_parallel.rs` | 方案 A 的完整 example：std::thread + 独立 paused runtime |

@@ -4,15 +4,13 @@
 
 | 模块 | 文件 |
 |---|---|
-| error | `hygiea-core/src/error.rs`、`hygiea-macros/src/error.rs` |
 | env | `hygiea-core/src/env.rs` |
 | sync | `hygiea-core/src/sync/lock.rs`、`sync/mod.rs` |
-| string | `hygiea-core/src/string/`、`hygiea/src/string.rs` |
-| datetime | `hygiea-core/src/datetime/mod.rs`、`datetime/clock.rs` |
+| datetime | `hygiea-core/src/datetime/mod.rs` |
 | app / log | `hygiea-core/src/app.rs`、`hygiea-core/src/log.rs` |
 | facade | `hygiea/src/lib.rs` |
 
-不在范围内：`net/ws.rs`、`sync/rate_limit.rs`（另行处理）。
+不在范围内：`net/ws.rs`、`sync/rate_limit.rs`（另行处理）。SimClock 已移出 core，暂存在 `hygiea-examples/tests/sim_clock.rs`，相关问题不再跟踪。
 
 ## 约定
 
@@ -24,10 +22,7 @@
 ## 建议处理顺序
 
 1. **log / app 的日志丢失和失败被吞**：L1–L4、A1–A5。直接影响线上排查问题，改动集中。
-2. **error 的启动期问题和宏问题**：E1–E6。
-3. **string 的 `tpl_pos` 重写**：S1。一个函数，改动小。
-4. **datetime**：D1–D6。SimClock 要重构，改动最大，建议单独做。
-5. 其余设计问题和测试缺口，按需穿插处理。
+2. 其余设计问题和测试缺口，按需穿插处理。
 
 ---
 
@@ -111,69 +106,6 @@
 
 ---
 
-## error（`hygiea-core/src/error.rs`、`hygiea-macros/src/error.rs`）
-
-### 真 bug
-
-- [ ] **E1 错误码冲突时进程直接 abort**（error.rs:27-35、lib.rs:19，已复现）
-  保留码和重复码的检查都放在 ctor 里 panic。ctor 里的 panic 不能 unwind，进程直接 SIGABRT（exit 134），附带一大段 "panic in a function that cannot unwind" 的栈。写 `err_code_prefix = "000"` 加 `err_code = "00000"` 能通过编译，但所有依赖它的测试二进制都会整体崩掉。
-  建议：保留码检查挪到宏的 `validate` 阶段，在编译期报错；运行时的重复码检查改成清楚的报错，不要 abort。
-- [ ] **E2 下游在自己的 `#[ctor]` 里格式化 HyErr 会 panic**（error.rs:92-94，已复现）
-  错误模板只在 core 的 ctor 里初始化，`Display` 里直接 `expect`。ctor 之间的执行顺序没有保证。
-  建议：改成 `OnceLock::get_or_init` 懒初始化。
-- [ ] **E3 跨 crate 的错误码重复，在 macOS 上链接阶段不报错**（macros error.rs:365-372，已复现）
-  ld64 只给出 `warning: duplicate symbol`，最后靠运行时 ctor abort 才拦住。`hygiea/tests/hy_err_ui.rs` 注释里写的「链接阶段才报」在 macOS 上不成立，要一起更正。
-- [ ] **E4 中文命名的 enum 或变体编译失败**（macros error.rs:410-425，已复现）
-  `sanitize_ident_part` 把非 ASCII 字符都换成 `_`，`用户错误::{未找到, 无权限}` 生成出来的标识符撞名，报 E0428，而且报错位置指向 derive，看不出原因。
-  建议：生成的标识符改用错误码或 hash。
-- [ ] **E5 MSRV 声明与实际不符**（macros error.rs:503-504，已确认）
-  代码用了 let chains（1.88 才稳定），workspace 声明的是 `rust-version = "1.85"`，用 1.85–1.87 编译会失败。二选一：改掉 let chains，或者把声明调到 1.88。
-- [ ] **E6 带字段的变体报错看不出原因**（macros error.rs:261，已复现）
-  `A(u8)` 这种变体报 E0532，位置指向 derive。应该在宏里明确报「只支持 unit variant」。enum 的泛型参数也被忽略了。
-
-### 设计
-
-- [ ] **E7** 模板渲染失败时，兜底的 `Display` 文案会把 `err_tpl` 和完整的 `err_args` 带出来，和「内部细节不随 Display 外泄」的设计相矛盾（:97-101）。比如 key 拼错、缺字段时，`args` 里的 body 等内容会直接出现在返回给客户端的消息里。建议 Display 只输出固定文案加错误码，细节放到 `{:#}` 或 Debug 里。
-- [ ] **E8** `err!` 的 const 断言要求 `$kind` 是常量表达式，`let k = ..; err!(k)` 会报 E0435，文档里没说（:167-200）。`{..}` 写法里的 key 只在渲染时才检查，而宏在编译期已经知道模板需要哪些变量，完全可以在编译期校验字面量 key。
-- [ ] **E9** `undeclared_variables` 会把 minijinja 的全局函数也算成变量：模板 `range(n)` 得到的 vars 是 `["n","range"]`，结果 `err!(X, 3)` 被拒（macros :223）。
-- [ ] **E10** `err_code`、`err_tpl`、`err_args` 都是 pub 可写字段，外部改了会破坏 `is()` 和 Display，建议改成只读访问器（:54-57）。`ERR_REGISTRATIONS` 和 `ErrRegistration` 当成普通公开 API 导出了，没加 `doc(hidden)`（lib.rs:16）。
-- [x] **E11** 生成的代码写死了 `::hygiea::` 路径，下游重命名依赖，或者只依赖 `hygiea-core` 时会编译失败。可以考虑提供 `#[hy_err(crate = ..)]`。
-  已处理：宏用 `proc-macro-crate` 按调用方的依赖名生成路径（`hygiea`、改名、只依赖 `hygiea-core` 都可以），并支持 `#[hy_err(crate = "..")]` 覆盖。
-
-### 风格
-
-- [ ] **E12** 生成的标识符还在用旧前缀 `WJJ_STD_`；同一个 `#[error]` 里重复写同一个 key 不报错，静默以最后一个为准。
-
----
-
-## string（`hygiea-core/src/string/`、`hygiea/src/string.rs`）
-
-### 真 bug
-
-- [ ] **S1 `tpl_pos` 遇到正常的字面量也会出错**（template.rs:91-136，已复现）
-  位置模板转成 minijinja 模板时，字面文本没有转义：
-  - `"{{{}}}"`（按 Rust 语义是 `{值}`）、`"{%"`、`"a {# b"`、`"{{{{"` 都报语法错误；
-  - `"{{{{ x }}}}"` 本意是输出字面量 `{{ x }}`，却被当作变量 `x` 求值；
-  - null 参数渲染成 `"None"`。
-
-  建议：直接做字符串替换，不再经过 minijinja。
-- [ ] **S2 刚注册的模板可能被立刻淘汰**（template.rs:57-58，推测）
-  `ensure_template_registered` 释放写锁之后才加读锁去取模板，中间如果其他线程插入了 1024 个新模板，刚注册的就会被淘汰，返回 `TemplateNotFound`。
-
-### 设计
-
-- [ ] **S3** 模板缓存和正则缓存命中时都用 `peek`，不更新顺序，实际是 FIFO 而不是注释写的 LRU（template.rs:78、pattern.rs:10/88）。
-- [ ] **S4** 正则缓存未命中时，在持有全局写锁的情况下编译正则，遇到大正则会阻塞所有正则调用；非法正则不缓存，每次都会重新拿写锁（pattern.rs:91-95）。
-- [ ] **S5** 替换串会展开 `$N`：`replace(r"\d", "a1", "$5 off")` 得到 `"a off"`。传入用户的原始文本时容易踩坑，也没有提供按字面量替换（`NoExpand`）的版本（pattern.rs:25-35，已复现）。
-- [ ] **S6** `regex_find` 返回的是第 1 个捕获组，`find_all` 返回的是整体匹配，同样叫 find，语义却不一致；`regex_find_double` 这个名字也看不出含义（pattern.rs:70/77）。
-- [ ] **S7** `fmt_tpl!` 和 `fmt_tpl_once!` 的参数是 `$args:tt`，传 `ctx.args` 这类表达式会报 "no rules expected `.`"（facade string.rs:6/14，已复现）。建议补一个 `$args:expr` 的分支。
-
-### 风格
-
-- [ ] **S8** 模板缓存每次命中都 `args.clone()` 做一次深拷贝，其实 `render(&args)` 就够了（template.rs:83）。
-
----
-
 ## env（`hygiea-core/src/env.rs`）
 
 - [ ] **V1 设计** 只有 `env_get` 会回落到 `default_value`，`_opt`、`_or`、`_or_else` 都不看它，同一个 key 会得到三种结果（:152-165）。
@@ -195,28 +127,15 @@
 
 ### 真 bug
 
-- [ ] **D1 SimClock 是进程级的全局单例，和推荐的并行方案冲突**（clock.rs:9-10/29-34，已复现）
-  `SIM_TIME`、`SIM_QUEUE`、`NOW_FN` 都是进程级全局变量，而文档推荐的并行回测方案 A 是「每个线程一个独立的 paused runtime」。两个线程各自推进 2000 步时，`now_utc()` 分别有 2000 次和 1977 次和目标时间不一致。
-- [ ] **D2 多个 SimClock 同时存在时，状态互相破坏**（clock.rs:29-34/69-75，已复现）
-  新建第二个 SimClock 会清空第一个的队列；第二个被 drop 后，时钟退回真实时间，第一个随后的 `advance_to` 和 `advance_next` 都静默失效。
-- [ ] **D3 SimClock 跟不上 tokio 自动推进的虚拟时间**（clock.rs:52-66，已复现）
-  SimClock 的时间和 tokio 的虚拟时间是两套独立的状态，只在调用 `advance_to` 时同步。paused runtime 空闲时会自动推进：`sleep(1h).await` 之后 tokio 走了 3600 秒，`now_utc()` 还停在起点。依赖 `now_utc()` 的代码（比如 TokenBucket）可能因此卡住。
-- [ ] **D4 runtime 没暂停时 `tokio::time::advance` 会 panic，而且会留下脏状态**（clock.rs:52-65，已确认）
-  panic 之前 `SIM_TIME` 已经写成了新值。SimClock 没有任何前置检查，也不返回 `Result`。
-- [ ] **D5 `*_local` 系列方法返回 `Result`，却会 panic**（mod.rs:925、:1012/:1017/:1029 等，已复现）
+- [x] **D5 `*_local` 系列方法返回 `Result`，却会 panic**（mod.rs:925、:1012/:1017/:1029 等，已复现）
   `to_timezone` 内部调用 `to_offset`，结果越界时 panic。比如 `UtcDateTime::MAX` 调用 `format_ext_local`；`shift_local` 在接近 MAX 时也会 panic。
-- [ ] **D6 读取系统时区时忽略 `TZ` 环境变量**（mod.rs:908-915，已确认）
+  已处理：自己取 offset 后用 time 的 `checked_to_offset`，越界返回 `DateError`；`now_local` 不会越界，保持原样。
+- [x] **D6 读取系统时区时忽略 `TZ` 环境变量**（mod.rs:908-915，已确认）
   unix 上只读 `/etc/localtime` 这个符号链接。在 Docker 里设置 `TZ=Asia/Shanghai` 也不生效；`/etc/localtime` 是复制过来的普通文件，或者根本不存在时，会静默退回 UTC。
-- [ ] **D7 带秒的时区偏移被截断（边缘情况）**（mod.rs:159/162/172，已确认）
-  格式里只有 `[offset_hour]:[offset_minute]`：1880 年东京的 LMT 是 +09:18:59，格式化后再解析回来差 59 秒；而 RFC3339 格式化会直接返回 Err，两条路径表现不一致。
-- [ ] **D8 chrono 闰秒往返不是恒等（极边缘）**（mod.rs:1476/1481，已确认）
-  23:59:60.5 会被映射到下一天的 00:00:00.5。`from_utc_datetime` 不可能失败，返回 `Result` 没有必要。
+  已处理：按 C 库惯例 `TZ` 优先：值原样交给 time-tz 的 IANA 数据库查，查不到再用 time-tz 读系统设置，都不行才兜底 UTC。
 
 ### 设计
 
-- [ ] **D9** SimClock 的文档写着「创建后 tokio 时间暂停」，但 `new` 并不会暂停 tokio，只是要求调用方事先暂停，文档前后矛盾（clock.rs:17-19）。
-- [ ] **D10** SimClock 是 RAII guard，却没有 `#[must_use]`：`let _ = SimClock::new(t);` 会立刻 drop，恢复真实时钟，编译器不给任何警告（clock.rs:23）。
-- [ ] **D11** `push` 一个早于当前时间的时间点时，`advance_next` 会静默丢弃它；`advance_to` 只额外 yield 一次，连锁唤醒的任务可能还没跑完函数就返回了（clock.rs:37-47，推测）。
 - [ ] **D12** 在零点切换夏令时的时区，`start_of_day_local` 返回 `OffsetResult::None`（比如 America/Santiago 2024-09-08，那天实际从 01:00 开始），`end_of_day_local` 也可能返回 Ambiguous（mod.rs:1028-1042）。建议：遇到跳过的时段取切换后的第一个时刻，遇到重叠取靠后的那个。
 - [ ] **D13** `DateTimeFormattable` 和 `HygieaDateTimeExt` 两个 trait 里都有 `format_ext`，`use hygiea::datetime::*` 之后调用 `dt.format_ext(..)` 会报 E0034 歧义（mod.rs:200-213 与 252-258）。
 - [ ] **D14** 公开 API 返回了 `time_tz::OffsetResult`，但没有再导出，用户要 match 它就得自己加一个版本对得上的 time-tz 依赖（mod.rs:932、:955-993）。
@@ -225,16 +144,13 @@
 - [ ] **D17** feature 耦合（mod.rs:927-941、:948）：
   - `WithoutOffsetParser` 总是被导出，但它的 `parse` 只在开启 datetime-iana 时才有；
   - `parse_ext_with_offset` 跟 IANA 无关，却放在了 iana trait 里。
-- [ ] **D18** 格式化器和解析器不对称（mod.rs:64-76 与 47-51）：默认日志格式 `YmdTHMS3F` 没有对应的解析器；`WithOffsetParser::YmdHMSnosep` 没有对应的格式化器。
 - [ ] **D19** `start_of_day` 这类方法不可能失败，却返回 `Result`；`end_of_*` 返回 23:59:59.999999999 这样的闭区间终点，容易诱导调用方写 `<=`，半开区间 `[start, next_start)` 更稳（mod.rs:268-292）。
 - [ ] **D20** `shift_local` 只是把绝对时间平移后再换时区，名字却像是按本地时间计算，跨夏令时时「+1 天」实际是 23 或 25 小时（mod.rs:1015）。
 - [ ] **D21** `FromStr` 的 `Err` 是 `String`，和库里统一用的 HyErr 不一致；也没有实现 Display 或 Serialize，配置没法回写（mod.rs:90-109）。
 
 ### 风格 / 其他
 
-- [ ] **D22** 开启 sim-clock feature 后，每次 `now_utc()` 都要拿一次 RwLock 读锁；这个全局钩子在 `cfg(test)` 下也会编译进来，没标 `#[serial]` 却读时钟的单测，可能读到仿真时间（mod.rs:17-29）。
 - [ ] **D23** clippy 报的 `too_many_arguments`（mod.rs:1163）只出现在测试 fixture 里。建议改用 `time::macros::datetime!`，顺便去掉 `local`、`utc_nano` 这些辅助函数。
-- [ ] **D24** clock.rs:207-510 有大约 300 行纯 tokio API 的演示测试，不涉及 SimClock，更适合挪到 examples 或文档里。
 
 ---
 
@@ -248,12 +164,9 @@
 
 ## 测试缺口汇总
 
-- [ ] **T1** `app.rs`、`log.rs`、`env.rs`、`sync/lock.rs`、`error.rs` 本身都没有单元测试。app 和 log 装的是全局 subscriber，测试要放在独立的集成测试二进制里，或者用子进程跑。
-- [ ] **T2** error：`{:#}` 的 source 链、渲染失败时的兜底输出、`wrap_err`、跨 enum 的 `is`、保留码和重复码检查、初始化之前调用 Display，都没有测试。
+- [ ] **T1** `app.rs`、`log.rs`、`env.rs`、`sync/lock.rs` 本身都没有单元测试。app 和 log 装的是全局 subscriber，测试要放在独立的集成测试二进制里，或者用子进程跑。
 - [ ] **T3** app / log：组件启动失败后的回滚、关闭顺序、资源的覆盖和读取、`load_config` 的合并和报错、rolling 和 filter 取值的解析、文件 layer 实际写出的内容、旧日志清理，都没有测试。
-- [ ] **T4** string：字面量里的 `{%`、`{#`、`{{{}}}`、缓存淘汰、并发、`$` 替换、非法正则返回的错误类型，都没有测试。
 - [ ] **T5** datetime：
   - 跨夏令时的周界和月界、零点切换夏令时的时区、`shift_local` 跨夏令时；
-  - 时间范围上下界附近的 `*_local`、带秒的时区偏移、9999 年的溢出路径；
-  - 格式化后再解析的往返、glob import 的可用性；
-  - SimClock 的多实例、多线程、tokio 自动推进、未暂停的 runtime、`let _ =` 立即 drop。
+  - 9999 年的溢出路径；
+  - glob import 的可用性；

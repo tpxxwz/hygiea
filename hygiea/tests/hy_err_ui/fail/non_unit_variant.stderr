@@ -1,0 +1,5 @@
+error: hy_err only supports unit variants
+ --> tests/hy_err_ui/fail/non_unit_variant.rs:7:6
+  |
+7 |     A(u8),
+  |      ^^^^

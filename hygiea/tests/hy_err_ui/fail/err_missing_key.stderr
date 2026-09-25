@@ -1,0 +1,15 @@
+error[E0080]: evaluation panicked: err!: a template variable of this error is missing
+  --> tests/hy_err_ui/fail/err_missing_key.rs:11:13
+   |
+11 |     let _ = err!(E::TwoVars, { "a": 1, "bb": 2 });
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `main::{constant#1}` failed here
+   |
+   = note: this error originates in the macro `$crate::panic::panic_2021` which comes from the expansion of the macro `err` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+note: erroneous constant encountered
+  --> tests/hy_err_ui/fail/err_missing_key.rs:11:13
+   |
+11 |     let _ = err!(E::TwoVars, { "a": 1, "bb": 2 });
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this note originates in the macro `$crate::__hygiea_check_keys` which comes from the expansion of the macro `err` (in Nightly builds, run with -Z macro-backtrace for more info)

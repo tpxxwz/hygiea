@@ -170,10 +170,10 @@ impl IntoResponse for AxumHttpError {
     fn into_response(self) -> axum::response::Response {
         let e = self.0;
         if std::error::Error::source(&e).is_some() {
-            tracing::error!(code = e.err_code, "{e:#}");
+            tracing::error!(code = e.err_code(), "{e:#}");
         }
         axum::response::Json(AxumHttpResponse::<()> {
-            code: e.err_code,
+            code: e.err_code(),
             msg: e.to_string(),
             data: None,
         })

@@ -248,7 +248,7 @@ mod responses {
             .await
             .unwrap_err();
         assert!(err.is(BaseHttpErr::NonSuccessStatus));
-        assert_eq!(err.err_args["body"], r#"{"error":"boom"}"#);
+        assert_eq!(err.err_args()["body"], r#"{"error":"boom"}"#);
     }
 
     /// 响应的元信息：状态、头、最终地址、耗时
@@ -316,10 +316,10 @@ mod responses {
             .await
             .unwrap_err();
         assert!(err.is(BaseHttpErr::NonSuccessStatus));
-        assert_eq!(err.err_args["status"], 500);
-        assert_eq!(err.err_args["method"], "GET");
-        assert_eq!(err.err_args["url"], format!("{base}/fail"));
-        assert_eq!(err.err_args["body"], r#"{"error":"boom"}"#);
+        assert_eq!(err.err_args()["status"], 500);
+        assert_eq!(err.err_args()["method"], "GET");
+        assert_eq!(err.err_args()["url"], format!("{base}/fail"));
+        assert_eq!(err.err_args()["body"], r#"{"error":"boom"}"#);
     }
 
     /// 2xx 但结构对不上：报 JsonError
@@ -351,7 +351,7 @@ mod transport_errors {
             .await
             .unwrap_err();
         assert!(err.is(BaseHttpErr::RequestFailed));
-        assert_eq!(err.err_args["url"], format!("{base}/x"));
+        assert_eq!(err.err_args()["url"], format!("{base}/x"));
         assert!(reqwest_source(&err).is_connect());
     }
 

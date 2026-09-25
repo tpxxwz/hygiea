@@ -2,7 +2,7 @@
 
 > A comprehensive Rust toolkit with error handling, log redaction, HTTP client, datetime utilities, application framework, and more
 
-[![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
 ## Overview
@@ -34,7 +34,6 @@ These need no feature flag.
 | `distributed-lock` | `DistributedLock` trait and `DistributedKey` |
 | `datetime-iana` | IANA timezone and system-local datetime (`*_local` methods) |
 | `datetime-chrono` | Conversion bridge to and from chrono |
-| `datetime-sim-clock` | `SimClock`: replaceable clock source for backtests with tokio virtual time |
 | `ws` | WebSocket client (work in progress, currently empty) |
 | `json` | Reserved, currently empty |
 | `full` | All of the above |
@@ -84,7 +83,7 @@ pub enum UserErrors {
 fn main() {
     // One variable: pass the value directly
     let e = err!(UserErrors::UserNotFound, "Alice");
-    println!("{e} [{}]", e.err_code); // User Alice not found [00101001]
+    println!("{e} [{}]", e.err_code()); // User Alice not found [00101001]
 
     // Several variables: name each one
     let e = err!(UserErrors::InvalidEmail, { "email": "a@b", "reason": "no domain" });
@@ -189,8 +188,8 @@ pub enum LegacyErrors {
 
 ### Reserved and built-in codes
 
-- `00000000` is reserved for success (`SUCCESS_CODE`) and cannot be used by any error.
-- Project prefix `999` is used by the framework's built-in errors. `BaseErr` (modules that need no feature) has no module prefix and uses 5-digit codes, with the catch-all `SysErr` at `99999`; `hygiea::net::http::BaseHttpErr` (the `http` feature) uses module prefix `01`. Uniqueness across them is checked at startup.
+- `00000000` is reserved for success (`SUCCESS_CODE`); using it is a compile error.
+- Project prefix `999` is used by the framework's built-in errors. `BaseErr` (modules that need no feature) has no module prefix and uses 5-digit codes, with the catch-all `SysErr` at `99999`; `hygiea::net::http::BaseHttpErr` (the `http` feature) uses module prefix `01`. Duplicates inside one module are compile errors; duplicates across modules or crates are caught at startup (the process prints the code and exits with status 1).
 
 | Code | Variant | Template |
 |---|---|---|
@@ -198,6 +197,7 @@ pub enum LegacyErrors {
 | `99900002` | `BaseErr::RegexError` | Invalid regex: {{ pattern }} |
 | `99900003` | `BaseErr::JsonError` | JSON error: {{ cause }} |
 | `99900004` | `BaseErr::TemplateError` | Template error: {{ cause }} |
+| `99900005` | `BaseErr::EnvError` | Environment variable not set: {{ name }} |
 | `99901001` | `BaseHttpErr::ClientBuildFailed` | Http client build failed |
 | `99901101` | `BaseHttpErr::InvalidUrl` | Invalid url: {{ url }} |
 | `99901102` | `BaseHttpErr::InvalidParams` | Invalid query params: {{ method }} {{ url }} |
@@ -242,7 +242,7 @@ hygiea/
 │   ├── src/
 │   │   ├── error.rs            (HyErr, err! / bail!, BaseErr)
 │   │   ├── redact.rs           (Field masking for logs: #[redact], to_redacted_json)
-│   │   ├── datetime/           (UTC / IANA datetime helpers, SimClock)
+│   │   ├── datetime/           (UTC / IANA datetime helpers)
 │   │   ├── env.rs              (Environment variable helpers)
 │   │   ├── string/             (Regex and template utilities)
 │   │   ├── sync/               (Token bucket; distributed lock trait [feature: distributed-lock])

@@ -1,0 +1,5 @@
+error: duplicate `err_code`
+ --> tests/hy_err_ui/fail/duplicate_attr_key.rs:6:48
+  |
+6 |     #[error(err_code = "00001", err_tpl = "x", err_code = "00002")]
+  |                                                ^^^^^^^^
