@@ -44,7 +44,6 @@
 |---|---|
 | `app` | 应用框架，见上文（会带上 `log`） |
 | `log` | tracing 初始化：控制台和按时间滚动的文件输出、过滤，可以脱离 `app` 单独用（会带上 `datetime-iana`） |
-| `http-client` | 基于 reqwest 的 HTTP 客户端：`ClientConfig`、`RequestConfig`，请求 / 响应日志带打码（会带上 `redact`） |
 | `redact` | 日志打码：`#[redact]` 属性，标了 `#[redact(mask)]` / `#[redact(skip)]` 的字段只在序列化进日志时打码（任意嵌套层级都生效），正常序列化不受影响 |
 | `datetime-iana` | IANA 时区和系统本地时间（`*_local` 方法） |
 | `datetime-chrono` | 和 chrono 互相转换 |
@@ -63,6 +62,7 @@
 | `db-seaorm-postgres` | `hygiea-db`（`seaorm` + `postgres`） | `hygiea::db::SeaOrmPgComponent` / `SeaOrmPgPool` |
 | `redis-fred` | `hygiea-redis`（`fred`） | `hygiea::redis::RedisComponent` / `FredRedisPool` |
 | `http-axum` | `hygiea-http`（`axum`） | `hygiea::http::AxumComponent` |
+| `http-client-reqwest` | `hygiea-http-client`（`reqwest`） | `hygiea::http_client::reqwest_client::ReqwestComponent` / `ReqwestConfig`，请求 API 也在这个模块；在 `Resources` 中提供 `Client` |
 | `grpc-tonic` | `hygiea-grpc`（`tonic`） | `hygiea::grpc::TonicComponent` |
 
 ## 快速开始
@@ -200,11 +200,11 @@ fn main() {
 
 ### HTTP 与日志打码
 
-需要 `http-client` feature。每次请求在 INFO 级别打 `http call start` / `http call success`，失败打 WARN（可配置）。标了 `#[redact(mask)]` 的字段在这些日志里显示为 `"***"`（包括 params、请求体、URL，以及 `send` 解码出的响应体），实际发送和接收的仍是真实值。非 2xx 和解码失败的响应原样记录，因为排查问题需要看原文。
+需要 `http-client-reqwest` feature。每次请求在 INFO 级别打 `http call start` / `http call success`，失败打 WARN（可配置）。标了 `#[redact(mask)]` 的字段在这些日志里显示为 `"***"`（包括 params、请求体、URL，以及 `send` 解码出的响应体），实际发送和接收的仍是真实值。非 2xx 和解码失败的响应原样记录，因为排查问题需要看原文。
 
 ```rust
 use hygiea::HyErr;
-use hygiea::net::http_client::{Client, ClientConfig, HttpResponse, Json, Method, RequestConfig};
+use hygiea::http_client::reqwest_client::{Client, ReqwestConfig, HttpResponse, Json, Method, RequestConfig};
 use hygiea::redact::redact;
 use serde::{Deserialize, Serialize};
 
@@ -234,7 +234,50 @@ async fn login(client: &Client) -> Result<String, HyErr> {
 }
 
 // client 只建一次并共享：连接池在它里面
-// let client = ClientConfig::default().build()?;
+// let client = ReqwestConfig::default().build()?;
+```
+
+请求发出去之后失败（传输失败、非 2xx、响应解码失败）时，错误的 err_args 统一带 `method`、`url`、`status`（还没收到响应时是 `null`）；读完了 body 的，还带 `body` 原文，不渲染进对外消息。
+
+#### 重试
+
+`send` 的参数换成 `(&client, RetryCtx::new(次数, 策略))` 就带重试：没拿到解码成功的响应时，把这次的配置和失败信息（`SendFailure`：错误，以及传输失败的超时 / 建连标记，或者原始的 status、headers、body）交给策略。策略可以按这些信息改配置，返回 `RetryDecision`：
+
+- `Retry(cfg)`：确认可以重试，用这个配置再发；
+- `Stop(err)`：立即结束，不管还剩几次；
+- `Unknown(cfg)`：判断不了，原样再发，直到次数用完。
+
+`Retry` 和 `Unknown` 共用同一个次数上限。发出之前的错误（URL、params、header）不重试，直接返回。
+
+**只在两种情况下重试**：对方接口幂等（GET / PUT / DELETE，或者带了幂等键），或者根据错误调整请求后再发（401 换 token、签名过期重签……）。超时、读 body 中断时请求可能已经被对方执行了，不幂等的请求（下单、转账）不要原样重发。
+
+重试要求请求体整个在内存里（`Json`、`Form`、`Raw`、`Multipart`，也就是实现了 `Clone` 的），响应类型实现 `FromBytes`（body 读完再解码）；流式的 `RawStream`、reqwest 原生的 `multipart::Form`、`BodyStream` 开不了重试，编译期报错。
+
+```rust
+use std::time::Duration;
+use hygiea::http_client::reqwest_client::{Auth, FailStage, RequestConfig, RetryCtx, RetryDecision, SendFailure};
+
+type Cfg = RequestConfig<(), ()>;
+
+let resp: HttpResponse<Json<Profile>> = RequestConfig::plain(Method::GET, url)
+    .auth(Auth::Bearer(token))
+    .send((&client, RetryCtx::new(3, |attempt: usize, cfg: Cfg, f: SendFailure| async move {
+        match &f.stage {
+            // 401：刷新 token 后再发
+            FailStage::Status(resp) if resp.status == 401 => match refresh_token().await {
+                Ok(token) => RetryDecision::Retry(cfg.auth(Auth::Bearer(token))),
+                Err(e) => RetryDecision::Stop(e),
+            },
+            // 4xx 是请求本身的问题，重试也没用
+            FailStage::Status(resp) if resp.status.is_client_error() => RetryDecision::Stop(f.err),
+            // 其他（超时、5xx……）：GET 幂等，退避后原样再发，直到次数用完
+            _ => {
+                tokio::time::sleep(Duration::from_millis(100 << attempt)).await;
+                RetryDecision::Unknown(cfg)
+            }
+        }
+    })))
+    .await?;
 ```
 
 ## 架构
@@ -251,11 +294,12 @@ hygiea                         facade：重新导出全部内容，按 feature �
 | crate | 发布 | 职责 |
 |---|---|---|
 | `hygiea` | 是 | 使用方唯一需要依赖的 crate。重新导出 core 和各组件，由 feature 决定编译哪些 |
-| `hygiea-core` | 是 | 应用框架；错误处理、日志、打码、日期时间、环境变量、字符串、HTTP / WebSocket 客户端 |
+| `hygiea-core` | 是 | 应用框架；错误处理、日志、打码、日期时间、环境变量、字符串、WebSocket 客户端 |
 | `hygiea-macros` | 是 | `#[derive(hy_err)]` 和 `#[redact]` |
 | `hygiea-db` | 是 | 数据库连接池组件（PostgreSQL、SQLite） |
 | `hygiea-redis` | 是 | Redis 连接池组件 |
 | `hygiea-http` | 是 | HTTP 服务组件 |
+| `hygiea-http-client` | 是 | reqwest HTTP 客户端及组件 |
 | `hygiea-grpc` | 是 | gRPC 服务组件 |
 | `hygiea-test-support` | 否 | 测试共用工具，只作为 dev-dependency |
 | `hygiea-examples` | 否 | 可运行的使用示例 |
@@ -303,7 +347,7 @@ pub enum LegacyErrors {
 ### 保留和内置错误码
 
 - `00000000` 保留给成功（`SUCCESS_CODE`），使用会编译报错。
-- 项目前缀 `999` 给框架内置错误用。`BaseErr`（不需要 feature 的模块）没有模块前缀，用 5 位编号，兜底的 `SysErr` 是 `99999`；`hygiea::net::http_client::BaseHttpErr`（`http-client` feature）的模块前缀是 `01`。同一模块内重复会编译报错；跨模块或跨 crate 的重复在启动时检查（进程打印重复的错误码后以状态码 1 退出）。
+- 项目前缀 `999` 给框架内置错误用。`BaseErr`（不需要 feature 的模块）没有模块前缀，用 5 位编号，兜底的 `SysErr` 是 `99999`；`hygiea::http_client::reqwest_client::BaseHttpErr`（`http-client-reqwest` feature）的模块前缀是 `01`。同一模块内重复会编译报错；跨模块或跨 crate 的重复在启动时检查（进程打印重复的错误码后以状态码 1 退出）。
 - HTTP 组件（`hygiea::http`）的错误响应：状态码一律 200，错误放在 body 的 `code` / `msg`。业务错误原样返回模板渲染出的消息；`999` 开头的框架内置错误模板参数里可能有内部信息，对外统一换成 `SysErr`（"System Error"），原错误只记在服务端日志里。输入校验这类要给用户看的错误，用项目自己前缀的错误码定义。
 
 | 错误码 | 变体 | 模板 |
@@ -321,6 +365,7 @@ pub enum LegacyErrors {
 | `99901201` | `BaseHttpErr::RequestFailed` | Http request failed: {{ method }} {{ url }} |
 | `99901202` | `BaseHttpErr::NonSuccessStatus` | Http {{ status }}: {{ method }} {{ url }} |
 | `99901203` | `BaseHttpErr::WriteFailed` | Write response body failed |
+| `99901204` | `BaseHttpErr::DecodeFailed` | Http response decode failed: {{ method }} {{ url }} |
 | `99999999` | `BaseErr::SysErr` | System Error |
 
 ## 示例

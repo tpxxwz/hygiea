@@ -1,7 +1,4 @@
-//! 网络相关：HTTP 客户端（reqwest 封装）、WebSocket。
-
-#[cfg(feature = "http-client")]
-pub mod http_client;
+//! 网络相关：WebSocket 客户端。
 
 #[cfg(feature = "ws-client")]
 pub mod ws_client;

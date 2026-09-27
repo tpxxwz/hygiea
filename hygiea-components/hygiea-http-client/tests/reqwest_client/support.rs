@@ -2,8 +2,8 @@
 
 use std::error::Error as _;
 
-use hygiea_core::net::http_client::ClientConfig;
 use hygiea_core::redact::redact;
+use hygiea_http_client::reqwest_client::ReqwestConfig;
 use serde::{Deserialize, Serialize};
 
 pub use hygiea_test_support::headers::header_map;
@@ -23,10 +23,10 @@ pub fn reqwest_source(err: &hygiea_core::HyErr) -> &reqwest::Error {
 }
 
 /// 不走系统代理的配置：开发机上配了系统代理时，请求本地服务也可能被代理截走
-pub fn local_config() -> ClientConfig {
-    ClientConfig {
+pub fn local_config() -> ReqwestConfig {
+    ReqwestConfig {
         no_proxy: true,
-        ..ClientConfig::default()
+        ..ReqwestConfig::default()
     }
 }
 

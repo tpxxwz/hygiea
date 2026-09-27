@@ -1,6 +1,6 @@
 //! 日志：什么时候打、打在什么级别、开关怎么影响
 
-use hygiea_core::net::http_client::*;
+use hygiea_http_client::reqwest_client::*;
 
 use crate::support::*;
 

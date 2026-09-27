@@ -1,30 +1,24 @@
-//! 单次请求：配置 [`RequestConfig`]、发请求的 `send`，以及它的结果 [`HttpResponse`]。
-//! 请求头、认证、请求体 / 响应体这些组成部分在 `parts.rs`
+//! 单次请求：配置 [`RequestConfig`] 和它的结果 [`HttpResponse`]。
+//! 这里只放数据和转换（`into_request`），发请求的 `send` 在 send.rs；请求头、认证在 headers.rs，请求体在 body.rs
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use reqwest::header::AUTHORIZATION;
 
-use crate::{HyErr, redact};
+use hygiea_core::HyErr;
 
-use super::parts::{Auth, IntoHeaders, RespBody, auth_value, checked_headers};
-
-use super::error::{invalid_params, invalid_url, non_success_status, request_build_failed};
-use super::logging::{
-    SendCtx, Start, body_preview, body_text, log_resp_success, log_start, log_status_failed,
-    to_one_line,
-};
-use super::{
-    Bytes, Client, FailedLogLevel, FromBody, HeaderMap, IntoBody, Method, RequestBuilder,
-    StatusCode, Url,
-};
+use super::body::IntoBody;
+use super::headers::{Auth, IntoHeaders, auth_value, checked_headers};
+use super::logging::FailedLogLevel;
+use super::{Bytes, Client, HeaderMap, Method, RequestBuilder, StatusCode, Url};
 
 /// `RequestBuilder` 的纯数据镜像，字段顺序与方法声明顺序一致；本模块自己加的开关放在最后一段。
 ///
 /// 只收 reqwest 里真正属于单请求的项。连接池、超时基线、重定向策略、代理、TLS 这些属于 `Client`，
-/// 建好就固定了，改不了单次请求，都在 [`ClientConfig`](super::ClientConfig) 里。
+/// 建好就固定了，改不了单次请求，都在 [`ReqwestConfig`](super::ReqwestConfig) 里。
 ///
-/// 和 [`ClientConfig`](super::ClientConfig) 一样，下面的字段除非另有注明否则一律可用，不需要额外开 feature。
+/// 和 [`ReqwestConfig`](super::ReqwestConfig) 一样，下面的字段除非另有注明否则一律可用，不需要额外开 feature。
+#[derive(Clone)]
 pub struct RequestConfig<Params = (), Req = ()> {
     pub method: Method,
     pub url: String,
@@ -42,7 +36,7 @@ pub struct RequestConfig<Params = (), Req = ()> {
     pub timeout: Option<Duration>,
     /// query 参数，不分请求方法一律拼到 URL 上，与 body 互不影响。
     /// 保留调用方的原始类型，发送时交给 reqwest 序列化；追加到 URL 已有 query 后。
-    /// `()` 表示没有。日志里 `req` 的 params 段按 [`redact::to_redacted_json`] 打码；
+    /// `()` 表示没有。日志里 `req` 的 params 段按 [`redact::to_redacted_json`](hygiea_core::redact::to_redacted_json) 打码；
     /// 日志、错误和 [`HttpResponse::url`] 里的地址也按同样的规则打码，发出去的仍是原文。
     ///
     /// 直接写在 `url` 字符串里的 query 没有结构、没法打码，会原样出现在日志里，
@@ -128,156 +122,10 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
         self
     }
 
-    /// 发请求并读完响应体，2xx 时把 body 解码成 `Resp`（见 [`FromBody`]），否则返回
-    /// `BaseHttpErr::NonSuccessStatus`。要原样的字节就用 [`Bytes`](super::Bytes)（整个读进内存）；
-    /// 大文件用 [`BodyStream`](super::BodyStream) 流式读，或者 `write_to` 直接写进文件。
-    /// 解码目标由接收处的类型标注推断：
-    ///
-    /// ```ignore
-    /// let r: HttpResponse<Json<User>> = cfg.send(&client).await?;
-    /// let user = r.body.0;
-    /// ```
-    ///
-    /// 失败时按阶段返回不同的错误：
-    /// - 发出之前按 URL → 日志预览 → params → 认证头 → body 的顺序逐项检查，报第一个有问题的：
-    ///   [`InvalidUrl`](super::BaseHttpErr::InvalidUrl)、`JsonError`（预览序列化不了）、
-    ///   [`InvalidParams`](super::BaseHttpErr::InvalidParams)、[`InvalidHeader`](super::BaseHttpErr::InvalidHeader)、
-    ///   最后构建失败是 [`RequestBuildFailed`](super::BaseHttpErr::RequestBuildFailed)。请求不发出去，也不打失败日志
-    /// - 发出之后的传输失败（超时、连不上、TLS 握手失败、读 body 中断）是
-    ///   [`RequestFailed`](super::BaseHttpErr::RequestFailed)，并打一条失败日志
-    /// - 非 2xx 是 [`NonSuccessStatus`](super::BaseHttpErr::NonSuccessStatus)，状态码和原始 body 在 `err_args` 里
-    ///   （打日志可见，不渲染进对外消息）；解码失败是 `Resp` 报的错
-    ///
-    /// 响应日志：非 2xx 和解码失败打原文，排查问题要看对方到底回了什么；
-    /// 解码成功后按 [`FromBody::decoded_preview`] 打，`Json<T>` 走 [`redact::to_redacted_json`]，可以打码
-    pub async fn send<Resp: FromBody>(self, client: &Client) -> Result<HttpResponse<Resp>, HyErr> {
-        // into_request 会消费 self，日志要用的东西先取出来
-        let (enable_logging, failed_log_level) = (self.enable_logging, self.failed_log_level);
-        let method = self.method.clone();
-
-        // 发出之前逐项检查，报第一个有问题的部分。这些都是调用方参数的问题，直接把错误还给调用方，
-        // 不打失败日志。URL 最先查：它不对，后面几项都无从谈起。
-        //
-        // URL 要解析得了、是 http / https、带 host。reqwest 构建请求时只查 host，scheme 不对要到发送时
-        // 才报错（那时会被当成 RequestFailed），这里提前拦下，归到「没发出去」的 InvalidUrl
-        let parsed = Url::parse(&self.url).map_err(|e| invalid_url(&self.url).with_source(e))?;
-        if !(matches!(parsed.scheme(), "http" | "https") && parsed.has_host()) {
-            return Err(invalid_url(&self.url));
-        }
-
-        // 日志里代表这次请求"发了什么"的那一段：params 和 body 都算进来。params 按
-        // redact::to_redacted_json 序列化成 JSON，保留原始结构和数值类型，不参与 query 编码；
-        // 没设 params 时是 ()，序列化成 null，不打
-        let req_preview = {
-            let mut parts = Vec::new();
-            let params = redact::to_redacted_json(&self.params)?;
-            if params != "null" {
-                parts.push(format!("params:{params}"));
-            }
-            if let Some(body) = self.body.preview()? {
-                parts.push(format!("body:{body}"));
-            }
-            format!("[{}]", parts.join(", "))
-        };
-
-        // 日志、错误和 HttpResponse.url 用的地址：和真实请求一样由 reqwest 拼 query，只是在 redact 的
-        // 日志模式下拼，所以编码方式、字段顺序都和真实请求一致，params 里标了的字段打码或不出现。
-        // URL 已经验证过，这里拼不出来就只可能是 params 编码不了，报 InvalidParams
-        // （错误里是调用方写的 url 字符串，不含 params）
-        let url = redact::scope(|| client.get(&self.url).query(&self.params).build())
-            .map(|req| req.url().clone())
-            .map_err(|e| invalid_params(&self.method, &self.url, e))?;
-
-        // reqwest 的 send() 本身就是 build() + execute()，拆开是为了在发出之前拿到最终的 Request。
-        // 认证头在 into_request 里验证（InvalidHeader）；URL、params 上面已经验证过。
-        // build 再失败，能确定的只有「没构建出来」，报 RequestBuildFailed，具体原因在 source 里
-        // （最常见的是 Form body 没法 urlencoded 编码）
-        let request = self
-            .into_request(client)?
-            .build()
-            .map_err(|e| request_build_failed(&method, url.as_str(), e))?;
-
-        if enable_logging {
-            log_start(&Start {
-                method: &method,
-                url: url.as_str(),
-                req: &req_preview,
-            });
-        }
-
-        // 发出之后的失败（发送、读 body、解码）都要打日志，要用的东西放进 ctx，交给 RespBody / FromBody。
-        // sent_at 是请求发出的时刻：从这里算到 body 交给调用方，就是网络上实际花掉的时间
-        let ctx = SendCtx {
-            method,
-            url,
-            req_preview,
-            failed_log_level,
-            sent_at: Instant::now(),
-        };
-        let resp = client
-            .execute(request)
-            .await
-            .map_err(|e| ctx.transport_failed(e, None))?;
-        let (status, headers) = (resp.status(), resp.headers().clone());
-
-        if !status.is_success() {
-            // 非 2xx 的 body 一般是很小的错误页，读完放进错误里
-            let body = RespBody::new(resp, &ctx).bytes().await?;
-            let resp = HttpResponse {
-                method: ctx.method.clone(),
-                status,
-                headers,
-                url: ctx.url.clone(),
-                elapsed: ctx.sent_at.elapsed(),
-                body,
-            };
-            log_status_failed(
-                ctx.failed_log_level,
-                &resp,
-                &ctx.req_preview,
-                &body_preview(&resp.headers, &resp.body),
-            );
-            // 错误里放 body_text：和日志预览一样按 Content-Type / charset 解码，但不转义换行，
-            // 调用方拿 err_args["body"] 去解析对方的错误格式时内容和原文一致
-            return Err(non_success_status(
-                &resp.method,
-                resp.status,
-                resp.url.as_str(),
-                &body_text(&resp.headers, &resp.body),
-            ));
-        }
-
-        // 读 body 失败、解码失败的日志由 RespBody / FromBody 的默认实现打
-        let body = Resp::from_body(RespBody::new(resp, &ctx)).await?;
-        let SendCtx {
-            method,
-            url,
-            req_preview,
-            sent_at,
-            ..
-        } = ctx;
-        let resp = HttpResponse {
-            method,
-            status,
-            headers,
-            url,
-            elapsed: sent_at.elapsed(),
-            body,
-        };
-        if enable_logging {
-            // 类型提供了（打码后的）预览才打内容，否则不输出 resp：没有类型信息就没法打码
-            let resp_preview = resp
-                .body
-                .decoded_preview()
-                .map(|preview| to_one_line(preview.into()).into_owned());
-            log_resp_success(&resp, &req_preview, resp_preview.as_deref());
-        }
-        Ok(resp)
-    }
-
     /// 把本配置铺到 reqwest 的 `RequestBuilder` 上。
     ///
-    /// 认证头的值在这里构造，值里有换行之类的非法字符时返回 [`InvalidHeader`](super::BaseHttpErr::InvalidHeader)。
+    /// 认证头的值在这里构造，值里有换行之类的非法字符时返回 [`InvalidHeader`](super::BaseHttpErr::InvalidHeader)；
+    /// body 构造失败时返回 [`IntoBody::apply`] 报的错。
     /// URL、params、body 的错误和 reqwest 一样，要到 `build()` 时才暴露；`send` 会在那之前逐项检查
     pub fn into_request(self, client: &Client) -> Result<RequestBuilder, HyErr> {
         let mut req = client.request(self.method, &self.url).headers(self.headers);
@@ -297,7 +145,7 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
                 ),
             };
         }
-        req = self.body.apply(req);
+        req = self.body.apply(req)?;
         if let Some(timeout) = self.timeout {
             req = req.timeout(timeout);
         }
@@ -311,7 +159,7 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
 /// 一次请求的响应。能拿到这个结构就说明**确实收到了响应**——传输层失败（超时、连不上、TLS 握手
 /// 失败）在发请求那一步就返回 `Err` 了，所以 `status` 不是 `Option`。
 ///
-/// `Resp` 是 body 的类型，由 [`RequestConfig::send`] 按 [`FromBody`] 解码；
+/// `Resp` 是 body 的类型，由 [`RequestConfig::send`] 按 [`FromBody`](super::FromBody) 得到；
 /// 要原样的字节就用 [`Bytes`](super::Bytes)
 #[derive(Debug, Clone)]
 pub struct HttpResponse<Resp = Bytes> {
@@ -344,19 +192,12 @@ impl<Resp> HttpResponse<Resp> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-    use std::error::Error as _;
-
-    use hygiea_test_support::Unserializable;
+    use crate::reqwest_client::BaseHttpErr;
+    use crate::reqwest_client::{HeaderValue, Json};
+    use hygiea_core::redact::redact;
     use hygiea_test_support::headers::header_map;
-    use hygiea_test_support::logs::capture;
     use serde::Serialize;
     use serde_json::{Value, json};
-
-    use crate::BaseErr;
-    use crate::net::http_client::BaseHttpErr;
-    use crate::net::http_client::{Bytes, Form, HeaderValue, Json};
-    use crate::redact::redact;
 
     use super::*;
 
@@ -457,7 +298,7 @@ mod tests {
         }
     }
 
-    /// `RequestConfig::headers` 也拦保留字段（检查本身的测试在 parts.rs）
+    /// `RequestConfig::headers` 也拦保留字段（检查本身的测试在 headers.rs）
     mod reserved_headers {
         use super::*;
 
@@ -615,216 +456,6 @@ mod tests {
                 password: Some("p\nq".into()),
             });
             assert!(auth_header(&req).to_str().unwrap().starts_with("Basic "));
-        }
-    }
-
-    /// 请求还没发出去就失败的情况（不需要网络）：按 URL → 预览 → params → 认证头 → body 的顺序检查，
-    /// 报第一个有问题的部分；都是调用方参数的问题，直接把错误还给调用方，不打任何日志
-    mod send_before_network {
-        use super::*;
-
-        /// 发请求并断言：报的是 `kind`、没有打任何日志，返回错误方便继续检查
-        async fn send_err<P: Serialize, B: IntoBody>(
-            cfg: RequestConfig<P, B>,
-            kind: BaseHttpErr,
-        ) -> HyErr {
-            let (out, _guard) = capture();
-            let err = cfg.send::<Bytes>(&Client::new()).await.unwrap_err();
-            assert!(err.is(kind), "{err:#}");
-            assert_eq!(out.text(), "");
-            err
-        }
-
-        /// URL 非法：InvalidUrl，参数里是调用方写的 url
-        #[tokio::test]
-        async fn invalid_url() {
-            let err = send_err(
-                RequestConfig::plain(Method::GET, "not a url"),
-                BaseHttpErr::InvalidUrl,
-            )
-            .await;
-            assert_eq!(err.err_args()["url"], "not a url");
-            // url 的解析错误挂在 source 上
-            assert!(err.source().is_some());
-        }
-
-        /// 能解析但不是 http / https，或者没有 host：同样在发出之前报 InvalidUrl，
-        /// 而不是发送时的 RequestFailed（这类 reqwest 构建时不报错，要到发送时才报）
-        #[tokio::test]
-        async fn unsupported_scheme() {
-            for url in ["ftp://127.0.0.1/f", "mailto:a@example.com", "file:///tmp/x"] {
-                send_err(
-                    RequestConfig::plain(Method::GET, url),
-                    BaseHttpErr::InvalidUrl,
-                )
-                .await;
-            }
-        }
-
-        /// URL 的检查排在最前：URL 和 params 都有问题时，报的是 InvalidUrl
-        #[tokio::test]
-        async fn url_is_checked_first() {
-            send_err(
-                RequestConfig::with_params(Method::GET, "not a url", Unserializable),
-                BaseHttpErr::InvalidUrl,
-            )
-            .await;
-        }
-
-        /// 日志预览序列化失败：JsonError
-        #[tokio::test]
-        async fn preview_error_is_json_error() {
-            let (out, _guard) = capture();
-            let err = RequestConfig::with_params(Method::GET, URL, Unserializable)
-                .send::<Bytes>(&Client::new())
-                .await
-                .unwrap_err();
-            assert!(err.is(BaseErr::JsonError));
-            assert_eq!(out.text(), "");
-        }
-
-        /// params 能转成 JSON、却没法 urlencoded 编码：InvalidParams，参数里是调用方写的 url
-        #[tokio::test]
-        async fn unencodable_params() {
-            let err = send_err(
-                RequestConfig::with_params(Method::GET, URL, [("a", [1, 2])]),
-                BaseHttpErr::InvalidParams,
-            )
-            .await;
-            assert_eq!(err.err_args()["url"], URL);
-            // 原始的 reqwest 构建错误挂在 source 上
-            let source = err.source().unwrap().downcast_ref::<reqwest::Error>();
-            assert!(source.unwrap().is_builder());
-        }
-
-        /// 认证头里有非法字符：InvalidHeader，错误信息里不带凭据原文
-        #[tokio::test]
-        async fn invalid_auth_header() {
-            let cfg = RequestConfig::plain(Method::GET, URL).auth(Auth::Custom {
-                scheme: "X".into(),
-                credentials: "secret\nvalue".into(),
-            });
-            let err = send_err(cfg, BaseHttpErr::InvalidHeader).await;
-            assert!(!format!("{err:#}").contains("secret"));
-        }
-
-        /// Form body 能转成 JSON、却没法 urlencoded 编码：RequestBuildFailed，错误里是打码后的地址
-        #[tokio::test]
-        async fn unencodable_body() {
-            let cfg = RequestConfig::new(Method::POST, URL, &LOGIN, Form([("a", [1, 2])]));
-            let err = send_err(cfg, BaseHttpErr::RequestBuildFailed).await;
-            assert_eq!(
-                err.err_args()["url"],
-                "http://127.0.0.1/login?username=alice&password=***"
-            );
-        }
-    }
-
-    /// 请求真的发出去的情况：发到拒绝连接的本地端口，必定是 RequestFailed，不需要起服务。
-    /// 错误和失败日志里带着打码后的地址（`url`）和请求预览（`req`），用来检查这两样
-    mod sent {
-        use super::*;
-
-        /// 拒绝连接的端口
-        const REFUSED: &str = "http://127.0.0.1:1/login";
-
-        /// 发请求，断言是 RequestFailed，返回错误和这期间打的日志
-        async fn refused<P: Serialize, B: IntoBody>(cfg: RequestConfig<P, B>) -> (HyErr, String) {
-            let (out, _guard) = capture();
-            let err = cfg.send::<Bytes>(&Client::new()).await.unwrap_err();
-            assert!(err.is(BaseHttpErr::RequestFailed), "{err:#}");
-            (err, out.text())
-        }
-
-        /// 带 host 的 http / https 地址都能通过 URL 检查，端口、路径、query 都不影响
-        #[tokio::test]
-        async fn accepts_http_and_https() {
-            for url in ["http://127.0.0.1:1/x", "https://127.0.0.1:1/a?b=1"] {
-                refused(RequestConfig::plain(Method::GET, url)).await;
-            }
-        }
-
-        /// 地址里 params 的 mask 字段显示成 `***`，skip 的不出现；真正发出去的 query 仍是原文
-        #[tokio::test]
-        async fn url_masks_and_skips_params() {
-            let (err, _) = refused(RequestConfig::with_params(Method::GET, REFUSED, &LOGIN)).await;
-            assert_eq!(
-                err.err_args()["url"],
-                "http://127.0.0.1:1/login?username=alice&password=***"
-            );
-            let cfg = RequestConfig::with_params(Method::GET, REFUSED, &LOGIN);
-            assert_eq!(
-                build(cfg).url().query(),
-                Some("username=alice&password=p%40ss&device_id=dev-1")
-            );
-        }
-
-        /// URL 字符串里原本写的 query 原样保留（没有结构，没法打码），params 追加在后面
-        #[tokio::test]
-        async fn url_keeps_query_written_in_url() {
-            let cfg = RequestConfig::with_params(Method::GET, "http://127.0.0.1:1/p?a=1", &LOGIN);
-            let (err, _) = refused(cfg).await;
-            assert_eq!(
-                err.err_args()["url"],
-                "http://127.0.0.1:1/p?a=1&username=alice&password=***"
-            );
-        }
-
-        /// 没有 params 时就是原地址，不会多出一个 `?`
-        #[tokio::test]
-        async fn url_without_params_is_untouched() {
-            let (err, _) = refused(RequestConfig::plain(Method::GET, REFUSED)).await;
-            assert_eq!(err.err_args()["url"], REFUSED);
-        }
-
-        /// 什么都没有时 req 是空括号
-        #[tokio::test]
-        async fn req_empty_is_brackets() {
-            let (_, logs) = refused(RequestConfig::plain(Method::GET, REFUSED)).await;
-            assert!(logs.contains("req=[]"), "{logs}");
-        }
-
-        /// req 里 params 在前、body 在后，逗号分隔
-        #[tokio::test]
-        async fn req_params_then_body() {
-            let cfg = RequestConfig::new(Method::POST, REFUSED, [("a", 1)], Json("b"));
-            let (_, logs) = refused(cfg).await;
-            assert!(
-                logs.contains(r#"req=[params:[["a",1]], body:"b"]"#),
-                "{logs}"
-            );
-        }
-
-        /// req 里 params 和 Json / Form body 都按 redact 打码
-        #[tokio::test]
-        async fn req_params_and_body_are_masked() {
-            let (_, json) = refused(RequestConfig::new(
-                Method::POST,
-                REFUSED,
-                &LOGIN,
-                Json(&LOGIN),
-            ))
-            .await;
-            let (_, form) = refused(RequestConfig::with_body(
-                Method::POST,
-                REFUSED,
-                Form(&LOGIN),
-            ))
-            .await;
-            for logs in [json, form] {
-                assert!(!logs.contains("p@ss"), "{logs}");
-                assert!(!logs.contains("dev-1"), "{logs}");
-                assert!(logs.contains(r#""password":"***""#), "{logs}");
-            }
-        }
-
-        /// req 保留原始数值类型，数字不会变成字符串
-        #[tokio::test]
-        async fn req_keeps_value_types() {
-            let params = BTreeMap::from([("n", 1.5)]);
-            let (_, logs) =
-                refused(RequestConfig::with_params(Method::GET, REFUSED, &params)).await;
-            assert!(logs.contains(r#"req=[params:{"n":1.5}]"#), "{logs}");
         }
     }
 

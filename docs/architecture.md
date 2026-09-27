@@ -24,13 +24,13 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 | 模块 | feature | 内容 |
 |---|---|---|
 | `error` | 常开 | `HyErr`、`err!` / `bail!`、错误码 |
-| `redact` | `redact`（`http-client` 会带上） | 日志打码时的序列化支持 |
+| `redact` | `redact`（`http-client-reqwest` 会带上） | 日志打码时的序列化支持 |
 | `datetime` | 常开；`datetime-iana` 开本地时区，`datetime-chrono` 开 chrono 互转 | 基于 `time` 的格式化、解析、日界计算 |
 | `env` | 常开 | 环境变量 |
 | `string` | 常开 | 缓存的正则、模板渲染，`fmt_tpl!` / `fmt_tpl_once!` / `fmt_pos!` 宏 |
 | `log` | `log` | 日志配置和初始化 |
 | `app` | `app` | 应用框架：组件注册、依赖排序、启动与优雅退出 |
-| `net` | `http-client` / `ws-client` | HTTP 客户端（reqwest 封装）、WebSocket |
+| `net` | `ws-client` | WebSocket 客户端 |
 
 ### hygiea-macros
 
@@ -50,6 +50,7 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 | `hygiea-db` | `sqlx`、`seaorm` | `postgres`、`sqlite` | `db-sqlx-postgres`、`db-sqlx-sqlite`、`db-seaorm-postgres` | `hygiea::db` |
 | `hygiea-redis` | `fred` | | `redis-fred` | `hygiea::redis` |
 | `hygiea-http` | `axum` | | `http-axum` | `hygiea::http` |
+| `hygiea-http-client` | `reqwest` | | `http-client-reqwest` | `hygiea::http_client`（实现在 `reqwest_client` 子模块） |
 | `hygiea-grpc` | `tonic` | | `grpc-tonic` | `hygiea::grpc` |
 
 | 文件 | 内容 |
@@ -58,6 +59,11 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 | `hygiea-db/src/pg_advisory.rs` | 字符串 key 转 advisory lock 的 i64 key，sqlx 和 SeaORM 共用 |
 | `hygiea-redis/src/fred_pool.rs` | 连接池组件；锁实现为 SET NX + token + 看门狗续期，释放用 Lua |
 | `hygiea-http/src/axum_server.rs` | HTTP 服务组件 |
+| `hygiea-http-client/src/lib.rs` | 按 feature 声明各实现的模块，不在 crate 根上再导出（以后加别的实现时名字不撞） |
+| `hygiea-http-client/src/reqwest_client/mod.rs` | 模块结构说明和再导出，不放实现 |
+| `hygiea-http-client/src/reqwest_client/client.rs` | `ReqwestConfig`（client 级配置）和 `ReqwestComponent`；`config.rs` 是配置文件里用的请求头、代理类型 |
+| `hygiea-http-client/src/reqwest_client/request.rs` | `RequestConfig`（单次请求，纯数据）和 `HttpResponse`；`headers.rs` 请求头与认证，`body.rs` 请求体，`response.rs` 响应体 |
+| `hygiea-http-client/src/reqwest_client/send.rs` | 发送流程（开头有流程图）；`retry.rs` 重试；`logging.rs` 日志；`text.rs` 字节转文本；`error.rs` 错误 |
 | `hygiea-grpc/src/tonic_server.rs` | gRPC 服务组件 |
 
 ### hygiea-test-support

@@ -1,10 +1,10 @@
-//! `ClientConfig` 的各个选项在真实请求上的效果
+//! `ReqwestConfig` 的各个选项在真实请求上的效果
 
 use std::error::Error as _;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use hygiea_core::net::http_client::*;
+use hygiea_http_client::reqwest_client::*;
 
 use crate::support::*;
 
@@ -26,7 +26,7 @@ mod headers {
     #[tokio::test]
     async fn user_agent_is_sent() {
         let base = serve(echo).await;
-        let client = ClientConfig {
+        let client = ReqwestConfig {
             user_agent: Some("hygiea-test/1.0".into()),
             ..local_config()
         }
@@ -69,7 +69,7 @@ mod headers {
             assert!(accept.contains(algo), "{accept}");
         }
 
-        let off = ClientConfig {
+        let off = ReqwestConfig {
             transparent_compression: false,
             ..local_config()
         }
@@ -107,12 +107,12 @@ mod redirects {
         assert_eq!(resp.url.path(), "/redirect");
     }
 
-    /// `max_redirects: None` 时不跟随，3xx 原样回来，send 按非 2xx 报错，状态码在 err_args 里
+    /// `max_redirects: 0` 时不跟随，3xx 原样回来，send 按非 2xx 报错，状态码在 err_args 里
     #[tokio::test]
     async fn disabled_returns_3xx() {
         let base = redirect_server().await;
-        let client = ClientConfig {
-            max_redirects: None,
+        let client = ReqwestConfig {
+            max_redirects: 0,
             ..local_config()
         }
         .build()
@@ -130,8 +130,8 @@ mod redirects {
     #[tokio::test]
     async fn exceeding_limit_is_error() {
         let base = redirect_server().await;
-        let client = ClientConfig {
-            max_redirects: Some(2),
+        let client = ReqwestConfig {
+            max_redirects: 2,
             ..local_config()
         }
         .build()
@@ -170,7 +170,7 @@ mod cookies {
     #[tokio::test]
     async fn enabled_sends_cookie_back() {
         let base = cookie_server().await;
-        let client = ClientConfig {
+        let client = ReqwestConfig {
             cookie_store: true,
             ..local_config()
         }
@@ -222,7 +222,7 @@ mod timeouts {
     #[tokio::test]
     async fn client_timeout_applies() {
         let base = slow_server().await;
-        let client = ClientConfig {
+        let client = ReqwestConfig {
             timeout: Some(Duration::from_millis(50)),
             ..local_config()
         }
@@ -240,7 +240,7 @@ mod timeouts {
     #[tokio::test]
     async fn request_timeout_can_extend() {
         let base = slow_server().await;
-        let client = ClientConfig {
+        let client = ReqwestConfig {
             timeout: Some(Duration::from_millis(50)),
             ..local_config()
         }
@@ -271,7 +271,7 @@ mod timeouts {
     #[tokio::test]
     async fn read_timeout_fires_when_body_is_delayed_after_headers() {
         let base = serve(|req| echo(req).body_delay(Duration::from_secs(2))).await;
-        let client = ClientConfig {
+        let client = ReqwestConfig {
             timeout: None,
             connect_timeout: None,
             read_timeout: Some(Duration::from_millis(100)),
@@ -292,7 +292,7 @@ mod timeouts {
     #[tokio::test]
     #[ignore = "needs network"]
     async fn connect_timeout_fires_on_unroutable_address() {
-        let client = ClientConfig {
+        let client = ReqwestConfig {
             connect_timeout: Some(Duration::from_millis(200)),
             ..local_config()
         }
@@ -345,5 +345,98 @@ mod retries {
             .send::<Bytes>(&local_config().build().unwrap())
             .await;
         assert_eq!(count.load(Ordering::SeqCst), 1);
+    }
+}
+
+/// 显式代理：认证和代理头带给代理，排除列表和全局 no_proxy 让请求直连
+mod proxies {
+    use super::*;
+
+    /// 代理服务：回 `{via: "proxy", headers}`，带 `via` 字段就说明请求走了代理
+    async fn proxy_server() -> String {
+        serve(|req| {
+            let headers: serde_json::Map<_, _> = req
+                .headers
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone().into()))
+                .collect();
+            Reply::json(
+                200,
+                serde_json::json!({"via": "proxy", "headers": headers}).to_string(),
+            )
+        })
+        .await
+    }
+
+    fn proxied(proxy: String) -> ReqwestConfig {
+        let toml = format!("[[proxies]]\n{proxy}");
+        toml::from_str(&toml).unwrap()
+    }
+
+    /// custom_http_auth 和 headers 都带给代理
+    #[tokio::test]
+    async fn auth_and_headers_are_sent_to_proxy() {
+        let proxy = proxy_server().await;
+        let client = proxied(format!(
+            "kind = \"http\"\nurl = \"{proxy}\"\ncustom_http_auth = \"Bearer proxy-token\"\nheaders = {{ x-proxy-tag = \"app\" }}"
+        ))
+        .build()
+        .unwrap();
+        let seen = echo_via(&client, "http://example.invalid/path".into()).await;
+        assert_eq!(seen["via"], "proxy");
+        assert_eq!(seen["headers"]["proxy-authorization"], "Bearer proxy-token");
+        assert_eq!(seen["headers"]["x-proxy-tag"], "app");
+    }
+
+    /// basic_auth 编码成 Basic 认证头
+    #[tokio::test]
+    async fn basic_auth_is_sent_to_proxy() {
+        let proxy = proxy_server().await;
+        let client = proxied(format!(
+            "url = \"{proxy}\"\nbasic_auth = {{ username = \"user\", password = \"pass\" }}"
+        ))
+        .build()
+        .unwrap();
+        let seen = echo_via(&client, "http://example.invalid/path".into()).await;
+        assert_eq!(seen["headers"]["proxy-authorization"], "Basic dXNlcjpwYXNz");
+    }
+
+    /// 代理自己的 no_proxy 命中时直连
+    #[tokio::test]
+    async fn proxy_exclusion_connects_directly() {
+        let target = serve(echo).await;
+        let proxy = proxy_server().await;
+        let client = proxied(format!("url = \"{proxy}\"\nno_proxy = \"127.0.0.1\""))
+            .build()
+            .unwrap();
+        let seen = echo_via(&client, format!("{target}/direct")).await;
+        assert!(seen.get("via").is_none(), "{seen}");
+    }
+
+    /// kind = "https" 的代理不管 http 请求
+    #[tokio::test]
+    async fn https_proxy_ignores_http_requests() {
+        let target = serve(echo).await;
+        let proxy = proxy_server().await;
+        let client = proxied(format!("kind = \"https\"\nurl = \"{proxy}\""))
+            .build()
+            .unwrap();
+        let seen = echo_via(&client, format!("{target}/direct")).await;
+        assert!(seen.get("via").is_none(), "{seen}");
+    }
+
+    /// 全局 no_proxy = true 时连显式配的代理也不用
+    #[tokio::test]
+    async fn global_no_proxy_overrides_proxies() {
+        let target = serve(echo).await;
+        let proxy = proxy_server().await;
+        let client = ReqwestConfig {
+            no_proxy: true,
+            ..proxied(format!("url = \"{proxy}\""))
+        }
+        .build()
+        .unwrap();
+        let seen = echo_via(&client, format!("{target}/direct")).await;
+        assert!(seen.get("via").is_none(), "{seen}");
     }
 }

@@ -32,5 +32,5 @@ pub mod log;
 #[cfg(feature = "app")]
 pub mod app;
 
-#[cfg(any(feature = "http-client", feature = "ws-client"))]
+#[cfg(feature = "ws-client")]
 pub mod net;

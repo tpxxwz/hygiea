@@ -15,8 +15,8 @@ err_code_project_prefix = "001"
 
 [dev-dependencies]
 # db-sqlx-sqlite / http-axum：app 示例用的现成组件，SQLite 用内存库，不需要装数据库服务；
-# full 已经带上 log、datetime-iana、redact、http-client 等本 crate 示例用到的 core feature
-hygiea = { workspace = true, features = ["full", "db-sqlx-sqlite", "http-axum"] }
+# full 带上 log、datetime-iana、redact 等 core feature；HTTP 客户端另开组件 feature
+hygiea = { workspace = true, features = ["full", "db-sqlx-sqlite", "http-axum", "http-client-reqwest"] }
 # app_basic / http_client_basic / http_axum_response 写 HTTP 路由用
 axum = { workspace = true }
 tokio = { workspace = true, features = ["full"] }

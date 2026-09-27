@@ -22,9 +22,13 @@ pub use hygiea_db as db;
 #[cfg(feature = "redis-fred")]
 pub use hygiea_redis as redis;
 
-/// HTTP 服务组件：`http-axum`。HTTP 客户端是 `hygiea::net::http_client`（`http-client` feature）
+/// HTTP 服务组件：`http-axum`
 #[cfg(feature = "http-axum")]
 pub use hygiea_http as http;
+
+/// reqwest HTTP 客户端及组件：`http-client-reqwest`
+#[cfg(feature = "http-client-reqwest")]
+pub use hygiea_http_client as http_client;
 
 /// gRPC 服务组件：`grpc-tonic`
 #[cfg(feature = "grpc-tonic")]

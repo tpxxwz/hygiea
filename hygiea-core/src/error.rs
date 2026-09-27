@@ -410,7 +410,7 @@ macro_rules! bail {
 }
 
 /// 框架内置错误：默认启用的模块（错误处理、datetime、string 等）和 redact 用到的都在这里。
-/// 需要开 feature 的模块各有自己的错误 enum，比如 http 的 `hygiea::net::http_client::BaseHttpErr`。
+/// 需要开 feature 的模块各有自己的错误 enum，比如 http 的 `hygiea::http_client::reqwest_client::BaseHttpErr`。
 /// 它们共用项目前缀 999（配在 hygiea-core 的 Cargo.toml）。`BaseErr` 不带模块前缀，5 位业务码随意分配，
 /// 兜底的 `SysErr` 是 99999；`BaseHttpErr` 用模块前缀 01。是否撞码由 `init()` 的全局查重保证
 #[derive(hy_err)]

@@ -1,11 +1,13 @@
-//! 示范：给第三方常见的 `{code, msg, data}` 外层结构实现 `FromBody`，调用方在自己的项目里照这个写。
+//! 示范：给第三方常见的 `{code, msg, data}` 外层结构实现 `FromBytes`，调用方在自己的项目里照这个写。
 //!
 //! HTTP 2xx 之后解析外层结构。业务码和消息是对方返回的数据，原样交给调用方判断，不转成 HyErr——
 //! HyErr 只表示这次调用本身失败（网络、非 2xx、JSON 解析不了）。
 
-use hygiea_core::net::http_client::*;
+use std::error::Error as _;
+
 use hygiea_core::redact::{self, redact};
 use hygiea_core::{BaseErr, HyErr, ResultExt, err};
+use hygiea_http_client::reqwest_client::*;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -42,7 +44,7 @@ struct Envelope {
     data: serde_json::Value,
 }
 
-impl<T: DeserializeOwned + Serialize> FromBody for ApiResult<T> {
+impl<T: DeserializeOwned + Serialize> FromBytes for ApiResult<T> {
     fn from_bytes(headers: &HeaderMap, body: Bytes) -> Result<Self, HyErr> {
         let Json(envelope) = Json::<Envelope>::from_bytes(headers, body)?;
         let (data, raw_data) = if envelope.code == "0" {
@@ -121,7 +123,7 @@ const ROUTES: &[(&str, u16, &str)] = &[
     ),
 ];
 
-async fn fetch<T: DeserializeOwned + Serialize>(
+async fn fetch<T: DeserializeOwned + Serialize + Send>(
     base: &str,
     path: &str,
 ) -> Result<HttpResponse<ApiResult<T>>, HyErr> {
@@ -160,14 +162,20 @@ mod decoding {
         assert!(r.body.data.is_none());
     }
 
-    /// 业务成功但 data 结构对不上：JsonError，serde 的具体原因挂在 source 上
+    /// 业务成功但 data 结构对不上：send 报 DecodeFailed，from_bytes 报的 JsonError 在 source 上，
+    /// serde 的具体原因在更深一层
     #[tokio::test]
     async fn data_shape_mismatch() {
         let base = serve_routes(ROUTES).await;
         let err = fetch::<Vec<AddressInfo>>(&base, "/bad-data")
             .await
             .unwrap_err();
-        assert!(err.is(BaseErr::JsonError));
+        assert!(err.is(BaseHttpErr::DecodeFailed), "{err:#}");
+        let source = err
+            .source()
+            .and_then(|e| e.downcast_ref::<HyErr>())
+            .unwrap();
+        assert!(source.is(BaseErr::JsonError));
         assert!(format!("{err:#}").contains("invalid type"));
     }
 

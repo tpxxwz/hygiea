@@ -27,7 +27,7 @@
 
 - feature 之间的依赖关系只写在 `hygiea-core/Cargo.toml`。facade 的 feature 一对一转发给 core，组件 feature 只引入对应的组件 crate。
 - 不常用的功能做成 feature（比如 `redact`），常开的只放错误、日期、环境变量、字符串这类基础功能。
-- 命名：客户端是 `http-client` / `ws-client`，模块在 `net::http_client` / `net::ws_client`；`hygiea::http`、`hygiea::grpc` 是服务端组件。
+- 命名：reqwest 客户端用 `http-client-reqwest`，实现在 `hygiea-http-client::reqwest_client`；WebSocket 客户端在 `net::ws_client`；`hygiea::http`、`hygiea::grpc` 是服务端组件。
 
 ## 测试和示例
 
@@ -45,7 +45,7 @@
 
 ## 怎么验证
 
-- 改代码过程中只跑改动对应的测试，带上相关 feature，比如 `cargo test -p hygiea-core --features http-client --test http_client`。不要默认跑 `--workspace --all-features` 全量测试，同一条命令不要重复跑。
+- 改代码过程中只跑改动对应的测试，带上相关 feature，比如 `cargo test -p hygiea-http-client --features reqwest --test reqwest_client`。不要默认跑 `--workspace --all-features` 全量测试，同一条命令不要重复跑。
 - 准备提交时，先分析这次改动需要新增或修改哪些测试，确认后再按范围测。
 - 改了 feature 或 `cfg`，用几种 feature 组合 `cargo check`（不开、只开相关的、`--all-features`）。
 - 改了宏的报错信息，重新生成 trybuild 快照并检查 diff：

@@ -9,6 +9,7 @@ members = [
     "hygiea-components/hygiea-db",
     "hygiea-components/hygiea-redis",
     "hygiea-components/hygiea-http",
+    "hygiea-components/hygiea-http-client",
     "hygiea-components/hygiea-grpc",
 ]
 # 独立的 crate，不属于这个 workspace：有自己的 Cargo.lock 和 target
@@ -31,6 +32,7 @@ hygiea-macros = { path = "hygiea-macros", version = "0.1.1-alpha.5" }
 hygiea-db = { path = "hygiea-components/hygiea-db", version = "0.1.1-alpha.5" }
 hygiea-redis = { path = "hygiea-components/hygiea-redis", version = "0.1.1-alpha.5" }
 hygiea-http = { path = "hygiea-components/hygiea-http", version = "0.1.1-alpha.5" }
+hygiea-http-client = { path = "hygiea-components/hygiea-http-client", version = "0.1.1-alpha.5" }
 hygiea-grpc = { path = "hygiea-components/hygiea-grpc", version = "0.1.1-alpha.5" }
 # 只做 dev-dependency、不发布，所以不带版本号（cargo publish 时会自动去掉没有版本号的 dev-dependency）
 hygiea-test-support = { path = "hygiea-test-support" }

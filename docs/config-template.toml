@@ -1,7 +1,9 @@
 # hygiea 全量配置模板
 #
-# 列出了框架（RegistryConfig）和所有组件配置的全部配置项，值都是代码里的默认值。
-# 用法：复制到自己项目的 config/<env>.toml（比如 config/dev.toml），删掉用不到的段和项，改需要改的值。
+# 列出了框架（RegistryConfig）和所有组件配置的全部配置项：生效的值与代码默认值一致，
+# 默认不启用的可选项写成注释示例。
+# 用法：复制到自己项目的 config/<env>.toml（比如 config/dev.toml），删掉用不到的段和项，
+# 按需修改默认值或取消注释填写可选项。
 #
 # 规则：
 # - 所有配置项都可以不写，不写就用这里标的默认值；只需要写和默认值不同的项。
@@ -55,23 +57,23 @@ env_filter = ""
 # 被 docker、journald、重定向收集时不输出。写了就按写的来
 # ansi = true
 
-# 文件输出，可以写多个 [[registry.tracing.layers]]，每个输出到一组文件。默认一个都没有
-[[registry.tracing.layers]]
+# 文件输出默认没有 layer。需要时取消注释；可以写多个 [[registry.tracing.layers]]
+# [[registry.tracing.layers]]
 # 关掉这个 layer（配置保留，不生效）
-disable = false
+# disable = false
 # 这个 layer 单独的 filter，空字符串表示用 root_env_filter
-env_filter = ""
+# env_filter = ""
 # 日志目录，拼在 root_dir 下面；空字符串表示直接写在 root_dir 里；写绝对路径时不拼 root_dir
-dir = ""
+# dir = ""
 # 文件名 = 前缀 + （滚动时的日期）+ 后缀，比如 app.log、app.2024-01-06.log。
 # 同一目录下多个 layer 的文件名不能互相匹配（比如 app 和 app-error），启动时会报错
-filename_prefix = "app"
-filename_suffix = "log"
+# filename_prefix = "app"
+# filename_suffix = "log"
 # true：后台线程写文件，业务线程不等磁盘；队列上限 12.8 万行，满了新日志直接丢弃。
 # false：在打日志的线程里同步写，不丢日志，但磁盘慢时会卡住 tokio worker 线程
-non_blocking = true
+# non_blocking = true
 # 滚动周期，区分大小写：Minutely / Hourly / Daily / Weekly / Never
-rolling = "Never"
+# rolling = "Never"
 # 最多保留几个日志文件。不写就不清理（和 tracing-appender 一致）。
 # 配了 n 时，启动和每次滚动时把同目录下匹配的文件删到只剩 n-1 个再建新文件；
 # rolling = "Never" 时只有一个文件，配 1 等于每次启动清空
@@ -213,6 +215,40 @@ reconnect_multiplier = 2
 # port = 6379
 
 # =====================================================================================
+# 组件：ReqwestConfig（hygiea::http_client::reqwest_client，feature http-client-reqwest）
+# =====================================================================================
+[http_client]
+# ReqwestConfig 默认值；None 类型不写即为 None，需要时取消注释
+# user_agent = "my-app"
+# 默认请求头为空；需要时取消注释，重复头用数组
+# default_headers = { x-api-key = { value = "secret", sensitive = true }, accept = ["application/json", "text/plain"] }
+# 非 UTF-8 头值可用字节数组：default_headers = { x-binary = { bytes = [128, 65], sensitive = true } }
+cookie_store = false
+transparent_compression = true
+max_redirects = 10
+referer = true
+no_proxy = false
+# 不配超时即 None；需要时使用 Duration 的 secs / nanos 结构
+# timeout = { secs = 5, nanos = 0 }
+# read_timeout = { secs = 5, nanos = 0 }
+# connect_timeout = { secs = 2, nanos = 0 }
+# 默认代理列表为空；启用下方 [[http_client.proxies]] 前，删除或注释这一行
+proxies = []
+# 默认不覆盖 DNS；要指定域名解析，替换下一行的空数组
+resolve = []
+# resolve = [["example.com", ["127.0.0.1:80"]]]
+# 代理示例：取消注释时先删除上面的 proxies = []。每加一个 [[http_client.proxies]] 就追加一个代理
+# [[http_client.proxies]]
+# kind = "all" # all / http / https；不写默认 all
+# url = "http://127.0.0.1:7890"
+# 以下均为可选项；代理认证两种写法选一种
+# basic_auth = { username = "user", password = "pass" }
+# custom_http_auth = { value = "Bearer token", sensitive = true }
+# headers = { x-proxy-tag = "app" }
+# 仅这个代理排除的主机；区别于上面的全局 no_proxy = false
+# no_proxy = "localhost, .example.com"
+
+# =====================================================================================
 # 组件：AxumConfig（hygiea::http，feature http-axum）
 # =====================================================================================
 [http]
@@ -225,19 +261,19 @@ base_path = ""
 # 有长请求（大文件上传、长轮询）就配长一点
 # shutdown_timeout_secs = 30
 
-# 超时，整段可以不写（不写表示都不设）
-[http.timeout]
+# 超时默认不设；需要时取消注释表头和所需字段
+# [http.timeout]
 # 单个请求处理超过这么多秒，返回 408
-request_read_secs = 30
+# request_read_secs = 30
 # 下面三项当前版本未生效（保留字段）
 # connect_secs = 5
 # header_read_secs = 5
 # response_write_secs = 30
 
-# 限制，整段可以不写（不写表示都不限制）
-[http.limits]
+# 限制默认不设；需要时取消注释表头和所需字段
+# [http.limits]
 # 请求体最大字节数，超过返回 413
-max_body_size = 10485760
+# max_body_size = 10485760
 # 当前版本未生效（保留字段）
 # max_header_size = 16384
 

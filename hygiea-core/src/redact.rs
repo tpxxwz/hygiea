@@ -85,7 +85,8 @@ pub fn to_redacted_json<T: Serialize + ?Sized>(value: &T) -> Result<String, HyEr
 
 /// 在日志模式下执行 `f`：期间当前线程上的任何 serde 序列化（JSON、urlencoded……）都会打码。
 /// http 模块用它按 reqwest 自己的编码方式拼出打码后的 URL
-pub(crate) fn scope<R>(f: impl FnOnce() -> R) -> R {
+#[doc(hidden)]
+pub fn scope<R>(f: impl FnOnce() -> R) -> R {
     // f 中途 panic 也要把深度减回去，不然这个线程之后的正常序列化全被打码。
     // 必须绑定到具名变量：写成 `let _ = Guard;` 会当场 drop，开关立刻就关了
     struct Guard;

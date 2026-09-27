@@ -1,6 +1,6 @@
 //! 日志里的打码：请求和响应里标了 `#[redact(mask)]` 的字段不出现原文，发出去和收回来的内容不受影响
 
-use hygiea_core::net::http_client::*;
+use hygiea_http_client::reqwest_client::*;
 use serde::{Deserialize, Serialize};
 
 use crate::support::*;
@@ -208,7 +208,7 @@ mod response {
         data: T,
     }
 
-    async fn send<Resp: FromBody>(
+    async fn send<Resp: FromBody + Send>(
         path: &str,
     ) -> (Result<HttpResponse<Resp>, hygiea_core::HyErr>, String) {
         let base = serve_routes(ROUTES).await;

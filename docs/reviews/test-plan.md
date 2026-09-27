@@ -40,9 +40,9 @@
 | `string/template.rs` 的缓存上限测试 | 会把全局缓存冲满，影响其他测试 | 标 `#[serial]`，或者改成只测淘汰函数 |
 | `datetime/local.rs` 的 `test_parse_ext_with_offset` | 和 `layout.rs` 里的一份几乎一模一样 | 删掉 local 那份 |
 | `datetime/local.rs` 的 `LOCAL_TIMEZONE_OVERRIDE` | 全局的 RwLock，新测试漏标 `#[serial]` 就会随机失败 | 在测试辅助代码上加注释说明 |
-| `tests/http_client`：`masking.rs` 的 `non_2xx_logs_raw` / `decode_failure_logs_raw`、`send.rs` 的 `send_decode_failure_is_json_error`、`logs.rs` 的两处 | 和 `logging.rs` 里的单元测试重复 | 集成层只保留一条端到端的用例 |
-| `tests/http_client`：`client_config.rs` 的 `is_timeout` 和 `send.rs` 的 `reqwest_source` | 同一个辅助函数写了两份 | 挪到 `support.rs` |
-| `tests/http_client/client_config.rs` 的超时测试 | 用 50ms 超时配 300ms 延迟，CI 很慢时可能不稳 | 延迟拉大到 2s |
+| `hygiea-http-client/tests/reqwest_client`：`masking.rs` 的 `non_2xx_logs_raw` / `decode_failure_logs_raw`、`send.rs` 的 `send_decode_failure_is_json_error`、`logs.rs` 的两处 | 和 `logging.rs` 里的单元测试重复 | 集成层只保留一条端到端的用例 |
+| `hygiea-http-client/tests/reqwest_client`：`client_config.rs` 的 `is_timeout` 和 `send.rs` 的 `reqwest_source` | 同一个辅助函数写了两份 | 挪到 `support.rs` |
+| `hygiea-http-client/tests/reqwest_client/client_config.rs` 的超时测试 | 用 50ms 超时配 300ms 延迟，CI 很慢时可能不稳 | 延迟拉大到 2s |
 | `hygiea-db` 的 `sqlx_sqlite.rs` 测试 | 设了可能多余的 `shared_cache: true`；用的是 `&pool.inner`，没走对外的 Deref | 去掉，或者单独写一个测试说明为什么需要；改成用 `&*pool` |
 | `hygiea-db` 的 `seaorm_postgres.rs` 测试 | "没有参数时不带问号"和默认 url 的测试重复；Deref 测试只检查了能编译，没有断言 | 合并；删掉 Deref 测试，或者补上断言 |
 | `hygiea-macros/tests/hy_err_ui.rs`、`redact_ui.rs` | fail 和 pass 放在一个测试函数里，失败时不好定位 | 拆成两个函数 |
@@ -245,7 +245,7 @@
 | B3 | datetime 的单元测试和可选的集成测试 | `cargo test -p hygiea-core --all-features --lib datetime::` |
 | B4 | log 的单元测试，以及 4 个 log 集成测试文件 | `cargo test -p hygiea-core --features log --lib log::`，加上对应的 `--test` |
 | B5 | app 的单元测试，以及 3 个 app 集成测试文件 | `cargo test -p hygiea-core --features app --lib app::`，加上对应的 `--test` |
-| B6 | test-support（先加 `Reply::bytes`、`Captured::text()` 改 lossy），再做 http_client 的调整和补充 | `cargo test -p hygiea-core --features http-client --test http_client`、`cargo test -p hygiea-test-support` |
+| B6 | test-support（先加 `Reply::bytes`、`Captured::text()` 改 lossy），再做 http_client 的调整和补充 | `cargo test -p hygiea-http-client --features reqwest --test reqwest_client`、`cargo test -p hygiea-test-support` |
 | B7 | macros 的单元测试、trybuild、两个 hy_err 集成测试和 redact_runtime | `TRYBUILD=overwrite cargo test -p hygiea-macros --test hy_err_ui --test redact_ui`，检查快照的 diff |
 | B8 | hygiea-db、hygiea-redis | `cargo test -p hygiea-db --all-features`、`cargo test -p hygiea-redis --all-features` |
 | B9 | hygiea-http（先加公开的 router 构造函数）、hygiea-grpc | `cargo test -p hygiea-http --all-features`、`cargo test -p hygiea-grpc --all-features` |

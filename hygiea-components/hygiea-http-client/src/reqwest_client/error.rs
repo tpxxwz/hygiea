@@ -1,6 +1,6 @@
 //! http 模块的错误。和 [`BaseErr`](crate::BaseErr) 共用项目前缀 999，模块前缀是 01，错误码全局唯一
 
-use crate::{HyErr, err, hy_err};
+use hygiea_core::{HyErr, err, hy_err};
 
 use super::{Method, StatusCode};
 
@@ -10,7 +10,9 @@ use super::{Method, StatusCode};
 /// - 发出之前：[`InvalidUrl`](Self::InvalidUrl)、[`InvalidParams`](Self::InvalidParams)、
 ///   [`InvalidHeader`](Self::InvalidHeader)、[`RequestBuildFailed`](Self::RequestBuildFailed)。
 ///   `send` 按这个顺序逐项检查，报的就是第一个有问题的部分；是调用方参数的问题，直接返回，不打失败日志
-/// - 发出之后：[`RequestFailed`](Self::RequestFailed)、[`NonSuccessStatus`](Self::NonSuccessStatus)，打失败日志
+/// - 发出之后：[`RequestFailed`](Self::RequestFailed)、[`NonSuccessStatus`](Self::NonSuccessStatus)、
+///   [`DecodeFailed`](Self::DecodeFailed)，打失败日志。这三个的 err_args 统一带 `method`、`url`、`status`
+///   （还没收到响应时是 `null`），读完了 body 的（后两个）再带 `body`
 ///
 /// 原始错误挂在 source 上，要判断超时、连接失败之类决定重试时直接 downcast：
 /// `err.source().and_then(|e| e.downcast_ref::<reqwest::Error>())`
@@ -18,7 +20,7 @@ use super::{Method, StatusCode};
 #[err_code_module_prefix = "01"]
 pub enum BaseHttpErr {
     // ---- 建 client ----
-    /// `ClientConfig::build` 失败，比如 TLS 后端初始化失败、代理配置不合法；原始错误挂在 source 上
+    /// `ReqwestConfig::build` 失败，比如 TLS 后端初始化失败、代理配置不合法；原始错误挂在 source 上
     #[error(err_code = "001", err_tpl = "Http client build failed")]
     ClientBuildFailed,
 
@@ -44,7 +46,7 @@ pub enum BaseHttpErr {
     RequestBuildFailed,
 
     // ---- 发出之后 ----
-    /// 请求发出去了但失败了：超时、连不上、TLS 握手失败、读 body 中断
+    /// 请求发出去了但失败了：超时、连不上、TLS 握手失败、读 body 中断。读 body 中断时 `status` 有值
     #[error(
         err_code = "201",
         err_tpl = "Http request failed: {{ method }} {{ url }}"
@@ -56,6 +58,13 @@ pub enum BaseHttpErr {
         err_tpl = "Http {{ status }}: {{ method }} {{ url }}"
     )]
     NonSuccessStatus,
+    /// 2xx，body 也读完了，但解码成 `Resp` 失败（[`FromBytes::from_bytes`](super::FromBytes::from_bytes)
+    /// 返回了 `Err`）。原来的错误挂在 source 上；`body` 在 err_args 里，不渲染进对外消息
+    #[error(
+        err_code = "204",
+        err_tpl = "Http response decode failed: {{ method }} {{ url }}"
+    )]
+    DecodeFailed,
 
     /// 把流式 body 写进调用方给的 writer 时失败（磁盘满、没权限……），本地问题，不是请求失败；
     /// 原始的 io 错误挂在 source 上
@@ -93,14 +102,23 @@ pub(super) fn request_build_failed(method: &Method, url: &str, e: reqwest::Error
         .with_source(e.without_url())
 }
 
-/// 请求发出去了但失败了
-pub(super) fn request_failed(method: &Method, url: &str, e: reqwest::Error) -> HyErr {
-    err!(BaseHttpErr::RequestFailed, { "method": method.as_str(), "url": url })
-        .with_source(e.without_url())
+/// 请求发出去了但失败了。还没收到响应头时 `status` 是 `None`
+pub(super) fn request_failed(
+    method: &Method,
+    url: &str,
+    status: Option<StatusCode>,
+    e: reqwest::Error,
+) -> HyErr {
+    err!(BaseHttpErr::RequestFailed, {
+        "method": method.as_str(),
+        "url": url,
+        "status": status.map(|s| s.as_u16()),
+    })
+    .with_source(e.without_url())
 }
 
 /// 非 2xx。`body` 放在 err_args 里，打日志可见，不渲染进对外消息
-/// `ClientConfig::build` 失败
+/// `ReqwestConfig::build` 失败
 pub(super) fn client_build_failed(e: reqwest::Error) -> HyErr {
     err!(BaseHttpErr::ClientBuildFailed).with_source(e)
 }
@@ -124,11 +142,27 @@ pub(super) fn non_success_status(
     })
 }
 
+/// 2xx 但解码失败。`source` 是 `from_bytes` 返回的错误，`body` 和非 2xx 一样放 err_args
+pub(super) fn decode_failed(
+    method: &Method,
+    status: StatusCode,
+    url: &str,
+    body: &str,
+    source: HyErr,
+) -> HyErr {
+    err!(BaseHttpErr::DecodeFailed, {
+        "method": method.as_str(),
+        "url": url,
+        "status": status.as_u16(),
+        "body": body,
+    })
+    .with_source(source)
+}
+
 #[cfg(test)]
 mod tests {
-    use std::error::Error as _;
-
     use hygiea_test_support::http_server::closed_port_url;
+    use std::error::Error as _;
 
     use super::*;
 
@@ -170,6 +204,24 @@ mod tests {
             assert_eq!(err.err_args()["method"], "POST");
             assert_eq!(err.err_args()["url"], "http://h/x");
             assert_eq!(err.err_args()["body"], "body");
+        }
+
+        /// 字段和 NonSuccessStatus 一致，from_bytes 的原错误挂在 source 上
+        #[test]
+        fn decode_failed_carries_fields_and_source() {
+            let inner = err!(hygiea_core::BaseErr::JsonError, "bad json");
+            let err = decode_failed(&Method::GET, StatusCode::OK, "http://h/x", "{", inner);
+            assert!(err.is(BaseHttpErr::DecodeFailed));
+            assert_eq!(err.err_args()["status"], 200);
+            assert_eq!(err.err_args()["method"], "GET");
+            assert_eq!(err.err_args()["url"], "http://h/x");
+            assert_eq!(err.err_args()["body"], "{");
+            let source = err
+                .source()
+                .and_then(|e| e.downcast_ref::<HyErr>())
+                .unwrap();
+            assert!(source.is(hygiea_core::BaseErr::JsonError));
+            assert!(!format!("{err}").contains('{'));
         }
     }
 
@@ -215,7 +267,7 @@ mod tests {
         #[tokio::test]
         async fn request_failed() {
             let e = reqwest_error_with_query().await;
-            let err = super::request_failed(&Method::GET, "http://h/x", e);
+            let err = super::request_failed(&Method::GET, "http://h/x", None, e);
             assert!(err.is(BaseHttpErr::RequestFailed));
             let rendered = format!("{err:#}");
             assert!(!rendered.contains("token=secret"), "{rendered}");

@@ -11,6 +11,7 @@
     feature = "db-seaorm-postgres",
     feature = "redis-fred",
     feature = "http-axum",
+    feature = "http-client-reqwest",
     feature = "grpc-tonic"
 ))]
 
@@ -18,7 +19,8 @@ use hygiea::app::RegistryConfig;
 use hygiea::db::{SeaOrmPgConfig, SqlxPgConfig, SqlxSqliteConfig};
 use hygiea::grpc::TonicConfig;
 use hygiea::http::AxumConfig;
-use hygiea::log::{FileLayer, TracingConfig};
+use hygiea::http_client::reqwest_client::ReqwestConfig;
+use hygiea::log::TracingConfig;
 use hygiea::redis::RedisConfig;
 use serde::Deserialize;
 
@@ -32,6 +34,7 @@ struct Template {
     db_sqlite: SqlxSqliteConfig,
     redis: RedisConfig,
     http: AxumConfig,
+    http_client: ReqwestConfig,
     grpc: TonicConfig,
 }
 
@@ -58,36 +61,30 @@ fn component_values_are_code_defaults() {
     assert!(same(&t.db_seaorm, &SeaOrmPgConfig::default()));
     assert!(same(&t.db_sqlite, &SqlxSqliteConfig::default()));
     assert!(same(&t.redis, &RedisConfig::default()));
+    assert!(same(&t.http_client, &ReqwestConfig::default()));
     let grpc_default = TonicConfig::default();
     assert_eq!(t.grpc.addr, grpc_default.addr);
-    assert_eq!(t.grpc.shutdown_timeout_secs, grpc_default.shutdown_timeout_secs);
+    assert_eq!(
+        t.grpc.shutdown_timeout_secs,
+        grpc_default.shutdown_timeout_secs
+    );
 }
 
 #[test]
 fn registry_values_are_code_defaults() {
     let t = template();
     let default = RegistryConfig::default();
-    assert_eq!(t.registry.shutdown_timeout_secs, default.shutdown_timeout_secs);
+    assert_eq!(
+        t.registry.shutdown_timeout_secs,
+        default.shutdown_timeout_secs
+    );
     assert_eq!(t.registry.shutdown_delay_secs, default.shutdown_delay_secs);
-    // layers 默认是空的，模板里放了一个示例 layer，它的值是 FileLayer 的默认值
-    let TracingConfig { layers, .. } = t.registry.tracing.clone();
-    assert_eq!(layers.len(), 1);
-    assert!(same(&layers[0], &FileLayer::default()));
-    let tracing = TracingConfig {
-        layers: Vec::new(),
-        ..t.registry.tracing
-    };
-    assert!(same(&tracing, &TracingConfig::default()));
+    assert!(same(&t.registry.tracing, &TracingConfig::default()));
 }
 
 #[test]
-fn http_values_are_code_defaults_except_example_sections() {
+fn http_values_are_code_defaults() {
     let t = template();
     let default = AxumConfig::default();
-    assert_eq!(t.http.addr(), default.addr());
-    assert_eq!(t.http.base_path, default.base_path);
-    assert_eq!(t.http.shutdown_timeout_secs, default.shutdown_timeout_secs);
-    // timeout / limits 默认不设，模板里作为示例写了值
-    assert_eq!(t.http.timeout.unwrap().request_read_secs, Some(30));
-    assert_eq!(t.http.limits.unwrap().max_body_size, Some(10 * 1024 * 1024));
+    assert!(same(&t.http, &default));
 }

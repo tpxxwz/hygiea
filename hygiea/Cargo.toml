@@ -26,6 +26,7 @@ hygiea-core = { workspace = true }
 hygiea-db = { workspace = true, optional = true }
 hygiea-redis = { workspace = true, optional = true }
 hygiea-http = { workspace = true, optional = true }
+hygiea-http-client = { workspace = true, optional = true }
 hygiea-grpc = { workspace = true, optional = true }
 
 
@@ -40,7 +41,6 @@ default = []  # 用户明确选择需要的功能
 # ---- core 的功能：一对一转发，feature 之间的依赖关系只在 core 里写 ----
 app = ["hygiea-core/app"]
 log = ["hygiea-core/log"]
-http-client = ["hygiea-core/http-client"]
 ws-client = ["hygiea-core/ws-client"]
 redact = ["hygiea-core/redact"]
 json = ["hygiea-core/json"]
@@ -54,4 +54,5 @@ db-sqlx-sqlite = ["dep:hygiea-db", "hygiea-db/sqlx", "hygiea-db/sqlite"]
 db-seaorm-postgres = ["dep:hygiea-db", "hygiea-db/seaorm", "hygiea-db/postgres"]
 redis-fred = ["dep:hygiea-redis", "hygiea-redis/fred"]
 http-axum = ["dep:hygiea-http", "hygiea-http/axum"]
+http-client-reqwest = ["dep:hygiea-http-client", "hygiea-http-client/reqwest"]
 grpc-tonic = ["dep:hygiea-grpc", "hygiea-grpc/tonic"]

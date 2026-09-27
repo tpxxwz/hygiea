@@ -11,7 +11,9 @@
 use axum::Router;
 use axum::routing::{get, post};
 use hygiea::http::{AxumConfig, HttpLimits, arity0, arity1, build_router};
-use hygiea::net::http_client::{BaseHttpErr, ClientConfig, Json, Method, RequestConfig};
+use hygiea::http_client::reqwest_client::{
+    BaseHttpErr, Json, Method, RequestConfig, ReqwestConfig,
+};
 use hygiea::{BaseErr, HyErr, err, hy_err};
 use serde::{Deserialize, Serialize};
 
@@ -35,7 +37,7 @@ struct Echo {
 }
 
 /// 客户端这边解出来的响应外壳，字段和 `AxumHttpResponse` 序列化后的形状一致。
-/// `FromBody` 要求 `Json<T>` 的 `T` 同时实现 Serialize（日志预览要用）和 DeserializeOwned，
+/// `FromBytes` 要求 `Json<T>` 的 `T` 同时实现 Serialize（日志预览要用）和 DeserializeOwned，
 /// 这里其实只用到反序列化
 #[derive(Serialize, Deserialize, Debug)]
 struct Envelope<T> {
@@ -101,7 +103,7 @@ async fn main() -> Result<(), HyErr> {
         let _ = axum::serve(listener, router).await;
     });
 
-    let client = ClientConfig::default().build()?;
+    let client = ReqwestConfig::default().build()?;
     let url = |path: &str| format!("http://{addr}{path}");
 
     // 1. 正常返回

@@ -1,6 +1,6 @@
 //! `send`：请求发了什么、响应怎么返回、各类失败报什么错
 
-use hygiea_core::net::http_client::*;
+use hygiea_http_client::reqwest_client::*;
 
 use crate::support::*;
 
@@ -8,7 +8,9 @@ use crate::support::*;
 mod request_content {
     use super::*;
 
-    async fn seen<P: serde::Serialize, B: IntoBody>(cfg: RequestConfig<P, B>) -> serde_json::Value {
+    async fn seen<P: serde::Serialize + Send, B: IntoBody + Send>(
+        cfg: RequestConfig<P, B>,
+    ) -> serde_json::Value {
         cfg.send::<Json<serde_json::Value>>(&local_config().build().unwrap())
             .await
             .unwrap()
@@ -82,7 +84,7 @@ mod request_content {
         let seen = seen(RequestConfig::with_body(
             Method::PUT,
             format!("{base}/up"),
-            Raw(ContentType::OctetStream, body),
+            RawStream(ContentType::OctetStream, body),
         ))
         .await;
         assert_eq!(seen["headers"]["content-type"], "application/octet-stream");
@@ -100,7 +102,7 @@ mod request_content {
         let seen = seen(RequestConfig::with_body(
             Method::PUT,
             format!("{base}/file"),
-            Raw(ContentType::Plain, body),
+            RawStream(ContentType::Plain, body),
         ))
         .await;
         assert_eq!(seen["headers"]["content-type"], "text/plain");
@@ -360,6 +362,7 @@ mod transport_errors {
             .unwrap_err();
         assert!(err.is(BaseHttpErr::RequestFailed));
         assert_eq!(err.err_args()["url"], format!("{base}/x"));
+        assert!(err.err_args()["status"].is_null());
         assert!(reqwest_source(&err).is_connect());
     }
 
@@ -391,5 +394,7 @@ mod transport_errors {
             .unwrap_err();
         assert!(err.is(BaseHttpErr::RequestFailed));
         assert!(reqwest_source(&err).is_body() || reqwest_source(&err).is_decode());
+        // 响应头已经到了，status 有值；发送失败时是 null（见 connect_failure）
+        assert_eq!(err.err_args()["status"], 200);
     }
 }

@@ -36,12 +36,11 @@ datetime-iana = ["dep:time-tz"]
 # 日志打码：#[redact] 和 to_redacted_json
 redact = ["hygiea-macros/redact"]
 
-http-client = ["redact", "dep:reqwest", "dep:bytes", "dep:encoding_rs", "dep:futures-util", "dep:tokio", "tokio/io-util", "dep:tracing"]
 json = []
 ws-client = ["dep:tokio-tungstenite"]
 
 # All features
-full = ["app", "log", "http-client", "json", "ws-client", "datetime-chrono", "datetime-iana", "redact"]
+full = ["app", "log", "json", "ws-client", "datetime-chrono", "datetime-iana", "redact"]
 
 [dependencies]
 # Error handling (always on)
@@ -74,10 +73,6 @@ chrono = { workspace = true, optional = true }
 time = { workspace = true }
 time-tz = { workspace = true, optional = true }
 regex = { workspace = true }
-reqwest = { workspace = true, optional = true }
-bytes = { workspace = true, optional = true }
-encoding_rs = { workspace = true, optional = true }
-futures-util = { workspace = true, optional = true }
 tokio-tungstenite = { workspace = true, optional = true }
 
 [dev-dependencies]

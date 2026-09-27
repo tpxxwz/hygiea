@@ -1,22 +1,29 @@
-//! client 级配置：[`ClientConfig`] 及其到 `ClientBuilder` 的转换
+//! reqwest 的客户端配置 [`ReqwestConfig`] 和应用组件 [`ReqwestComponent`]。
 
 use std::net::SocketAddr;
 use std::time::Duration;
 
 use reqwest::redirect::Policy;
+use serde::Deserialize;
 
-use crate::HyErr;
+use hygiea_core::app::{
+    BaseAppErr, CancellationToken, Component, Name, ResourceId, Resources, async_trait,
+};
+use hygiea_core::{HyErr, ResultExt, err};
 
+use super::config::{HeaderMapConfig, ProxyConfig};
 use super::error::client_build_failed;
-use super::parts::checked_headers;
-use super::{Client, ClientBuilder, HeaderMap, IntoHeaders, Proxy};
+use super::headers::{IntoHeaders, checked_headers};
+use super::{Client, ClientBuilder, HeaderMap};
+
+// ---------------------------- 客户端配置 ----------------------------
 
 /// `ClientBuilder` 的纯数据镜像：一个字段对一个 `ClientBuilder` 方法，字段顺序与方法声明顺序一致。
 ///
-/// 用 [`ClientConfig::build`] 造出的 `Client` 内部是 `Arc`，连接池挂在它身上，
+/// 用 [`ReqwestConfig::build`] 造出的 `Client` 内部是 `Arc`，连接池挂在它身上，
 /// 所以要长期持有并共享（clone 很廉价）；在请求路径上反复构造等于池子永远是空的，每次都重新建连和握手。
 ///
-/// 本 crate 的 `http-client` feature 已经把 reqwest 的 feature 集固定成
+/// `hygiea-http-client` crate 已经把 reqwest 的 feature 集固定成
 /// `json / query / form / stream / multipart / charset / gzip / brotli / zstd / deflate /
 /// cookies / http2 / socks / system-proxy / rustls`，且 cargo feature 只增不减，下游关不掉，
 /// 所以下面的字段一律可用，不需要额外开什么。
@@ -26,8 +33,8 @@ use super::{Client, ClientBuilder, HeaderMap, IntoHeaders, Proxy};
 /// ## 压缩：四个开关合成一个
 ///
 /// reqwest 的 `gzip` / `brotli` / `zstd` / `deflate` 合成一个
-/// [`ClientConfig::transparent_compression`]，按算法单独开关没有真实场景，
-/// 而且以后新增算法只需在 `From<ClientConfig> for ClientBuilder` 里多接一行，对外 API 不变。
+/// [`ReqwestConfig::transparent_compression`]，按算法单独开关没有真实场景，
+/// 而且以后新增算法只需在 `TryFrom<ReqwestConfig> for ClientBuilder` 里多接一行，对外 API 不变。
 ///
 /// ## 不收 `retry`
 ///
@@ -37,7 +44,7 @@ use super::{Client, ClientBuilder, HeaderMap, IntoHeaders, Proxy};
 /// 反而让人误以为重试已经配好了。另外 `retry::Builder` 是含闭包的 scoped 策略，本来也做不成纯数据。
 ///
 /// 注意：**不配 `retry` 不等于关掉重试**。reqwest 在没有显式策略时跑的就是上面那套默认 nack 重试，
-/// 这层仍然生效。真要覆盖它就 `ClientBuilder::from(config).retry(...)`。
+/// 这层仍然生效。真要覆盖它就 `ClientBuilder::try_from(config)?.retry(...)`。
 ///
 /// ## 默认值够用而不收
 ///
@@ -65,14 +72,14 @@ use super::{Client, ClientBuilder, HeaderMap, IntoHeaders, Proxy};
 /// reqwest + rustls 走的是 `rustls_platform_verifier`，也就是**操作系统的信任库**——
 /// 公司私有 CA、自签 CA 只要装进容器的信任库（`/usr/local/share/ca-certificates/` +
 /// `update-ca-certificates`，或 k8s 里挂 ConfigMap 到 `/etc/ssl/certs`），代码里什么都不用配。
-/// 真需要 mTLS 客户端证书或临时放宽校验时，用 `ClientBuilder::from(config)` 拿到原生 builder 再接着链。
+/// 真需要 mTLS 客户端证书或临时放宽校验时，用 `ClientBuilder::try_from(config)` 拿到原生 builder 再接着链。
 ///
 /// ## 不收 `local_address` / `interface`
 ///
 /// 这两个是绑定出站源 IP 和出站网卡的，只对多路径的裸机/虚拟机有意义。容器和 k8s Pod 有独立的
 /// network namespace，里面只有一个 Pod IP，节点上的 ENI 地址在 Pod 里根本不存在，绑了直接
 /// `EADDRNOTAVAIL`；出口选择由 CNI、egress gateway 这些编排层决定。
-/// 要切换出站 IP 用 [`ClientConfig::proxies`]。
+/// 要切换出站 IP 用 [`ReqwestConfig::proxies`]。
 ///
 /// ## 不收的 HTTP 版本相关配置
 ///
@@ -102,16 +109,18 @@ use super::{Client, ClientBuilder, HeaderMap, IntoHeaders, Proxy};
 ///   非 Linux 系平台上这个方法根本不存在。
 /// - `unix_socket` / `windows_named_pipe`：让整个 `Client` 改走本机 IPC 而不是 TCP，
 ///   用于对话 Docker daemon 这类本地守护进程，和调远程 REST 接口无关。
-/// - 以下是 trait 对象或含闭包，塞不进纯数据结构，需要时用 `ClientBuilder::from(config)` 拿到原生 builder
+/// - 以下是 trait 对象或含闭包，塞不进纯数据结构，需要时用 `ClientBuilder::try_from(config)` 拿到原生 builder
 ///   再接着链：`cookie_provider`、`redirect` 的自定义 `Policy`、`dns_resolver`、
 ///   `connector_layer`、`tls_backend_*`（TLS 后端由 feature 选定）。
-#[derive(Debug, Clone)]
-pub struct ClientConfig {
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ReqwestConfig {
     /// 默认 User-Agent 头，每个请求都带；单请求显式设 `User-Agent` 会覆盖它
     pub user_agent: Option<String>,
     /// 每个请求都带的默认头，单请求同名头覆盖这里的值。
-    /// 通过 [`ClientConfig::default_headers`] 添加会校验保留字段，直接改这个字段则不校验
-    pub default_headers: HeaderMap,
+    /// 配置文件支持字符串、同名头的值列表，以及带 `sensitive` 标记的值
+    /// 通过 [`ReqwestConfig::default_headers`] 添加会校验保留字段，直接改这个字段则不校验
+    pub default_headers: HeaderMapConfig,
 
     /// 进程内 cookie 罐子：自动存响应的 Set-Cookie，并在后续同域请求上带回去。
     pub cookie_store: bool,
@@ -126,21 +135,21 @@ pub struct ClientConfig {
     /// 所以宁可返回 `None` 也不给一个错的数
     pub transparent_compression: bool,
 
-    /// 重定向跟随上限，`None` = 不跟随、3xx 原样返回，超出上限报错
-    pub max_redirects: Option<usize>,
+    /// 重定向跟随上限，`0` = 不跟随、3xx 原样返回，超出上限报错
+    pub max_redirects: usize,
     /// 跟随重定向时把上一跳的 URL 写进 `Referer` 头，降级到 http 时不写
     pub referer: bool,
 
     /// 显式代理，按加入顺序对每个请求依次匹配，第一个命中的生效。
-    /// socks5:// 之类的 SOCKS 代理同样走这里。
+    /// socks5:// 之类的 SOCKS 代理同样走这里。配置文件支持认证、代理头和逐代理排除列表。
     /// 不配时会自动拾取系统/环境变量里的代理设置
-    pub proxies: Vec<Proxy>,
+    pub proxies: Vec<ProxyConfig>,
     /// 彻底禁用代理，连系统/环境变量里的也不认。和 `proxies` 同时给时以本项为准
     pub no_proxy: bool,
 
     /// 整个请求的时限：从发出到响应 body 读完。需要更长（比如大文件下载）时，
     /// 在 [`RequestConfig::timeout`](super::RequestConfig::timeout) 上按次覆盖即可（调大调小都行），
-    /// 不必单开 `Client`；不能调成无限
+    /// 不必单开 `Client`；不配置则不设客户端级总时限
     pub timeout: Option<Duration>,
     /// 对端最长多久不给数据。覆盖等响应头（服务端处理时间）和 body 分块之间的空闲两段，
     /// 每读到数据就重置，不累计总耗时，所以不会掐断持续传输的长下载。不能被单请求覆盖
@@ -153,82 +162,84 @@ pub struct ClientConfig {
     pub resolve: Vec<(String, Vec<SocketAddr>)>,
 }
 
-impl ClientConfig {
-    /// 等价于 [`ClientConfig::default`]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// 设置默认头，一次传全部，见 [`IntoHeaders`]。转换失败或使用了保留字段时返回 `Err`；
-    /// 重复调用以最后一次为准
-    pub fn default_headers(mut self, headers: impl IntoHeaders) -> Result<Self, HyErr> {
-        self.default_headers = checked_headers(headers)?;
-        Ok(self)
-    }
-
-    /// 追加一个代理，见 [`ClientConfig::proxies`]
-    pub fn proxy(mut self, proxy: Proxy) -> Self {
-        self.proxies.push(proxy);
-        self
-    }
-
-    /// 追加一条写死的域名解析，见 [`ClientConfig::resolve`](#structfield.resolve)
-    pub fn resolve(mut self, domain: impl Into<String>, addrs: Vec<SocketAddr>) -> Self {
-        self.resolve.push((domain.into(), addrs));
-        self
-    }
-
-    /// 造出 `Client`。reqwest 构建失败（比如 TLS 后端初始化失败）时返回
-    /// [`ClientBuildFailed`](super::BaseHttpErr::ClientBuildFailed)，原始错误在 source 上
-    pub fn build(self) -> Result<Client, HyErr> {
-        ClientBuilder::from(self)
-            .build()
-            .map_err(client_build_failed)
-    }
-}
-
-impl Default for ClientConfig {
+impl Default for ReqwestConfig {
     fn default() -> Self {
         Self {
             user_agent: None,
-            default_headers: HeaderMap::new(),
+            default_headers: HeaderMapConfig::default(),
             cookie_store: false,
             transparent_compression: true,
-            max_redirects: Some(10),
+            max_redirects: 10,
             referer: true,
             proxies: Vec::new(),
             no_proxy: false,
-            timeout: Some(Duration::from_secs(5)),
-            read_timeout: Some(Duration::from_secs(5)),
-            connect_timeout: Some(Duration::from_secs(2)),
+            timeout: None,
+            read_timeout: None,
+            connect_timeout: None,
             resolve: Vec::new(),
         }
     }
 }
 
-impl From<ClientConfig> for ClientBuilder {
-    fn from(config: ClientConfig) -> Self {
-        let decompress = config.transparent_compression;
-        let mut builder = Client::builder()
-            .cookie_store(config.cookie_store)
-            .gzip(decompress)
-            .brotli(decompress)
-            .zstd(decompress)
-            .deflate(decompress)
-            .redirect(match config.max_redirects {
-                Some(max) => Policy::limited(max),
-                None => Policy::none(),
-            })
-            .referer(config.referer);
+impl ReqwestConfig {
+    /// 设置默认头，一次传全部，见 [`IntoHeaders`]。转换失败或使用了保留字段时返回 `Err`；
+    /// 重复调用以最后一次为准
+    pub fn default_headers(mut self, headers: impl IntoHeaders) -> Result<Self, HyErr> {
+        self.default_headers = checked_headers(headers)?.into();
+        Ok(self)
+    }
+
+    /// 追加一个代理，见 [`ReqwestConfig::proxies`]
+    pub fn proxy(mut self, proxy: ProxyConfig) -> Self {
+        self.proxies.push(proxy);
+        self
+    }
+
+    /// 追加一条写死的域名解析，见 [`ReqwestConfig::resolve`](#structfield.resolve)
+    pub fn resolve(mut self, domain: impl Into<String>, addrs: Vec<SocketAddr>) -> Self {
+        self.resolve.push((domain.into(), addrs));
+        self
+    }
+
+    /// 造出 `Client`。请求头无效时返回 `InvalidConfig`；代理 URL 或 reqwest 构建失败时返回
+    /// [`ClientBuildFailed`](super::BaseHttpErr::ClientBuildFailed)，reqwest 错误保留在 source 上
+    pub fn build(self) -> Result<Client, HyErr> {
+        ClientBuilder::try_from(self)?
+            .build()
+            .map_err(client_build_failed)
+    }
+}
+
+impl TryFrom<ReqwestConfig> for ClientBuilder {
+    type Error = HyErr;
+
+    fn try_from(config: ReqwestConfig) -> Result<Self, Self::Error> {
+        let mut builder = Client::builder();
+        if config.cookie_store {
+            builder = builder.cookie_store(true);
+        }
+        if !config.transparent_compression {
+            builder = builder.gzip(false).brotli(false).zstd(false).deflate(false);
+        }
+        if config.max_redirects == 0 {
+            builder = builder.redirect(Policy::none());
+        } else if config.max_redirects != 10 {
+            builder = builder.redirect(Policy::limited(config.max_redirects));
+        }
+        if !config.referer {
+            builder = builder.referer(false);
+        }
 
         if let Some(ua) = config.user_agent {
             builder = builder.user_agent(ua);
         }
-        if !config.default_headers.is_empty() {
-            builder = builder.default_headers(config.default_headers);
+        let headers = HeaderMap::try_from(config.default_headers)
+            .map_err(|e| err!(BaseAppErr::InvalidConfig, format!("default headers: {e}")))?;
+        if !headers.is_empty() {
+            builder = builder.default_headers(headers);
         }
         for proxy in config.proxies {
-            builder = builder.proxy(proxy);
+            builder = builder.proxy(proxy.try_into()?);
         }
         if config.no_proxy {
             builder = builder.no_proxy();
@@ -245,17 +256,50 @@ impl From<ClientConfig> for ClientBuilder {
         for (domain, addrs) in config.resolve {
             builder = builder.resolve_to_addrs(&domain, &addrs);
         }
-        builder
+        Ok(builder)
+    }
+}
+
+// ---------------------------- 应用组件 ----------------------------
+
+/// 构建 HTTP 客户端，并按组件名注册到 `Resources`。
+pub struct ReqwestComponent {
+    name: Name,
+    config: ReqwestConfig,
+}
+
+#[async_trait]
+impl Component for ReqwestComponent {
+    type Config = ReqwestConfig;
+
+    fn build(name: Name, config: Self::Config) -> Self {
+        Self { name, config }
+    }
+
+    fn provides(&self) -> Vec<ResourceId> {
+        vec![ResourceId::named::<Client>(self.name.clone())]
+    }
+
+    async fn startup(
+        &mut self,
+        resources: &Resources,
+        _shutdown: CancellationToken,
+    ) -> Result<Option<tokio::task::JoinHandle<()>>, HyErr> {
+        let client = self
+            .config
+            .clone()
+            .build()
+            .wrap_err(|| err!(BaseAppErr::InvalidConfig, "build HTTP client"))?;
+        resources.insert_named(self.name.clone(), client);
+        Ok(None)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::error::Error as _;
-
+    use crate::reqwest_client::error::BaseHttpErr;
     use hygiea_test_support::headers::header_map;
-
-    use crate::net::http_client::BaseHttpErr;
+    use std::error::Error as _;
 
     use super::*;
 
@@ -266,28 +310,19 @@ mod tests {
         /// 逐个字段核对默认值，改默认值时这里会提醒同步文档
         #[test]
         fn match_documented_values() {
-            let c = ClientConfig::default();
+            let c = ReqwestConfig::default();
             assert_eq!(c.user_agent, None);
             assert!(c.default_headers.is_empty());
             assert!(!c.cookie_store);
             assert!(c.transparent_compression);
-            assert_eq!(c.max_redirects, Some(10));
+            assert_eq!(c.max_redirects, 10);
             assert!(c.referer);
             assert!(c.proxies.is_empty());
             assert!(!c.no_proxy);
-            assert_eq!(c.timeout, Some(Duration::from_secs(5)));
-            assert_eq!(c.read_timeout, Some(Duration::from_secs(5)));
-            assert_eq!(c.connect_timeout, Some(Duration::from_secs(2)));
+            assert_eq!(c.timeout, None);
+            assert_eq!(c.read_timeout, None);
+            assert_eq!(c.connect_timeout, None);
             assert!(c.resolve.is_empty());
-        }
-
-        /// `new()` 就是 `default()`
-        #[test]
-        fn new_equals_default() {
-            assert_eq!(
-                format!("{:?}", ClientConfig::new()),
-                format!("{:?}", ClientConfig::default())
-            );
         }
     }
 
@@ -298,11 +333,12 @@ mod tests {
         /// 普通头原样收下
         #[test]
         fn accepts_normal_headers() {
-            let c = ClientConfig::new()
+            let c = ReqwestConfig::default()
                 .default_headers(header_map(&[("x-api-key", "k"), ("accept", "*/*")]))
                 .unwrap();
-            assert_eq!(c.default_headers["x-api-key"], "k");
-            assert_eq!(c.default_headers["accept"], "*/*");
+            let headers = HeaderMap::try_from(c.default_headers).unwrap();
+            assert_eq!(headers["x-api-key"], "k");
+            assert_eq!(headers["accept"], "*/*");
         }
 
         /// 保留字段一律拒绝，大小写不影响判断
@@ -315,7 +351,7 @@ mod tests {
                 "transfer-encoding",
                 "CONNECTION",
             ] {
-                let err = ClientConfig::new()
+                let err = ReqwestConfig::default()
                     .default_headers(header_map(&[(name, "x")]))
                     .unwrap_err();
                 assert!(err.is(BaseHttpErr::InvalidHeader), "{name}");
@@ -325,13 +361,14 @@ mod tests {
         /// 重复调用以最后一次为准，不是合并
         #[test]
         fn later_call_replaces_earlier() {
-            let c = ClientConfig::new()
+            let c = ReqwestConfig::default()
                 .default_headers(header_map(&[("x-a", "1")]))
                 .unwrap()
                 .default_headers(header_map(&[("x-b", "2")]))
                 .unwrap();
-            assert!(!c.default_headers.contains_key("x-a"));
-            assert_eq!(c.default_headers["x-b"], "2");
+            let headers = HeaderMap::try_from(c.default_headers).unwrap();
+            assert!(!headers.contains_key("x-a"));
+            assert_eq!(headers["x-b"], "2");
         }
     }
 
@@ -342,13 +379,12 @@ mod tests {
         /// 代理按加入顺序保存，匹配时也按这个顺序
         #[test]
         fn proxy_appends_in_order() {
-            let c = ClientConfig::new()
-                .proxy(Proxy::http("http://127.0.0.1:1").unwrap())
-                .proxy(Proxy::https("http://127.0.0.1:2").unwrap());
+            let c = ReqwestConfig::default()
+                .proxy(ProxyConfig::http("http://127.0.0.1:1"))
+                .proxy(ProxyConfig::https("http://127.0.0.1:2"));
             assert_eq!(c.proxies.len(), 2);
-            let debug = format!("{:?}", c.proxies);
-            let (first, second) = (debug.find("port: Some(1)"), debug.find("port: Some(2)"));
-            assert!(first.is_some() && first < second, "{debug}");
+            assert_eq!(c.proxies[0].url, "http://127.0.0.1:1");
+            assert_eq!(c.proxies[1].url, "http://127.0.0.1:2");
         }
 
         /// 解析规则按调用顺序追加，同一域名可以有多个地址
@@ -356,7 +392,7 @@ mod tests {
         fn resolve_appends() {
             let a: SocketAddr = "127.0.0.1:80".parse().unwrap();
             let b: SocketAddr = "127.0.0.2:80".parse().unwrap();
-            let c = ClientConfig::new()
+            let c = ReqwestConfig::default()
                 .resolve("a.test", vec![a, b])
                 .resolve(String::from("b.test"), vec![a]);
             assert_eq!(
@@ -369,29 +405,29 @@ mod tests {
         }
     }
 
-    /// `build()` / `From<ClientConfig> for ClientBuilder`：各个字段都能铺到 builder 上。
-    /// 行为层面（UA 有没有发出去、重定向跟不跟）在集成测试 tests/http_client/client_config.rs 里验证
+    /// `build()` / `TryFrom<ReqwestConfig> for ClientBuilder`：各个字段都能铺到 builder 上。
+    /// 行为层面（UA 有没有发出去、重定向跟不跟）在集成测试 tests/reqwest_client/client_config.rs 里验证
     mod build {
         use super::*;
 
         /// 默认配置能造出 Client
         #[test]
         fn default_config_builds() {
-            ClientConfig::default().build().unwrap();
+            ReqwestConfig::default().build().unwrap();
         }
 
-        /// 每个字段都改成非默认值，也能造出 Client
+        /// 组合多项非默认配置也能造出 Client
         #[test]
-        fn fully_customized_config_builds() {
+        fn configured_fields_build() {
             let addr: SocketAddr = "127.0.0.1:80".parse().unwrap();
-            ClientConfig {
+            ReqwestConfig {
                 user_agent: Some("hygiea-test".into()),
-                default_headers: header_map(&[("x-a", "1")]),
+                default_headers: header_map(&[("x-a", "1")]).into(),
                 cookie_store: true,
                 transparent_compression: false,
-                max_redirects: None,
+                max_redirects: 0,
                 referer: false,
-                proxies: vec![Proxy::all("http://127.0.0.1:1").unwrap()],
+                proxies: vec![ProxyConfig::all("http://127.0.0.1:1")],
                 no_proxy: true,
                 timeout: None,
                 read_timeout: None,
@@ -405,25 +441,19 @@ mod tests {
         /// 拿到原生 builder 后还能接着链 reqwest 的其他方法
         #[test]
         fn converts_into_native_builder() {
-            ClientBuilder::from(ClientConfig::new())
+            ClientBuilder::try_from(ReqwestConfig::default())
+                .unwrap()
                 .https_only(false)
                 .build()
                 .unwrap();
         }
 
-        /// `build()` 底层失败时报 `ClientBuildFailed`。
-        ///
-        /// 当前 reqwest 版本下，`proxies` 字段本身构造不出这种情况：非法的代理（比如
-        /// `Proxy::http("not a url")`）会在 `Proxy::http/https/all` 构造时就返回 `Err`，
-        /// 调用方必须先自己 `unwrap`，根本传不进 `ClientConfig`；能通过构造校验的 `Proxy`
-        /// 目前在 `build()` 阶段一律能建成功（已经用 reqwest 0.13.5 实测过）。
-        /// 能在 `ClientConfig` 范围内、真正推迟到 `build()` 才报错的是非法的 `user_agent`
-        /// （比如带 `\n`），reqwest 把它的校验推迟到了 `ClientBuilder::build()`
+        /// reqwest 在构建 Client 时校验 User-Agent，错误保留为 source
         #[test]
         fn invalid_user_agent_is_client_build_failed() {
-            let err = ClientConfig {
+            let err = ReqwestConfig {
                 user_agent: Some("bad\nvalue".into()),
-                ..ClientConfig::new()
+                ..ReqwestConfig::default()
             }
             .build()
             .unwrap_err();
