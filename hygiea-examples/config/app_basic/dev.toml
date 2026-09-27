@@ -1,0 +1,13 @@
+# app_basic 的配置（默认环境 dev）
+
+# 框架的日志配置（RegistryConfig.tracing）
+[registry.tracing]
+root_env_filter = "info"
+
+# SqlxSqliteComponent 的配置（SqlxSqliteConfig）
+[db]
+database = ":memory:"   # 数据库文件路径；":memory:" 是内存库，不需要装数据库服务
+
+# AxumComponent 的配置（AxumConfig）
+[http]
+port = 8080   # 不写 host 时监听 0.0.0.0

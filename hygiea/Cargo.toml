@@ -9,31 +9,49 @@ rust-version.workspace = true
 description = "A comprehensive Rust toolkit with error handling, template rendering, application framework, and more"
 keywords = ["error", "utility", "std", "toolkit"]
 categories = ["development-tools"]
+# crates.io 页面显示的 README：用仓库根目录那份，打包时 cargo 会把它复制进包里
+readme = "../README.md"
+
+# 发版时 cargo-release 自动把 README 里的版本号改成新版本（路径相对本包目录）
+[package.metadata.release]
+pre-release-replacements = [
+    { file = "../README.md", search = 'hygiea = \{ version = "[^"]+"', replace = 'hygiea = { version = "{{version}}"', min = 0 },
+    { file = "../README.md", search = 'hygiea = "[0-9][^"]*"', replace = 'hygiea = "{{version}}"', min = 0 },
+    { file = "../README.md", search = 'hygiea@[0-9][^ ]*', replace = 'hygiea@{{version}}', min = 0 },
+]
 
 [dependencies]
 hygiea-core = { workspace = true }
-serde_json = { workspace = true }
+# 组件 crate，按下面的 feature 引入
+hygiea-db = { workspace = true, optional = true }
+hygiea-redis = { workspace = true, optional = true }
+hygiea-http = { workspace = true, optional = true }
+hygiea-grpc = { workspace = true, optional = true }
 
 
 [dev-dependencies]
-# #[redact] 的编译期报错回归测试：宏生成 ::hygiea:: 路径，放在 facade 里测就是下游实际的用法
-trybuild = { workspace = true }
+# tests/config_template.rs 解析 docs/config-template.toml
+toml = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 
 [features]
 default = []  # 用户明确选择需要的功能
 
-# 功能模块（传递给 core）
-app = ["log", "hygiea-core/app"]            # 应用框架模块（当前已实现）
-log = ["datetime-iana", "hygiea-core/log"]      # 日志配置和初始化，可脱离 app 单独用
-http = ["hygiea-core/http"]                                    # HTTP 工具
-distributed-lock = ["hygiea-core/distributed-lock"]
-json = ["hygiea-core/json"]                                    # JSON 工具（预留）
-ws = ["hygiea-core/ws"]
-
-# chrono 互转桥（DateTimeUtcExt）
-datetime-chrono = ["hygiea-core/datetime-chrono"]
+# ---- core 的功能：一对一转发，feature 之间的依赖关系只在 core 里写 ----
+app = ["hygiea-core/app"]
+log = ["hygiea-core/log"]
+http-client = ["hygiea-core/http-client"]
+ws-client = ["hygiea-core/ws-client"]
+redact = ["hygiea-core/redact"]
+json = ["hygiea-core/json"]
 datetime-iana = ["hygiea-core/datetime-iana"]
+datetime-chrono = ["hygiea-core/datetime-chrono"]
+full = ["hygiea-core/full"]
 
-# 全功能
-full = ["app", "log", "http", "json", "ws", "distributed-lock", "datetime-chrono", "datetime-iana"]
+# ---- 组件：hygiea::db / redis / http / grpc。组件 crate 自己依赖 core 的 app ----
+db-sqlx-postgres = ["dep:hygiea-db", "hygiea-db/sqlx", "hygiea-db/postgres"]
+db-sqlx-sqlite = ["dep:hygiea-db", "hygiea-db/sqlx", "hygiea-db/sqlite"]
+db-seaorm-postgres = ["dep:hygiea-db", "hygiea-db/seaorm", "hygiea-db/postgres"]
+redis-fred = ["dep:hygiea-redis", "hygiea-redis/fred"]
+http-axum = ["dep:hygiea-http", "hygiea-http/axum"]
+grpc-tonic = ["dep:hygiea-grpc", "hygiea-grpc/tonic"]

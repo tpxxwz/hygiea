@@ -6,9 +6,7 @@ extern crate self as hygiea_core;
 pub mod datetime;
 pub mod env;
 mod error;
-pub mod redact;
 pub mod string;
-pub mod sync;
 
 // 错误体系的核心类型放在根上：宏展开后按 ::hygiea::HyErr 等路径引用
 #[doc(hidden)]
@@ -25,11 +23,14 @@ fn init_hygiea() {
 }
 
 // ========== 按 feature ==========
+#[cfg(feature = "redact")]
+pub mod redact;
+
 #[cfg(feature = "log")]
 pub mod log;
 
 #[cfg(feature = "app")]
 pub mod app;
 
-#[cfg(any(feature = "http", feature = "ws"))]
+#[cfg(any(feature = "http-client", feature = "ws-client"))]
 pub mod net;

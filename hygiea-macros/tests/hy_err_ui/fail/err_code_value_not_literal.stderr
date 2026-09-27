@@ -1,0 +1,5 @@
+error: value must be literal string
+ --> tests/hy_err_ui/fail/err_code_value_not_literal.rs:6:24
+  |
+6 |     #[error(err_code = FOO, err_tpl = "x")]
+  |                        ^^^

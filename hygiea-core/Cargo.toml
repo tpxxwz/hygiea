@@ -20,13 +20,10 @@ default = []
 
 
 # Application framework module
-app = ["log", "dep:async-trait", "dep:dashmap", "dep:clap", "dep:config", "dep:tokio", "tokio/rt", "tokio/sync", "tokio/macros", "tokio/signal"]
+app = ["log", "dep:async-trait", "dep:dashmap", "dep:clap", "dep:config", "dep:tokio", "dep:tokio-util", "tokio/rt", "tokio/sync", "tokio/macros", "tokio/signal", "tokio/time"]
 
 # 日志配置和初始化，可脱离 app 单独用
-log = ["datetime-iana", "dep:anyhow", "dep:tracing", "dep:tracing-subscriber", "dep:tracing-log", "dep:tracing-appender", "serde/derive"]
-
-# Distributed lock abstractions
-distributed-lock = ["dep:async-trait"]
+log = ["datetime-iana", "dep:tracing", "dep:tracing-subscriber", "dep:tracing-log", "dep:tracing-appender", "serde/derive"]
 
 # chrono 互转桥（DateTimeUtcExt）；默认全 time，不需要 chrono 可不启用
 datetime-chrono = ["dep:chrono"]
@@ -36,19 +33,22 @@ datetime-chrono = ["dep:chrono"]
 # IANA timezone and system-local datetime support
 datetime-iana = ["dep:time-tz"]
 
-http = ["dep:reqwest", "dep:bytes", "dep:encoding_rs", "dep:futures-util", "dep:tokio", "tokio/io-util", "dep:tracing"]
+# 日志打码：#[redact] 和 to_redacted_json
+redact = ["hygiea-macros/redact"]
+
+http-client = ["redact", "dep:reqwest", "dep:bytes", "dep:encoding_rs", "dep:futures-util", "dep:tokio", "tokio/io-util", "dep:tracing"]
 json = []
-ws = ["dep:tokio-tungstenite"]
+ws-client = ["dep:tokio-tungstenite"]
 
 # All features
-full = ["app", "log", "http", "json", "ws", "distributed-lock", "datetime-chrono", "datetime-iana"]
+full = ["app", "log", "http-client", "json", "ws-client", "datetime-chrono", "datetime-iana", "redact"]
 
 [dependencies]
 # Error handling (always on)
 minijinja = { workspace = true }
 parking_lot = { workspace = true }
 serde_json = { workspace = true }
-# redact 模块常开；serde_json 本来就依赖它，不多编译东西。derive 由用到的 feature 自己打开
+# derive 由用到的 feature 自己打开
 serde = { workspace = true }
 linkme = { workspace = true }
 ctor = { workspace = true }
@@ -61,10 +61,10 @@ lru = { workspace = true }
 clap   = { workspace = true, optional = true }
 config = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
+tokio-util = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
 dashmap = { workspace = true, optional = true }
 
-anyhow = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, optional = true }
 tracing-log = { workspace = true, optional = true }
@@ -88,3 +88,4 @@ tokio = { workspace = true, features = ["full", "test-util"] }
 tokio-util = { workspace = true }
 futures-util = { workspace = true }
 serial_test = { workspace = true }
+tempfile = { workspace = true }

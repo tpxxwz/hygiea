@@ -1,0 +1,251 @@
+# hygiea 全量配置模板
+#
+# 列出了框架（RegistryConfig）和所有组件配置的全部配置项，值都是代码里的默认值。
+# 用法：复制到自己项目的 config/<env>.toml（比如 config/dev.toml），删掉用不到的段和项，改需要改的值。
+#
+# 规则：
+# - 所有配置项都可以不写，不写就用这里标的默认值；只需要写和默认值不同的项。
+# - 写了不存在的配置项（拼错也算）会在启动加载配置时报错，不会被静默忽略。
+# - 框架的配置固定在 [registry] 段下。组件段的名字（下面的 [db_pg]、[redis]、[http]……）由应用自己的
+#   配置结构体决定：`struct AppConfig { registry: RegistryConfig, db: SqlxPgConfig }` 对应的段名就是 [db]。
+#   这里为了能同时列出所有组件，给每个组件起了一个段名，实际使用时改成自己 AppConfig 里的字段名。
+# - 配置来源按顺序覆盖：config/<env>.toml < -f 指定的文件 < 环境变量 < --set。
+#   环境变量写法：前缀（默认 HYGIEA）+ 两个下划线 + 层级用两个下划线连接，比如
+#   registry.tracing.root_env_filter → HYGIEA__REGISTRY__TRACING__ROOT_ENV_FILTER=debug
+#
+# 本文件由 hygiea/tests/config_template.rs 按各配置结构体解析校验，改了配置结构体要同步改这里。
+
+# =====================================================================================
+# 框架：RegistryConfig（hygiea::app）
+# =====================================================================================
+[registry]
+# 关闭时每个组件最多等多久（秒），超时的组件任务会被 abort，接着关下一个。
+# 组件自己配了 shutdown_timeout_secs 的以组件为准
+shutdown_timeout_secs = 15
+# 收到退出信号后，先照常服务多久（秒）再开始关组件。给 k8s 用：Pod 从 Service 摘除要几秒，
+# 这段时间里还会有新请求打进来，一般配 5；本地开发保持 0
+shutdown_delay_secs = 0
+
+# -------------------------------------------------------------------------------------
+# 日志：TracingConfig（hygiea::log）
+# -------------------------------------------------------------------------------------
+[registry.tracing]
+# 全局日志级别 / filter，console 和文件 layer 没单独配 env_filter 时用它。
+# 语法同 tracing 的 EnvFilter："info"、"warn,my_crate=debug,sqlx=off"。
+# 注意：不带 = 的单独一项如果不是级别名，会被当成 target 名（"infoo" 表示只输出 target 叫 infoo 的日志）
+root_env_filter = "info"
+# 文件 layer 的根目录，相对路径按启动时的当前目录解析。各文件 layer 的 dir 拼在它下面
+root_dir = "./logs"
+# 日志时间格式，可选：
+#   WithOffset.YmdTHMS3F   2024-01-06T01:00:00.000+08:00（默认）
+#   WithOffset.YmdHMS3F    2024-01-06 01:00:00.000 +08:00
+#   WithoutOffset.YmdHMS3F 2024-01-06 01:00:00.000
+#   WithoutOffset.YmdHMS   2024-01-06 01:00:00
+#   WithoutOffset.YmdHMSnosep / Ymd / Ymdnosep / HMS / Y
+time_format = "WithOffset.YmdTHMS3F"
+# true：日志时间用 UTC；false：用系统本地时区（TZ 环境变量 → 系统设置 → UTC）
+utc_time = false
+
+[registry.tracing.console]
+# 关掉控制台输出。关了之后至少要有一个启用的文件 layer，否则启动报 NoOutput
+disable = false
+# 控制台单独的 filter，空字符串表示用 root_env_filter
+env_filter = ""
+# 是否输出 ANSI 颜色。不写时自动判断：stdout 是终端且没设 NO_COLOR 才输出颜色，
+# 被 docker、journald、重定向收集时不输出。写了就按写的来
+# ansi = true
+
+# 文件输出，可以写多个 [[registry.tracing.layers]]，每个输出到一组文件。默认一个都没有
+[[registry.tracing.layers]]
+# 关掉这个 layer（配置保留，不生效）
+disable = false
+# 这个 layer 单独的 filter，空字符串表示用 root_env_filter
+env_filter = ""
+# 日志目录，拼在 root_dir 下面；空字符串表示直接写在 root_dir 里；写绝对路径时不拼 root_dir
+dir = ""
+# 文件名 = 前缀 + （滚动时的日期）+ 后缀，比如 app.log、app.2024-01-06.log。
+# 同一目录下多个 layer 的文件名不能互相匹配（比如 app 和 app-error），启动时会报错
+filename_prefix = "app"
+filename_suffix = "log"
+# true：后台线程写文件，业务线程不等磁盘；队列上限 12.8 万行，满了新日志直接丢弃。
+# false：在打日志的线程里同步写，不丢日志，但磁盘慢时会卡住 tokio worker 线程
+non_blocking = true
+# 滚动周期，区分大小写：Minutely / Hourly / Daily / Weekly / Never
+rolling = "Never"
+# 最多保留几个日志文件。不写就不清理（和 tracing-appender 一致）。
+# 配了 n 时，启动和每次滚动时把同目录下匹配的文件删到只剩 n-1 个再建新文件；
+# rolling = "Never" 时只有一个文件，配 1 等于每次启动清空
+# max_log_files = 7
+
+# =====================================================================================
+# 组件：SqlxPgConfig（hygiea::db，feature db-sqlx-postgres）
+# =====================================================================================
+[db_pg]
+scheme = "postgres"
+host = "localhost"
+port = 5432
+username = "postgres"
+password = "postgres"
+database = "postgres"
+# 追加到连接 url 上的参数，不带开头的 ?，比如 "sslmode=require&application_name=myapp"
+params = ""
+# 连接后的 search_path，比如 "myschema,public"；空字符串表示用数据库的默认值
+schema_search_path = ""
+# 连接池
+max_connections = 10
+min_connections = 0
+# 从连接池拿连接最多等多久（秒），拿不到就报错
+acquire_timeout_secs = 30
+# 空闲连接多久（秒）没用就关掉
+idle_timeout_secs = 600
+# 一个连接最多用多久（秒）就换新的
+max_lifetime_secs = 1800
+# 从连接池拿出连接前先检查一下它还能不能用
+test_before_acquire = true
+# true：启动时不连数据库，第一次用到时才连（数据库暂时连不上也能启动）
+connect_lazy = false
+
+# =====================================================================================
+# 组件：SeaOrmPgConfig（hygiea::db，feature db-seaorm-postgres）
+# =====================================================================================
+[db_seaorm]
+scheme = "postgres"
+host = "localhost"
+port = 5432
+username = "postgres"
+password = "postgres"
+database = "postgres"
+# 追加到连接 url 上的参数，不带开头的 ?，比如 "sslmode=require"
+params = ""
+# 连接后的 search_path；空字符串表示用数据库的默认值
+schema_search_path = ""
+max_connections = 10
+min_connections = 0
+# 建立连接最多等多久（秒）
+connect_timeout_secs = 30
+acquire_timeout_secs = 30
+idle_timeout_secs = 600
+max_lifetime_secs = 1800
+test_before_acquire = true
+connect_lazy = false
+# SeaORM 的 SQL 日志开关和级别。级别可选：trace / debug / info / warn / error / off，写错启动时 panic
+sqlx_logging = true
+sqlx_logging_level = "info"
+# 慢查询日志：执行超过 sqlx_slow_statements_threshold_secs 秒的语句按这个级别打出来；off 表示不打
+sqlx_slow_statements_logging_level = "off"
+sqlx_slow_statements_threshold_secs = 1
+
+# =====================================================================================
+# 组件：SqlxSqliteConfig（hygiea::db，feature db-sqlx-sqlite）
+# =====================================================================================
+[db_sqlite]
+# 数据库文件路径；":memory:" 是内存库（进程退出数据就没了）
+database = "hygiea.db"
+# 追加到连接 url 上的参数，不带开头的 ?（写了 ? 也会被去掉）
+params = ""
+# 文件不存在时自动创建
+create_if_missing = true
+# 只读打开
+read_only = false
+# 打开外键约束
+foreign_keys = true
+# 多个连接共享缓存，内存库要在多个连接之间共享数据时打开
+shared_cache = false
+# 日志模式：delete / truncate / persist / memory / wal / off
+journal_mode = "wal"
+# 同步级别：off / normal / full / extra
+synchronous = "full"
+# 数据库被锁住时最多等多久（毫秒）
+busy_timeout_millis = 5000
+# 每个连接缓存多少条预编译语句
+statement_cache_capacity = 100
+max_connections = 4
+min_connections = 1
+acquire_timeout_secs = 30
+idle_timeout_secs = 600
+max_lifetime_secs = 1800
+test_before_acquire = true
+connect_lazy = false
+
+# =====================================================================================
+# 组件：RedisConfig（hygiea::redis，feature redis-fred）
+# =====================================================================================
+[redis]
+# 部署模式：standalone（单机）/ cluster（集群）/ sentinel（哨兵），写错启动时报错
+mode = "standalone"
+# standalone 模式连的地址；cluster / sentinel 模式不用，改填 nodes
+host = "localhost"
+port = 6379
+# cluster 模式填集群节点，sentinel 模式填哨兵节点；这两种模式下不能为空
+nodes = []
+# sentinel 模式：主节点的服务名，以及连哨兵用的用户名密码（空字符串表示不需要）
+sentinel_service_name = "mymaster"
+sentinel_username = ""
+sentinel_password = ""
+# 连 Redis 的用户名密码，空字符串表示不需要
+username = ""
+password = ""
+# 数据库编号（0～15）；cluster 模式不支持选库，这项不生效
+db = 0
+# 连接池大小
+pool_size = 5
+# 建立连接的超时（秒），0 表示不设超时
+connect_timeout_secs = 5
+# 单条命令的默认超时（秒），0 表示不设超时
+command_timeout_secs = 0
+# 命令失败时最多尝试几次（含第一次）
+max_command_attempts = 3
+# cluster 模式下 MOVED / ASK 重定向最多跟几次
+max_redirections = 5
+# 断线重连，按指数退避：从 reconnect_min_delay_ms 开始，每次乘 reconnect_multiplier，
+# 最长 reconnect_max_delay_ms；reconnect_max_attempts 是最多重连几次（0 表示不限次数）
+reconnect_max_attempts = 0
+reconnect_min_delay_ms = 1
+reconnect_max_delay_ms = 30000
+reconnect_multiplier = 2
+
+# cluster / sentinel 模式的节点写法（和上面的 nodes = [] 二选一）：
+# [[redis.nodes]]
+# host = "10.0.0.1"
+# port = 6379
+# [[redis.nodes]]
+# host = "10.0.0.2"
+# port = 6379
+
+# =====================================================================================
+# 组件：AxumConfig（hygiea::http，feature http-axum）
+# =====================================================================================
+[http]
+# 监听地址和端口，0.0.0.0 表示所有网卡
+host = "0.0.0.0"
+port = 8080
+# （当前版本未生效，保留字段）路由的统一前缀
+base_path = ""
+# 关闭时最多等多久（秒）让手上的请求处理完。不写用 registry.shutdown_timeout_secs；
+# 有长请求（大文件上传、长轮询）就配长一点
+# shutdown_timeout_secs = 30
+
+# 超时，整段可以不写（不写表示都不设）
+[http.timeout]
+# 单个请求处理超过这么多秒，返回 408
+request_read_secs = 30
+# 下面三项当前版本未生效（保留字段）
+# connect_secs = 5
+# header_read_secs = 5
+# response_write_secs = 30
+
+# 限制，整段可以不写（不写表示都不限制）
+[http.limits]
+# 请求体最大字节数，超过返回 413
+max_body_size = 10485760
+# 当前版本未生效（保留字段）
+# max_header_size = 16384
+
+# =====================================================================================
+# 组件：TonicConfig（hygiea::grpc，feature grpc-tonic）
+# =====================================================================================
+[grpc]
+# 监听地址
+addr = "0.0.0.0:50051"
+# 关闭时最多等多久（秒）让手上的请求处理完，不写用 registry.shutdown_timeout_secs
+# shutdown_timeout_secs = 30

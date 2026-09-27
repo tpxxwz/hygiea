@@ -1,71 +1,168 @@
 # Hygiea
 
-> A comprehensive Rust toolkit with error handling, log redaction, HTTP client, datetime utilities, application framework, and more
+> 基于组件的 Rust 应用框架，附带错误、日志、日期、字符串等基础功能的封装和扩展
 
 [![Rust](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](https://www.rust-lang.org/)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#许可证)
 
-## Overview
+## 概述
 
-`hygiea` provides a unified, well-tested foundation for error handling, logging, HTTP calls, datetime handling, application lifecycle management, and more across Rust projects. Users depend on the single facade crate `hygiea` and enable only the features they need.
+`hygiea` 的核心是应用框架（`hygiea::app`）：把应用拆成组件（数据库、Redis、HTTP 服务、gRPC 服务……）注册到 `Registry`，由它负责加载配置、按依赖顺序启动组件、在组件之间共享资源、收到退出信号后按逆序关闭。常用的连接池和服务组件已经做好，开 feature 就能用。
 
-## Features
+围绕应用框架，还提供错误、日志、日期、字符串等基础功能的封装和扩展，这些也可以脱离应用框架单独使用。
 
-### Always available
+使用方只依赖 facade crate `hygiea`，按需开启 feature。
 
-These need no feature flag.
+## 功能
 
-| Module | What it provides |
+### 应用框架（`app` feature）
+
+| 能力 | 说明 |
 |---|---|
-| Error handling (`hygiea::{HyErr, err!, bail!, hy_err}`) | Template-based error messages, 8-digit error codes validated at compile time, a single `HyErr` type, external errors attached via `with_source` |
-| Redaction (`hygiea::redact`) | `#[redact]` attribute: fields marked `#[redact(mask)]` / `#[redact(skip)]` are masked only when serialized for logs (at any nesting depth); normal serialization is unaffected |
-| Datetime (`hygiea::datetime`) | UTC datetime helpers on top of the `time` crate: formatting, parsing, start/end of day/week/month/year |
-| Env (`hygiea::env`) | Environment variable helpers |
-| String (`hygiea::string`) | Cached regex helpers and template rendering (`fmt_tpl!`, `fmt_tpl_once!`) |
-| Sync (`hygiea::sync`) | `TokenBucket` rate limiter |
+| 组件注册 | 实现 `Component` trait，`Registry::add` / `add_named` 注册；同一种组件可以按名字注册多个实例（比如主库和从库） |
+| 依赖排序 | 组件声明 `provides` / `depends_on`，Registry 做拓扑排序决定启动顺序，跟 `add` 的顺序无关；缺依赖、依赖成环、重复提供都在启动任何组件之前报错 |
+| 资源共享 | 先启动的组件把资源放进 `Resources`，后启动的组件和业务代码按类型和名字取出来 |
+| 配置加载 | 环境配置文件 → 额外配置文件 → 环境变量 → 命令行，后面的覆盖前面的；环境用 `--env` 或 `HYGIEA_ENV` 选 |
+| 优雅关闭 | 收到 Ctrl+C / SIGTERM 后按启动的逆序关闭组件，每个组件单独计时，超时强制结束；支持关闭前延迟，方便 k8s 摘流量 |
+| 日志 | 启动时按配置初始化 tracing（控制台、按时间滚动的文件） |
+| 现成组件 | 数据库连接池（sqlx / SeaORM × PostgreSQL / SQLite）、Redis 连接池、HTTP 服务（axum）、gRPC 服务（tonic），见下文「组件」 |
 
-### Optional features
+### 基础能力（常开）
 
-| Feature | What it enables |
+以下功能不需要开 feature。
+
+| 模块 | 提供什么 |
 |---|---|
-| `http` | HTTP client on top of reqwest: `ClientConfig`, `RequestConfig`, request/response logging with redaction |
-| `log` | tracing setup: console and rolling file layers, filters (implies `datetime-iana`) |
-| `app` | Component-based application framework: startup hooks, shared resources, graceful shutdown (implies `log`) |
-| `distributed-lock` | `DistributedLock` trait and `DistributedKey` |
-| `datetime-iana` | IANA timezone and system-local datetime (`*_local` methods) |
-| `datetime-chrono` | Conversion bridge to and from chrono |
-| `ws` | WebSocket client (work in progress, currently empty) |
-| `json` | Reserved, currently empty |
-| `full` | All of the above |
+| 错误处理（`hygiea::{HyErr, err!, bail!, hy_err}`） | 基于模板的错误信息，编译期校验的 8 位错误码，统一的 `HyErr` 类型，用 `with_source` 挂外部错误 |
+| 日期时间（`hygiea::datetime`） | 基于 `time` crate 的 UTC 工具：格式化、解析、日 / 周 / 月 / 年的起止时刻 |
+| 环境变量（`hygiea::env`） | 环境变量读取 |
+| 字符串（`hygiea::string`） | 带缓存的正则，模板渲染（`fmt_tpl!`、`fmt_tpl_once!`） |
 
-### Components
+### 其他可选 feature
 
-Optional application components live in separate crates under `hygiea-components/`: `http-axum`, `grpc-tonic`, `db-pg-seaorm`, `db-pg-sqlx`, `db-sqlite-sqlx`, `redis-fred`.
+| Feature | 开启什么 |
+|---|---|
+| `app` | 应用框架，见上文（会带上 `log`） |
+| `log` | tracing 初始化：控制台和按时间滚动的文件输出、过滤，可以脱离 `app` 单独用（会带上 `datetime-iana`） |
+| `http-client` | 基于 reqwest 的 HTTP 客户端：`ClientConfig`、`RequestConfig`，请求 / 响应日志带打码（会带上 `redact`） |
+| `redact` | 日志打码：`#[redact]` 属性，标了 `#[redact(mask)]` / `#[redact(skip)]` 的字段只在序列化进日志时打码（任意嵌套层级都生效），正常序列化不受影响 |
+| `datetime-iana` | IANA 时区和系统本地时间（`*_local` 方法） |
+| `datetime-chrono` | 和 chrono 互相转换 |
+| `ws-client` | WebSocket 客户端（开发中，目前为空） |
+| `json` | 预留，目前为空 |
+| `full` | 以上全部（不含组件） |
 
-## Quick Start
+### 组件
 
-### Installation
+可选的应用组件放在 `hygiea-components/` 下，每种能力一个 crate，用哪个框架或数据库由 feature 决定。通过 `hygiea` 的 feature 开启（都会带上 `app`）：
 
-Add to your `Cargo.toml`:
+| facade feature | crate | 提供 |
+|---|---|---|
+| `db-sqlx-postgres` | `hygiea-db`（`sqlx` + `postgres`） | `hygiea::db::SqlxPgComponent` / `SqlxPgPool` |
+| `db-sqlx-sqlite` | `hygiea-db`（`sqlx` + `sqlite`） | `hygiea::db::SqlxSqliteComponent` / `SqlxSqlitePool` |
+| `db-seaorm-postgres` | `hygiea-db`（`seaorm` + `postgres`） | `hygiea::db::SeaOrmPgComponent` / `SeaOrmPgPool` |
+| `redis-fred` | `hygiea-redis`（`fred`） | `hygiea::redis::RedisComponent` / `FredRedisPool` |
+| `http-axum` | `hygiea-http`（`axum`） | `hygiea::http::AxumComponent` |
+| `grpc-tonic` | `hygiea-grpc`（`tonic`） | `hygiea::grpc::TonicComponent` |
+
+## 快速开始
+
+### 安装
+
+在 `Cargo.toml` 中添加：
 
 ```toml
 [dependencies]
-# Error handling, redaction, datetime, env and string need no features
+# 错误处理、日期时间、环境变量、字符串不需要 feature
 hygiea = "0.1.1-alpha.5"
 
-# Enable what you need
-hygiea = { version = "0.1.1-alpha.5", features = ["http"] }
+# 应用框架，加上需要的组件
+hygiea = { version = "0.1.1-alpha.5", features = ["app", "db-sqlx-postgres", "http-axum"] }
 
-# Everything
+# 全部
 hygiea = { version = "0.1.1-alpha.5", features = ["full"] }
 ```
 
-### Error handling
+或者用 `cargo add`：
+
+```bash
+cargo add hygiea@0.1.1-alpha.5 --features app,db-sqlx-postgres,http-axum
+```
+
+### 应用框架
+
+用现成的 SQLite 和 HTTP 组件，配置从 `config/dev.toml` 自动加载。需要开 `app`、`db-sqlx-sqlite`、`http-axum`，另外要加 `axum`、`serde`（`derive`）、`tokio` 依赖。
+
+`config/dev.toml`：
+
+```toml
+# 框架的日志配置（RegistryConfig.tracing）
+[registry.tracing]
+root_env_filter = "info"
+
+# SqlxSqliteComponent 的配置（SqlxSqliteConfig）
+[db]
+database = ":memory:"   # 数据库文件路径；":memory:" 是内存库，不需要装数据库服务
+
+# AxumComponent 的配置（AxumConfig）
+[http]
+port = 8080   # 不写 host 时监听 0.0.0.0
+```
+
+`src/main.rs`：
+
+```rust
+use axum::Router;
+use axum::routing::get;
+use hygiea::app::{ConfigArgs, IntoRegistryConfig, Registry, RegistryConfig};
+use hygiea::db::{SqlxSqliteComponent, SqlxSqliteConfig};
+use hygiea::http::{AxumComponent, AxumConfig};
+use hygiea::HyErr;
+use serde::Deserialize;
+
+/// 对应 config/dev.toml：框架的配置在 [registry] 段，每个组件的配置各占一段
+#[derive(Deserialize)]
+struct AppConfig {
+    registry: RegistryConfig,
+    db: SqlxSqliteConfig,
+    http: AxumConfig,
+}
+
+impl IntoRegistryConfig for AppConfig {
+    fn registry_config(&self) -> RegistryConfig {
+        self.registry.clone()
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), HyErr> {
+    // 读 config/<env>.toml（默认 dev），再叠加 -f 指定的文件、HYGIEA__ 环境变量、--set
+    let (registry, mut config) = Registry::load_config::<AppConfig>(&ConfigArgs::from_cli());
+    config.http.router = Some(Router::new().route("/hello", get(|| async { "hello\n" })));
+
+    let (result, _log_guard) = registry
+        .add::<SqlxSqliteComponent>(config.db)
+        .add::<AxumComponent>(config.http)
+        .run(|_| async { Ok(()) })
+        .await;
+    result
+}
+```
+
+- 环境名默认 `dev`，用 `--env prod` 或 `HYGIEA_ENV=prod` 切换到 `config/prod.toml`；`-f local` 叠加 `config/local.toml`，`HYGIEA__HTTP__PORT=9090` 或 `--set http.port=9090` 覆盖单个配置项。配置项的层级就是 `AppConfig` 的字段层级，比如日志级别是 `registry.tracing.root_env_filter`。
+- 按 Ctrl+C 退出时，组件按启动的逆序关闭：先停 HTTP（处理完手上的请求），再关连接池。
+
+- 框架和所有组件的全部配置项、默认值和说明见 [docs/config-template.toml](docs/config-template.toml)，复制过去删掉用不到的段、改需要改的值即可。
+- 配置目录默认是相对当前目录的 `config/`，可以用命令行 `-d <目录>`（`--config-dir`）或代码里 `ConfigArgs::from_cli().default_config_dir(..)` 换，命令行优先。
+
+这段就是 `app_basic` 示例（示例里用 `default_config_dir` 指向 `hygiea-examples/config/app_basic/`）。自己实现组件、依赖排序、多实例、全局状态、后台任务、配置加载各有一个单独的示例，见下文「示例」。
+
+### 错误处理
 
 ```rust
 use hygiea::{err, hy_err};
 
-// Project prefix "001" comes from Cargo.toml, see "Error Code System" below
+// 项目前缀 "001" 来自 Cargo.toml，见下文「错误码体系」
 #[derive(hy_err)]
 #[err_code_module_prefix = "01"]
 pub enum UserErrors {
@@ -75,42 +172,43 @@ pub enum UserErrors {
     #[error(err_code = "002", err_tpl = "Invalid email: {{ email }} ({{ reason }})")]
     InvalidEmail,
 
-    // Fixed messages are just templates without variables
-    #[error(err_code = "003", err_tpl = "Database connection failed")]
-    DbConnectionFailed,
+    // 固定信息就是不带变量的模板
+    #[error(err_code = "003", err_tpl = "Avatar upload failed")]
+    AvatarUploadFailed,
 }
 
 fn main() {
-    // One variable: pass the value directly
+    // 一个变量：直接传值
     let e = err!(UserErrors::UserNotFound, "Alice");
     println!("{e} [{}]", e.err_code()); // User Alice not found [00101001]
 
-    // Several variables: name each one
+    // 多个变量：逐个写名字
     let e = err!(UserErrors::InvalidEmail, { "email": "a@b", "reason": "no domain" });
     println!("{e}"); // Invalid email: a@b (no domain)
 
-    // No variables: err!(X). Using the wrong form for a template is a compile error
-    let e = err!(UserErrors::DbConnectionFailed)
-        .with_source(std::io::Error::other("connection refused"));
-    println!("{e}");   // Database connection failed
-    println!("{e:#}"); // Database connection failed: connection refused
-    assert!(e.is(UserErrors::DbConnectionFailed));
+    // 没有变量：err!(X)。写法和模板对不上会编译报错
+    // 底层原因用 with_source 挂上
+    let e = err!(UserErrors::AvatarUploadFailed)
+        .with_source(std::io::Error::other("storage unavailable"));
+    println!("{e}");   // Avatar upload failed
+    println!("{e:#}"); // Avatar upload failed: storage unavailable
+    assert!(e.is(UserErrors::AvatarUploadFailed));
 }
 ```
 
-`Display` only renders the template, which is what clients should see. `{:#}` appends the `source` chain for server-side logs.
+`Display` 只输出模板渲染结果，这是给客户端看的；`{:#}` 会在后面接上 `source` 链，用于服务端日志。
 
-### HTTP with redacted logs
+### HTTP 与日志打码
 
-Requires the `http` feature. Every request logs `http call start` / `http call success` at INFO and failures at WARN (configurable). Fields marked `#[redact(mask)]` show up as `"***"` in those logs (params, request bodies, URLs, and response bodies decoded by `send`), while the real values are sent and received. Non-2xx and undecodable responses are logged as-is, since that is what you need to debug a failure.
+需要 `http-client` feature。每次请求在 INFO 级别打 `http call start` / `http call success`，失败打 WARN（可配置）。标了 `#[redact(mask)]` 的字段在这些日志里显示为 `"***"`（包括 params、请求体、URL，以及 `send` 解码出的响应体），实际发送和接收的仍是真实值。非 2xx 和解码失败的响应原样记录，因为排查问题需要看原文。
 
 ```rust
 use hygiea::HyErr;
-use hygiea::net::http::{Client, ClientConfig, HttpResponse, Json, Method, RequestConfig};
+use hygiea::net::http_client::{Client, ClientConfig, HttpResponse, Json, Method, RequestConfig};
 use hygiea::redact::redact;
 use serde::{Deserialize, Serialize};
 
-// #[redact] must be placed above #[derive(Serialize)]
+// #[redact] 必须写在 #[derive(Serialize)] 上面
 #[redact]
 #[derive(Serialize)]
 struct LoginReq {
@@ -135,63 +233,80 @@ async fn login(client: &Client) -> Result<String, HyErr> {
     Ok(resp.body.0.token)
 }
 
-// Build the client once and share it: it owns the connection pool
+// client 只建一次并共享：连接池在它里面
 // let client = ClientConfig::default().build()?;
 ```
 
-## Architecture
+## 架构
 
-This library follows a facade pattern:
+采用 facade 模式。使用方只依赖 `hygiea` 并选择 feature，其余 crate 都是内部实现。
 
 ```
-hygiea/                    (Public API - what users depend on)
-├── hygiea-core/           (Core implementation)
-└── hygiea-macros/         (Procedural macros: #[derive(hy_err)], #[redact])
+hygiea                         facade：重新导出全部内容，按 feature 开关
+├── hygiea-core                核心实现
+├── hygiea-macros              过程宏
+└── hygiea-components/*        可选的应用组件，基于 hygiea-core 的应用框架
 ```
 
-Users only need to depend on `hygiea`, which re-exports everything needed, so no extra dependencies (such as `linkme` or `serde_json`) are required downstream. Code generated by the macros follows the name you depend on: `hygiea`, a renamed dependency, or `hygiea-core` alone all work. Use `#[hy_err(crate = "path")]` / `#[redact(crate = "path")]` to override.
+| crate | 发布 | 职责 |
+|---|---|---|
+| `hygiea` | 是 | 使用方唯一需要依赖的 crate。重新导出 core 和各组件，由 feature 决定编译哪些 |
+| `hygiea-core` | 是 | 应用框架；错误处理、日志、打码、日期时间、环境变量、字符串、HTTP / WebSocket 客户端 |
+| `hygiea-macros` | 是 | `#[derive(hy_err)]` 和 `#[redact]` |
+| `hygiea-db` | 是 | 数据库连接池组件（PostgreSQL、SQLite） |
+| `hygiea-redis` | 是 | Redis 连接池组件 |
+| `hygiea-http` | 是 | HTTP 服务组件 |
+| `hygiea-grpc` | 是 | gRPC 服务组件 |
+| `hygiea-test-support` | 否 | 测试共用工具，只作为 dev-dependency |
+| `hygiea-examples` | 否 | 可运行的使用示例 |
+| `hygiea-playground` | 否 | 临时调查和暂存代码 |
 
-## Error Code System
+各 crate 的模块说明，以及测试和示例放在哪：[docs/architecture.md](docs/architecture.md)。
 
-Error codes are always **8 digits**, in up to three levels:
+使用方不需要额外依赖（比如 `linkme`、`serde_json`）。宏生成的代码跟随你依赖时用的名字：依赖 `hygiea`、给它改名、或者只依赖 `hygiea-core` 都可以。需要覆盖时用 `#[hy_err(crate = "path")]` / `#[redact(crate = "path")]`。
 
-| Level | Digits | Where | If omitted |
+## 错误码体系
+
+错误码固定 **8 位**，最多分三级：
+
+| 级别 | 位数 | 写在哪 | 不写时 |
 |---|---|---|---|
-| Project prefix | 3 | `err_code_project_prefix` in Cargo.toml metadata | `000` |
-| Module prefix | 2 | `#[err_code_module_prefix = ".."]` on the enum | no module level |
-| Error number | 3 with a module prefix, 5 without | `err_code` on the variant | required |
+| 项目前缀 | 3 | Cargo.toml metadata 里的 `err_code_project_prefix` | `000` |
+| 模块前缀 | 2 | enum 上的 `#[err_code_module_prefix = ".."]` | 没有模块这一级 |
+| 错误编号 | 有模块前缀时 3 位，没有时 5 位 | 变体上的 `err_code` | 必填 |
 
-The project prefix is looked up in the crate's `[package.metadata.hygiea]`, then in the workspace root's `[workspace.metadata.hygiea]`, and defaults to `000`. It cannot be set on an enum, so every enum in a project shares it.
+项目前缀先查 crate 的 `[package.metadata.hygiea]`，再查 workspace 根的 `[workspace.metadata.hygiea]`，都没有就是 `000`。它不能写在 enum 上，所以一个项目里的所有 enum 共用同一个项目前缀。
 
 ```toml
-# workspace root Cargo.toml (a crate can override it in [package.metadata.hygiea])
+# workspace 根的 Cargo.toml（单个 crate 可以在 [package.metadata.hygiea] 里覆盖）
 [workspace.metadata.hygiea]
 err_code_project_prefix = "001"
 ```
 
 ```rust
 #[derive(hy_err)]
-#[err_code_module_prefix = "01"]  // ← module prefix
+#[err_code_module_prefix = "01"]  // ← 模块前缀
 pub enum UserErrors {
-    #[error(err_code = "001", err_tpl = "...")]  // ← error number, 3 digits
-    //  Final code: 001 01 001 = 00101001
+    #[error(err_code = "001", err_tpl = "...")]  // ← 错误编号，3 位
+    //  最终错误码：001 01 001 = 00101001
     UserNotFound,
 }
 
-#[derive(hy_err)]                 // no module prefix
+#[derive(hy_err)]                 // 没有模块前缀
 pub enum LegacyErrors {
-    #[error(err_code = "00001", err_tpl = "...")]  // ← 5 digits
-    //  Final code: 001 00001 = 00100001
+    #[error(err_code = "00001", err_tpl = "...")]  // ← 5 位
+    //  最终错误码：001 00001 = 00100001
     Old,
 }
 ```
 
-### Reserved and built-in codes
+### 保留和内置错误码
 
-- `00000000` is reserved for success (`SUCCESS_CODE`); using it is a compile error.
-- Project prefix `999` is used by the framework's built-in errors. `BaseErr` (modules that need no feature) has no module prefix and uses 5-digit codes, with the catch-all `SysErr` at `99999`; `hygiea::net::http::BaseHttpErr` (the `http` feature) uses module prefix `01`. Duplicates inside one module are compile errors; duplicates across modules or crates are caught at startup (the process prints the code and exits with status 1).
+- `00000000` 保留给成功（`SUCCESS_CODE`），使用会编译报错。
+- 项目前缀 `999` 给框架内置错误用。`BaseErr`（不需要 feature 的模块）没有模块前缀，用 5 位编号，兜底的 `SysErr` 是 `99999`；`hygiea::net::http_client::BaseHttpErr`（`http-client` feature）的模块前缀是 `01`。同一模块内重复会编译报错；跨模块或跨 crate 的重复在启动时检查（进程打印重复的错误码后以状态码 1 退出）。
+- HTTP 组件（`hygiea::http`）的错误响应：状态码一律 200，错误放在 body 的 `code` / `msg`。业务错误原样返回模板渲染出的消息；`999` 开头的框架内置错误模板参数里可能有内部信息，对外统一换成 `SysErr`（"System Error"），原错误只记在服务端日志里。输入校验这类要给用户看的错误，用项目自己前缀的错误码定义。
 
-| Code | Variant | Template |
+| 错误码 | 变体 | 模板 |
 |---|---|---|
 | `99900001` | `BaseErr::DateError` | Date error: {{ cause }} |
 | `99900002` | `BaseErr::RegexError` | Invalid regex: {{ pattern }} |
@@ -208,97 +323,75 @@ pub enum LegacyErrors {
 | `99901203` | `BaseHttpErr::WriteFailed` | Write response body failed |
 | `99999999` | `BaseErr::SysErr` | System Error |
 
-## Examples
+## 示例
 
-See the `hygiea-examples/examples/` directory for complete examples:
+示例在 `hygiea-examples/examples/` 下，按主题分目录，每个示例只讲一件事，都不需要装数据库等外部服务：
 
-```bash
-cargo run -p hygiea-examples --example basic_error
-cargo run -p hygiea-examples --example template
-cargo run -p hygiea-examples --example app_framework
-
-# Parallel backtests with tokio virtual time (see docs/notes/virtual-time-and-parallelism.md)
-cargo run -p hygiea-core --example backtest_parallel --release
-```
-
-## Development
-
-### Project Structure
-
-```
-hygiea/
-├── Cargo.toml                  (Workspace config)
-├── README.md
-├── docs/                       (Design notes, reviews and research, see docs/README.md)
-├── release/, release.sh        (cargo-release config and script)
-│
-├── hygiea/                     (Facade crate: the only one users depend on)
-│   ├── src/
-│   │   ├── lib.rs              (Re-exports from hygiea-core, feature gates)
-│   │   └── string.rs           (fmt_tpl! macros)
-│   └── tests/                  (trybuild UI tests for #[derive(hy_err)] / err! / #[redact])
-│
-├── hygiea-core/                (Core implementation)
-│   ├── src/
-│   │   ├── error.rs            (HyErr, err! / bail!, BaseErr)
-│   │   ├── redact.rs           (Field masking for logs: #[redact], to_redacted_json)
-│   │   ├── datetime/           (UTC / IANA datetime helpers)
-│   │   ├── env.rs              (Environment variable helpers)
-│   │   ├── string/             (Regex and template utilities)
-│   │   ├── sync/               (Token bucket; distributed lock trait [feature: distributed-lock])
-│   │   ├── net/                (http: reqwest wrapper; ws: WebSocket, WIP) [feature: http / ws]
-│   │   ├── log.rs              (tracing setup)                  [feature: log]
-│   │   └── app.rs              (Component-based app framework)  [feature: app]
-│   ├── tests/http/             (End-to-end tests for net::http)
-│   └── examples/               (backtest_parallel: virtual time + parallel backtests)
-│
-├── hygiea-macros/              (Procedural macros: hy_err derive, redact attribute)
-├── hygiea-test-support/        (Shared test helpers, dev-dependency only, not published)
-├── hygiea-components/          (Optional app components: http-axum, grpc-tonic,
-│                                db-pg-seaorm, db-pg-sqlx, db-sqlite-sqlx, redis-fred)
-└── hygiea-examples/            (Usage examples, not published)
-```
-
-### Building
+| 示例 | 讲什么 |
+|---|---|
+| `app_basic` | 最小的应用：现成的 SQLite 和 HTTP 组件，配置从 `config/app_basic/dev.toml` 加载 |
+| `app_dependencies` | 自己实现组件；`provides` / `depends_on` 决定启动顺序，缺依赖时启动前就报错 |
+| `app_named_instances` | 同一种组件注册多个实例（主库、从库），按名字取 |
+| `app_global_state` | 启动后把资源收进全局 `AppState`，业务代码直接取 |
+| `app_background_task` | 后台任务、优雅关闭、超时强制结束、`stop` 收尾 |
+| `app_config` | 配置文件、`-f`、环境变量、`--set` 的合并，框架参数合进自己的命令行 |
+| `error_basic` | 错误 enum、`err!` 的写法、错误码 |
+| `string_template` | `fmt_tpl!`、`fmt_tpl_once!`、`fmt_pos!` |
+| `log_basic` | 控制台 + 文件双输出、按 layer 设置 filter、日志时间用 UTC |
+| `datetime_basic` | 格式化和解析、日 / 周 / 月边界、系统本地时区 |
+| `env_basic` | `BuiltinKey`、自定义 `EnvKey`、`env_get` / `env_get_opt` / `env_get_or` / `env_get_or_else` |
+| `redact_basic` | `#[redact(mask/skip)]`、`to_redacted_json`，对比普通 `serde_json` 序列化 |
+| `http_client_basic` | 请求本进程里起的 axum 服务，演示打码后的日志 |
+| `http_axum_response` | `AxumHttpResponse` / `AxumHttpError`、请求体大小限制 |
 
 ```bash
-# Build all crates
+cargo run -p hygiea-examples --example app_basic
+```
+
+app 的示例启动后按 Ctrl+C 退出，可以看到组件按启动的逆序关闭。
+
+## 开发
+
+### 构建
+
+```bash
+# 构建所有 crate
 cargo build
 
-# Build with all features
+# 开启全部 feature 构建
 cargo build --all-features
 
-# Run all tests, including the compile-fail (trybuild) tests in hygiea/tests
+# 跑全部测试，包括 hygiea-macros/tests 里的编译失败测试（trybuild）
 cargo test --workspace --all-features
 
-# After changing a macro error message, regenerate the trybuild snapshots and review the diff
-TRYBUILD=overwrite cargo test -p hygiea --test hy_err_ui --test redact_ui
+# 改了宏的报错信息后，重新生成 trybuild 快照并检查 diff
+TRYBUILD=overwrite cargo test -p hygiea-macros --test hy_err_ui --test redact_ui
 
-# Check documentation
+# 查看文档
 cargo doc --open
 ```
 
-## Design Principles
+## 设计原则
 
-1. **Facade Pattern**: Users only interact with `hygiea`, internal structure is hidden
-2. **Feature Gated**: Only compile what you need
-3. **Zero Cost**: Abstractions compile away, no runtime overhead
-4. **Type Safe**: Leverage Rust's type system for correctness
-5. **Ergonomic**: Easy to use, hard to misuse
+1. **Facade 模式**：使用方只接触 `hygiea`，内部结构不暴露
+2. **按 feature 编译**：只编译用到的部分
+3. **零成本**：抽象在编译期消除，没有运行时开销
+4. **类型安全**：借助 Rust 类型系统保证正确性
+5. **好用**：容易用对，不容易用错
 
-## License
+## 许可证
 
-Licensed under either of Apache License, Version 2.0 or MIT License, at your option.
+可任选 Apache License 2.0 或 MIT License。
 
-## Contact
+## 联系方式
 
-Author: wjj (tpxxwz)
-Email: tpxxwz@gmail.com
-GitHub: [@tpxxwz](https://github.com/tpxxwz)
+作者：wjj (tpxxwz)
+邮箱：tpxxwz@gmail.com
+GitHub：[@tpxxwz](https://github.com/tpxxwz)
 
-## Acknowledgments
+## 致谢
 
-This project is inspired by:
+本项目参考了：
 
-- [serde](https://github.com/serde-rs/serde) - Facade pattern and workspace organization
-- [thiserror](https://github.com/dtolnay/thiserror) - Proc-macro architecture
+- [serde](https://github.com/serde-rs/serde)：facade 模式和 workspace 组织方式
+- [thiserror](https://github.com/dtolnay/thiserror)：过程宏架构

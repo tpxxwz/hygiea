@@ -6,13 +6,13 @@ members = [
     "hygiea-macros",
     "hygiea-test-support",
     "hygiea-examples",
-    "hygiea-components/hygiea-component-http-axum",
-    "hygiea-components/hygiea-component-grpc-tonic",
-    "hygiea-components/hygiea-component-db-pg-seaorm",
-    "hygiea-components/hygiea-component-db-pg-sqlx",
-    "hygiea-components/hygiea-component-db-sqlite-sqlx",
-    "hygiea-components/hygiea-component-redis-fred",
+    "hygiea-components/hygiea-db",
+    "hygiea-components/hygiea-redis",
+    "hygiea-components/hygiea-http",
+    "hygiea-components/hygiea-grpc",
 ]
+# 独立的 crate，不属于这个 workspace：有自己的 Cargo.lock 和 target
+exclude = ["hygiea-playground"]
 
 [workspace.package]
 version = "0.1.1-alpha.5"
@@ -27,6 +27,11 @@ rust-version = "1.88"
 hygiea = { path = "hygiea", version = "0.1.1-alpha.5" }
 hygiea-core = { path = "hygiea-core", version = "0.1.1-alpha.5", default-features = false }
 hygiea-macros = { path = "hygiea-macros", version = "0.1.1-alpha.5" }
+# 组件 crate：按能力划分，框架 / 数据库用各自的 feature 选
+hygiea-db = { path = "hygiea-components/hygiea-db", version = "0.1.1-alpha.5" }
+hygiea-redis = { path = "hygiea-components/hygiea-redis", version = "0.1.1-alpha.5" }
+hygiea-http = { path = "hygiea-components/hygiea-http", version = "0.1.1-alpha.5" }
+hygiea-grpc = { path = "hygiea-components/hygiea-grpc", version = "0.1.1-alpha.5" }
 # 只做 dev-dependency、不发布，所以不带版本号（cargo publish 时会自动去掉没有版本号的 dev-dependency）
 hygiea-test-support = { path = "hygiea-test-support" }
 
@@ -98,3 +103,5 @@ time-tz = { version = "2.0.0", features = ["system"] }
 
 # 测试依赖
 serial_test = "4.0.1"
+# 测试里的临时文件和目录：drop 时自动删除，断言失败也不会留下文件
+tempfile = "3.27.0"

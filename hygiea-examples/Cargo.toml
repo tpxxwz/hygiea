@@ -14,18 +14,72 @@ publish = false
 err_code_project_prefix = "001"
 
 [dev-dependencies]
-hygiea = { workspace = true, features = ["full"] }
-# test-util：tests/sim_clock.rs 要暂停 tokio 时间
-tokio = { workspace = true, features = ["full", "test-util"] }
-parking_lot.workspace = true
-serial_test.workspace = true
-time.workspace = true
+# db-sqlx-sqlite / http-axum：app 示例用的现成组件，SQLite 用内存库，不需要装数据库服务；
+# full 已经带上 log、datetime-iana、redact、http-client 等本 crate 示例用到的 core feature
+hygiea = { workspace = true, features = ["full", "db-sqlx-sqlite", "http-axum"] }
+# app_basic / http_client_basic / http_axum_response 写 HTTP 路由用
+axum = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-serde_json.workspace = true
 serde = { workspace = true, features = ["derive"] }
-linkme.workspace = true
-anyhow.workspace = true
-reqwest = { workspace = true }
-tokio-util = { workspace = true }
-futures-util = { workspace = true }
+# redact_basic 对比普通序列化
+serde_json = { workspace = true }
+# datetime_basic 里给 UtcDateTime / OffsetDateTime 命名类型（hygiea 只扩展方法，不重导出这两个类型）
+time = { workspace = true }
+
+# 示例按主题分目录，Cargo 只自动发现 examples/*.rs 和 examples/*/main.rs，所以逐个声明
+[[example]]
+name = "app_basic"
+path = "examples/app/basic.rs"
+
+[[example]]
+name = "app_dependencies"
+path = "examples/app/dependencies.rs"
+
+[[example]]
+name = "app_named_instances"
+path = "examples/app/named_instances.rs"
+
+[[example]]
+name = "app_global_state"
+path = "examples/app/global_state.rs"
+
+[[example]]
+name = "app_background_task"
+path = "examples/app/background_task.rs"
+
+[[example]]
+name = "app_config"
+path = "examples/app/config.rs"
+
+[[example]]
+name = "error_basic"
+path = "examples/error/basic.rs"
+
+[[example]]
+name = "string_template"
+path = "examples/string/template.rs"
+
+[[example]]
+name = "log_basic"
+path = "examples/log/basic.rs"
+
+[[example]]
+name = "datetime_basic"
+path = "examples/datetime/basic.rs"
+
+[[example]]
+name = "env_basic"
+path = "examples/env/basic.rs"
+
+[[example]]
+name = "redact_basic"
+path = "examples/redact/basic.rs"
+
+[[example]]
+name = "http_client_basic"
+path = "examples/http_client/basic.rs"
+
+[[example]]
+name = "http_axum_response"
+path = "examples/http/axum_response.rs"

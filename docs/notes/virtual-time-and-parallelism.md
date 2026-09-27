@@ -1,6 +1,6 @@
 # Tokio 虚拟时间 & 多线程并行 — 调研笔记
 
-> 配合 `hygiea-core/examples/backtest_parallel.rs` 阅读。本文整理 tokio 时间 API、虚拟时钟机制、多线程下的限制，以及"全局虚拟时钟"在 Rust 异步生态下的几种实现路径。
+> 本文整理 tokio 时间 API、虚拟时钟机制、多线程下的限制，以及"全局虚拟时钟"在 Rust 异步生态下的几种实现路径。
 
 ---
 
@@ -209,8 +209,6 @@ tokio 选择"current_thread + 虚拟时间换确定性，multi_thread + 真实�
 **思路**：外层 `std::thread` / `rayon`，每个 OS 线程自己 build 一个 `current_thread + start_paused` 的 runtime。线程之间时钟互相独立。
 
 **适用**：参数搜索、并行回测 —— 各回测会话独立完成，无需共享时钟。
-
-**代码**：见 `hygiea-core/examples/backtest_parallel.rs`。
 
 **能力 / 限制**：
 - ✅ 利用所有 CPU 核心
@@ -452,14 +450,3 @@ async fn main() {
 - madsim 实战项目（RisingWave）：<https://github.com/risingwavelabs/risingwave>
 - TiKV 的 madsim 集成：<https://github.com/tikv/tikv>
 - 协作式调度 + cooperative budget：<https://docs.rs/tokio/latest/tokio/task/fn.consume_budget.html>
-
----
-
-## 附：本仓库相关代码索引
-
-| 文件 | 内容 |
-|---|---|
-| `hygiea-examples/tests/sim_clock.rs` | `SimClock` 实现，配套测试（已移出 core，暂存） |
-| `hygiea-core/src/sync/rate_limit.rs` | `TokenBucket` 实现，配套测试 |
-| `hygiea-core/src/datetime/clock.rs` 内 `tests::tokio_*` | tokio::time 各 API 的虚拟时间演示测试 |
-| `hygiea-core/examples/backtest_parallel.rs` | 方案 A 的完整 example：std::thread + 独立 paused runtime |

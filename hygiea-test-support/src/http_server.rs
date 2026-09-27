@@ -24,9 +24,14 @@ pub struct Reply {
     status: u16,
     headers: Vec<(String, String)>,
     body: Vec<u8>,
+    /// 收到请求之后、开始回任何东西之前等多久，用来测连接建立后的整体超时
     delay: Duration,
+    /// 头发完之后、写 body 之前再等多久，用来测 read_timeout（头和 body 之间的空闲）
+    body_delay: Duration,
     /// 声明的 content-length 比实际 body 多出的字节数，用来模拟读 body 中途断开
     missing_bytes: usize,
+    /// 收到请求后直接重置连接（RST），不写任何响应
+    reset: bool,
 }
 
 impl Reply {
@@ -37,7 +42,9 @@ impl Reply {
             headers: vec![("content-type".into(), "application/json".into())],
             body: body.into().into_bytes(),
             delay: Duration::ZERO,
+            body_delay: Duration::ZERO,
             missing_bytes: 0,
+            reset: false,
         }
     }
 
@@ -49,15 +56,38 @@ impl Reply {
         }
     }
 
+    /// 任意字节的响应，构造非 UTF-8 的 body（比如别的字符集编码出来的文本）
+    pub fn bytes(status: u16, content_type: impl Into<String>, body: Vec<u8>) -> Self {
+        Self {
+            headers: vec![("content-type".into(), content_type.into())],
+            body,
+            ..Self::empty(status)
+        }
+    }
+
+    /// 收到请求后直接重置连接（RST），不写任何响应，用来模拟对端连接被重置
+    pub fn reset() -> Self {
+        Self {
+            reset: true,
+            ..Self::empty(0)
+        }
+    }
+
     /// 加一个响应头
     pub fn header(mut self, name: &str, value: &str) -> Self {
         self.headers.push((name.into(), value.into()));
         self
     }
 
-    /// 先等一会儿再回，用来测超时
+    /// 先等一会儿再回，用来测连接建立后的整体超时
     pub fn delay(mut self, delay: Duration) -> Self {
         self.delay = delay;
+        self
+    }
+
+    /// 头发完之后再等一会儿才写 body，用来测 read_timeout：头很快到，body 隔了很久才来
+    pub fn body_delay(mut self, delay: Duration) -> Self {
+        self.body_delay = delay;
         self
     }
 
@@ -130,6 +160,14 @@ async fn handle(mut socket: TcpStream, handler: &(dyn Fn(&Received) -> Reply + S
         return;
     };
     let resp = handler(&req);
+    if resp.reset {
+        // linger(0) 后丢弃连接触发 RST，而不是正常的四次挥手，用来模拟连接被重置。
+        // tokio 标了 deprecated（说会在 drop 时阻塞线程），但这里就是故意要一个同步、
+        // 立即生效的重置，本地回环延迟可忽略不计
+        #[allow(deprecated)]
+        let _ = socket.set_linger(Some(Duration::ZERO));
+        return;
+    }
     if !resp.delay.is_zero() {
         tokio::time::sleep(resp.delay).await;
     }
@@ -145,6 +183,9 @@ async fn handle(mut socket: TcpStream, handler: &(dyn Fn(&Received) -> Reply + S
     }
     head.push_str("\r\n");
     let _ = socket.write_all(head.as_bytes()).await;
+    if !resp.body_delay.is_zero() {
+        tokio::time::sleep(resp.body_delay).await;
+    }
     let _ = socket.write_all(&resp.body).await;
     let _ = socket.shutdown().await;
 }
@@ -235,4 +276,99 @@ fn decode_chunked(mut raw: &[u8]) -> Vec<u8> {
         raw = raw.get(start + size + 2..).unwrap_or_default();
     }
     body
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    mod decode_chunked_tests {
+        use super::*;
+
+        /// 多个块按顺序拼起来
+        #[test]
+        fn multiple_chunks() {
+            let raw = b"5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n";
+            assert_eq!(decode_chunked(raw), b"hello world");
+        }
+
+        /// 块扩展（`;` 之后的部分）被忽略，不影响长度解析
+        #[test]
+        fn chunk_extension_is_ignored() {
+            let raw = b"5;foo=bar\r\nhello\r\n0\r\n\r\n";
+            assert_eq!(decode_chunked(raw), b"hello");
+        }
+
+        /// 长度字段本身不是合法的十六进制：直接停止，已解出的块不受影响
+        #[test]
+        fn invalid_size_hex_stops_decoding() {
+            let raw = b"3\r\nfoo\r\nzz\r\ndata\r\n0\r\n\r\n";
+            assert_eq!(decode_chunked(raw), b"foo");
+        }
+
+        /// 声明的长度比实际给的数据长：拿不到完整的这一块，直接停止
+        #[test]
+        fn declared_length_exceeds_available_data() {
+            let raw = b"a\r\nhi\r\n"; // 声明 0xa=10 字节，实际只给了 2
+            assert_eq!(decode_chunked(raw), b"");
+        }
+
+        /// 数据在块中途被截断（既没读满声明的长度，也没有结束块）：已经解出的前面几块保留
+        #[test]
+        fn truncated_chunk_keeps_earlier_chunks() {
+            let raw = b"3\r\nfoo\r\n5\r\nab"; // 第二块声明 5 字节，实际只给了 2 字节就断了
+            assert_eq!(decode_chunked(raw), b"foo");
+        }
+    }
+
+    mod read_request_tests {
+        use super::*;
+
+        /// 起一对本地已连接的 socket：一端模拟客户端发请求，另一端交给 `read_request` 解析
+        async fn connected_pair() -> (TcpStream, TcpStream) {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let client = TcpStream::connect(addr).await.unwrap();
+            let (server, _) = listener.accept().await.unwrap();
+            (client, server)
+        }
+
+        /// 请求行里的 query 被拆出来，没有的话是 None
+        #[tokio::test]
+        async fn parses_query_string() {
+            let (mut client, mut server) = connected_pair().await;
+            client
+                .write_all(b"GET /a?x=1&y=2 HTTP/1.1\r\nhost: h\r\n\r\n")
+                .await
+                .unwrap();
+            let req = read_request(&mut server).await.unwrap();
+            assert_eq!(req.path, "/a");
+            assert_eq!(req.query.as_deref(), Some("x=1&y=2"));
+
+            let (mut client, mut server) = connected_pair().await;
+            client
+                .write_all(b"GET /b HTTP/1.1\r\nhost: h\r\n\r\n")
+                .await
+                .unwrap();
+            let req = read_request(&mut server).await.unwrap();
+            assert_eq!(req.query, None);
+        }
+
+        /// chunked 请求体读到结束块为止，解码后就是原文
+        #[tokio::test]
+        async fn decodes_chunked_body() {
+            let (mut client, mut server) = connected_pair().await;
+            client
+                .write_all(
+                    b"POST /p HTTP/1.1\r\n\
+                      transfer-encoding: chunked\r\n\r\n\
+                      5\r\nhello\r\n0\r\n\r\n",
+                )
+                .await
+                .unwrap();
+            let req = read_request(&mut server).await.unwrap();
+            assert_eq!(req.method, "POST");
+            assert_eq!(req.body, b"hello");
+        }
+    }
 }

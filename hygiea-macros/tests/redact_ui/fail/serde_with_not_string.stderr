@@ -1,0 +1,5 @@
+error: expected a string literal
+  --> tests/redact_ui/fail/serde_with_not_string.rs:11:20
+   |
+11 |     #[serde(with = upper)]
+   |                    ^^^^^

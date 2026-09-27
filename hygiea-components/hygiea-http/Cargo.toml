@@ -1,0 +1,33 @@
+[package]
+name = "hygiea-http"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "HTTP server component for hygiea"
+
+# 选框架实现：目前只有 axum。默认什么都不开
+[features]
+default = []
+axum = ["dep:axum", "dep:tower-http", "dep:http", "dep:anyhow", "dep:serde_json"]
+
+[dependencies]
+hygiea-core = { workspace = true, features = ["app"] }
+axum = { workspace = true, optional = true }
+tower-http = { workspace = true, optional = true }
+http = { workspace = true, optional = true }
+anyhow = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["rt", "sync", "net"] }
+tracing = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "time", "net"] }
+tower = { version = "0.5", features = ["util"] }
+reqwest = { workspace = true }
+
+[package.metadata.docs.rs]
+all-features = true

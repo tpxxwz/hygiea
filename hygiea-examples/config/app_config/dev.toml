@@ -1,0 +1,10 @@
+# 默认环境（不传 --env、也没有 HYGIEA_ENV 时读这个）
+greeting = "hello from dev"   # app_config 示例自己的配置
+
+# 框架的日志配置（RegistryConfig.tracing）
+[registry.tracing]
+root_env_filter = "info"
+
+# SqlxSqliteComponent 的配置（SqlxSqliteConfig）
+[db]
+database = ":memory:"   # 数据库文件路径；":memory:" 是内存库，不需要装数据库服务

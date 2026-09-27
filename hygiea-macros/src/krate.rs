@@ -39,3 +39,46 @@ pub(crate) fn parse_crate_arg(
     *out = Some(lit.parse()?);
     Ok(true)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quote::quote;
+
+    /// 用 `parse_nested_meta` 跑一遍 `parse_crate_arg`，返回它自己的结果和是否命中 `crate` 这个键
+    fn run(attr: &syn::Attribute) -> syn::Result<(bool, Option<syn::Path>)> {
+        let mut out = None;
+        let mut matched = false;
+        attr.parse_nested_meta(|meta| {
+            matched = parse_crate_arg(&meta, &mut out)?;
+            Ok(())
+        })?;
+        Ok((matched, out))
+    }
+
+    #[test]
+    fn parse_crate_arg_valid() {
+        let attr: syn::Attribute = syn::parse_quote!(#[hy_err(crate = "::hygiea_core")]);
+        let (matched, out) = run(&attr).unwrap();
+        assert!(matched);
+        let path = out.expect("crate = 命中时应写入 out");
+        assert_eq!(quote!(#path).to_string(), quote!(::hygiea_core).to_string());
+    }
+
+    #[test]
+    fn parse_crate_arg_value_not_string() {
+        // crate 的值不是字符串字面量
+        let attr: syn::Attribute = syn::parse_quote!(#[hy_err(crate = 123)]);
+        assert!(run(&attr).is_err());
+    }
+
+    #[test]
+    fn parse_crate_arg_not_crate_key() {
+        // 不是 `crate` 这个键，直接返回 Ok(false)，不写 out；
+        // 写成不带值的裸标识符，避免 parse_nested_meta 因为没消费掉 `= 值` 部分而报另一种错误
+        let attr: syn::Attribute = syn::parse_quote!(#[hy_err(other)]);
+        let (matched, out) = run(&attr).unwrap();
+        assert!(!matched);
+        assert!(out.is_none());
+    }
+}

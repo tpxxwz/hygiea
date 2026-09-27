@@ -1,0 +1,16 @@
+# --env prod 时读这个
+greeting = "hello from prod"   # app_config 示例自己的配置
+
+# 框架的配置（RegistryConfig）：关闭前先等 5 秒，每个组件最多等 30 秒
+[registry]
+shutdown_delay_secs = 5
+shutdown_timeout_secs = 30
+
+# 框架的日志配置（RegistryConfig.tracing）
+[registry.tracing]
+root_env_filter = "warn,app_config=info"
+
+# SqlxSqliteComponent 的配置（SqlxSqliteConfig）
+[db]
+database = ":memory:"   # 数据库文件路径；":memory:" 是内存库
+max_connections = 8

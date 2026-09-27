@@ -1,0 +1,6 @@
+# -f local 时叠加在环境配置之上，只写要覆盖的字段（本机调试用）
+greeting = "hello from local"   # app_config 示例自己的配置
+
+# 框架的日志配置（RegistryConfig.tracing）
+[registry.tracing]
+root_env_filter = "debug"

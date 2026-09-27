@@ -12,11 +12,15 @@ use crate::{BaseErr, HyErr, ResultExt, err};
 
 static LOCAL_TIMEZONE: OnceLock<&'static Tz> = OnceLock::new();
 
+/// 测试专用、进程内全局的时区 override。用到它（直接调用 [`set_local_timezone`]，或者间接通过
+/// 测试辅助代码里的 `TzGuard`）的测试必须标 `#[serial(..)]`：并行跑会互相覆盖对方设的时区，
+/// 结果随哪个测试后设置而定
 #[cfg(test)]
 static LOCAL_TIMEZONE_OVERRIDE: parking_lot::RwLock<Option<&'static Tz>> =
     parking_lot::RwLock::new(None);
 
 /// 测试专用：覆盖 `local_timezone()` 返回的时区，`None` 恢复系统时区。
+/// 调用它的测试必须标 `#[serial(..)]`，见 [`LOCAL_TIMEZONE_OVERRIDE`] 的注释
 #[cfg(test)]
 pub(super) fn set_local_timezone(tz: Option<&'static Tz>) {
     *LOCAL_TIMEZONE_OVERRIDE.write() = tz;
@@ -397,6 +401,8 @@ mod tests {
         assert_eq!(actual.time(), expected.time(), "local time differs");
     }
 
+    /// 测试专用：构造时覆盖本地时区，drop 时恢复。用到它的测试必须标 `#[serial(..)]`：
+    /// `LOCAL_TIMEZONE_OVERRIDE` 是进程内全局的，并行跑会互相覆盖对方设的时区
     struct TzGuard;
 
     impl TzGuard {
@@ -425,42 +431,8 @@ mod tests {
     }
 
     // ---- parse -----------------------------------------------------------
-
-    #[test]
-    fn test_parse_ext_with_offset() {
-        let dt = OffsetDateTime::parse_ext_with_offset(
-            "2024-01-05 21:45:06 +08:00",
-            WithOffsetParser::YmdHMS,
-        )
-        .unwrap();
-        assert_eq!(dt.hour(), 21);
-        assert_eq!(dt.offset(), offset!(+8));
-
-        let dt = OffsetDateTime::parse_ext_with_offset(
-            "2024-01-05 21:45:06.789 +08:00",
-            WithOffsetParser::YmdHMS3F,
-        )
-        .unwrap();
-        assert_eq!(dt.nanosecond(), 789_000_000);
-
-        let nosep = OffsetDateTime::parse_ext_with_offset(
-            "20240105214506+0800",
-            WithOffsetParser::YmdHMSnosep,
-        )
-        .unwrap();
-        let separated = OffsetDateTime::parse_ext_with_offset(
-            "2024-01-05 21:45:06 +08:00",
-            WithOffsetParser::YmdHMS,
-        )
-        .unwrap();
-        assert_eq!(nosep, separated);
-
-        // 缺 offset 报错
-        assert!(
-            OffsetDateTime::parse_ext_with_offset("2024-01-05 21:45:06", WithOffsetParser::YmdHMS)
-                .is_err()
-        );
-    }
+    // `parse_ext_with_offset` 本身的解析行为（各种格式、往返、缺 offset 报错）由
+    // `datetime::layout` 的 `test_with_offset_parser_parse` 覆盖，这里不重复
 
     #[test]
     #[serial]
@@ -752,5 +724,108 @@ mod tests {
         assert_eq!(start, datetime!(2024-01-10 0:00:00 -5));
         assert_eq!(start, datetime!(2024-01-10 5:00:00 UTC));
         assert_eq!(start.offset(), offset!(-5));
+    }
+
+    /// America/Santiago 2024-04-06 当地 24:00 从 -03:00 回拨到 -04:00，23:00~24:00 这段钟面时间
+    /// 走了两遍，`end_of_day_local`（23:59:59.999999999）落在这个重叠窗口里，得到 `Ambiguous`
+    #[test]
+    #[serial]
+    fn test_end_of_day_local_santiago_dst_overlap() {
+        let _tz_guard = TzGuard::new(tz("America/Santiago"));
+        let dt = datetime!(2024-04-06 15:00:00 -3);
+        let OffsetResult::Ambiguous(first, second) = dt.end_of_day_local().unwrap() else {
+            panic!("expected ambiguous end_of_day_local");
+        };
+        assert_eq!(first.date(), second.date());
+        assert_eq!(first.time(), second.time());
+        let offsets = [first.offset(), second.offset()];
+        assert!(offsets.contains(&offset!(-3)) && offsets.contains(&offset!(-4)));
+        assert_eq!(
+            (first.unix_timestamp() - second.unix_timestamp()).abs(),
+            3600
+        );
+    }
+
+    /// 纽约两个 DST 切换日，当天零点都不在切换窗口里，`start_of_day_local` 唯一，
+    /// 但切换前后使用的 offset 不同
+    #[test]
+    #[serial]
+    fn test_start_of_day_local_new_york_dst_transition_days() {
+        let _tz_guard = TzGuard::new(tz("America/New_York"));
+        // 3-10 春季拨快发生在当天 02:00，零点仍是 EST（-05:00）
+        let spring = datetime!(2024-03-10 12:00:00 UTC);
+        let start = unique(spring.start_of_day_local());
+        assert_eq!(start, datetime!(2024-03-10 0:00:00 -5));
+        assert_eq!(start.offset(), offset!(-5));
+        // 11-3 秋季回拨发生在当天 02:00，零点仍是 EDT（-04:00）
+        let fall = datetime!(2024-11-03 12:00:00 UTC);
+        let start = unique(fall.start_of_day_local());
+        assert_eq!(start, datetime!(2024-11-03 0:00:00 -4));
+        assert_eq!(start.offset(), offset!(-4));
+    }
+
+    /// 跨夏令时切换的 `shift_local`：按绝对时长平移，转换回本地时区后 offset 跟着新时刻变，
+    /// 本地钟面时间因此不是简单的原时间 + 时长
+    #[test]
+    #[serial]
+    fn test_shift_local_across_dst_spring_forward() {
+        let _tz_guard = TzGuard::new(tz("America/New_York"));
+        // 2024-03-09 12:00 EST（-05:00），平移 24 小时后是 2024-03-10 12:00 UTC，
+        // 已经过了拨快点，本地是 EDT（-04:00）
+        let before = datetime!(2024-03-09 17:00:00 UTC);
+        assert_eq!(to_local(&before).unwrap().offset(), offset!(-5));
+        let shifted = before.shift_local(Duration::hours(24)).unwrap();
+        assert_eq!(shifted - before, Duration::hours(24));
+        assert_eq!(shifted.offset(), offset!(-4));
+        // 本地钟面时间因为跨过拨快显示为 13:00，而不是保持 12:00
+        assert_eq!(shifted.hour(), 13);
+    }
+
+    /// 同一时刻用不同 offset 表示，`_local` 系列方法的结果只看时刻本身，和输入自带的 offset 无关
+    #[test]
+    #[serial]
+    fn test_local_methods_ignore_input_offset() {
+        let _tz_guard = TzGuard::new(tz("Asia/Shanghai"));
+        let plus8 = datetime!(2024-01-05 21:45:06 +8);
+        let minus5 = plus8.to_offset(offset!(-5));
+        assert_ne!(plus8.offset(), minus5.offset());
+        assert_eq!(
+            unique(plus8.start_of_day_local()),
+            unique(minus5.start_of_day_local())
+        );
+        assert_eq!(
+            plus8
+                .format_ext_local(WithoutOffsetFormatter::YmdHMS.into())
+                .unwrap(),
+            minus5
+                .format_ext_local(WithoutOffsetFormatter::YmdHMS.into())
+                .unwrap()
+        );
+        assert_eq!(
+            plus8.shift_local(Duration::hours(1)).unwrap(),
+            minus5.shift_local(Duration::hours(1)).unwrap()
+        );
+    }
+
+    /// 纽约回拨当天，两个相差 1 小时的时刻本地钟面时间相同（都是 01:30:00），
+    /// `format_ext_local` 按各自实际的 offset 输出，不会混淆
+    #[test]
+    #[serial]
+    fn test_format_ext_local_new_york_dst_overlap() {
+        let _tz_guard = TzGuard::new(tz("America/New_York"));
+        let before = datetime!(2024-11-03 5:30:00 UTC);
+        let after = datetime!(2024-11-03 6:30:00 UTC);
+        assert_eq!(
+            before
+                .format_ext_local(WithOffsetFormatter::YmdTHMS3F.into())
+                .unwrap(),
+            "2024-11-03T01:30:00.000-04:00"
+        );
+        assert_eq!(
+            after
+                .format_ext_local(WithOffsetFormatter::YmdTHMS3F.into())
+                .unwrap(),
+            "2024-11-03T01:30:00.000-05:00"
+        );
     }
 }

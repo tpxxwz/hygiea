@@ -233,8 +233,10 @@ impl DateTimeFormatter {
 
 #[cfg(test)]
 mod tests {
+    use time::macros::datetime;
+    use time::{PrimitiveDateTime, UtcOffset};
+
     use super::*;
-    use time::UtcOffset;
 
     // ---- FromStr / From ------------------------------------------------------
 
@@ -343,5 +345,170 @@ mod tests {
                 .parse("2024-01-05 21:45:06")
                 .is_err()
         );
+    }
+
+    // ---- 解析失败 --------------------------------------------------------------
+
+    #[test]
+    fn test_parse_invalid_calendar_date_fails() {
+        // 2023 不是闰年，没有 2 月 29 日
+        assert!(
+            PrimitiveDateTime::parse(
+                "2023-02-29 12:00:00",
+                WithoutOffsetFormatter::from(WithoutOffsetParser::YmdHMS).description(),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn test_parse_invalid_time_fails() {
+        // 小时只能是 0-23
+        assert!(
+            PrimitiveDateTime::parse(
+                "2024-01-05 24:00:00",
+                WithoutOffsetFormatter::from(WithoutOffsetParser::YmdHMS).description(),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn test_parse_trailing_characters_fails() {
+        assert!(
+            PrimitiveDateTime::parse(
+                "2024-01-05 13:45:06x",
+                WithoutOffsetFormatter::from(WithoutOffsetParser::YmdHMS).description(),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn test_parse_empty_input_fails() {
+        assert!(
+            PrimitiveDateTime::parse(
+                "",
+                WithoutOffsetFormatter::from(WithoutOffsetParser::YmdHMS).description(),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn test_parse_subsecond_digits_insufficient_fails() {
+        // `[subsecond digits:3]` 要求恰好 3 位，只给 2 位报错
+        assert!(
+            PrimitiveDateTime::parse(
+                "2024-01-05 13:45:06.78",
+                WithoutOffsetFormatter::from(WithoutOffsetParser::YmdHMS3F).description(),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn test_parse_nosep_insufficient_digits_fails() {
+        // 少一位秒的十位数字（正常应是 20240105134506，14 位）
+        assert!(
+            PrimitiveDateTime::parse(
+                "2024010513450",
+                WithoutOffsetFormatter::from(WithoutOffsetParser::YmdHMSnosep).description(),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn test_parse_offset_missing_leading_zero_fails() {
+        // `[offset_hour sign:mandatory]` 按 2 位补零，"+8:00" 缺少前导 0
+        assert!(
+            OffsetDateTime::parse(
+                "2024-01-05 21:45:06 +8:00",
+                WithOffsetParser::YmdHMS.description()
+            )
+            .is_err()
+        );
+    }
+
+    // ---- format → parse 往返 ----------------------------------------------------
+
+    /// `WithoutOffsetParser` 的每个变体都做一遍格式化再解析，应该等于原值
+    #[test]
+    fn test_without_offset_parser_format_parse_round_trip() {
+        let cases = [
+            (WithoutOffsetParser::YmdHMS, datetime!(2024-01-05 13:45:06)),
+            (
+                WithoutOffsetParser::YmdHMS3F,
+                datetime!(2024-01-05 13:45:06.789),
+            ),
+            (
+                WithoutOffsetParser::YmdHMSnosep,
+                datetime!(2024-01-05 13:45:06),
+            ),
+        ];
+        for (parser, dt) in cases {
+            let description = WithoutOffsetFormatter::from(parser).description();
+            let formatted = dt.format(description).unwrap();
+            let parsed = PrimitiveDateTime::parse(&formatted, description).unwrap();
+            assert_eq!(parsed, dt, "{parser:?}");
+        }
+    }
+
+    /// `WithOffsetParser` 的每个变体都做一遍格式化再解析，应该等于原值
+    #[test]
+    fn test_with_offset_parser_format_parse_round_trip() {
+        let cases = [
+            (WithOffsetParser::YmdHMS, datetime!(2024-01-05 21:45:06 +8)),
+            (
+                WithOffsetParser::YmdHMS3F,
+                datetime!(2024-01-05 21:45:06.789 +8),
+            ),
+            (
+                WithOffsetParser::YmdHMSnosep,
+                datetime!(2024-01-05 21:45:06 +8),
+            ),
+        ];
+        for (parser, dt) in cases {
+            let description = parser.description();
+            let formatted = dt.format(description).unwrap();
+            let parsed = OffsetDateTime::parse(&formatted, description).unwrap();
+            assert_eq!(parsed, dt, "{parser:?}");
+        }
+    }
+
+    /// `WithoutOffsetFormatter` 里 `Y` / `HMS` / `Ymd` / `Ymdnosep` 只能格式化，没有对应的
+    /// `WithoutOffsetParser` 变体；用穷尽 match 固化下来，新增变体时这里也要跟着改
+    #[test]
+    fn test_formatter_only_variants_have_no_parser() {
+        use WithoutOffsetFormatter::*;
+
+        let has_parser = |formatter: WithoutOffsetFormatter| {
+            [
+                WithoutOffsetParser::YmdHMS,
+                WithoutOffsetParser::YmdHMS3F,
+                WithoutOffsetParser::YmdHMSnosep,
+            ]
+            .into_iter()
+            .any(|parser| WithoutOffsetFormatter::from(parser) == formatter)
+        };
+
+        for formatter in [Y, HMS, Ymd, Ymdnosep, YmdHMS, YmdHMS3F, YmdHMSnosep] {
+            let expect_parser = matches!(formatter, YmdHMS | YmdHMS3F | YmdHMSnosep);
+            assert_eq!(has_parser(formatter), expect_parser, "{formatter:?}");
+        }
+
+        // `WithOffsetFormatter::YmdTHMS3F` 同样只能格式化，但 WithOffsetParser 和 WithOffsetFormatter
+        // 之间没有 `From` 转换可用来做同样的断言：这是两个独立枚举，YmdTHMS3F 只在 Formatter 里有变体，
+        // Parser 没有同名变体纯粹是枚举定义的事实，没有运行时 API 能表达，这里不补充断言
+    }
+
+    // ---- 反序列化 --------------------------------------------------------------
+
+    #[cfg(feature = "log")]
+    #[test]
+    fn test_datetime_formatter_deserialize_invalid_string_fails() {
+        let err = serde_json::from_str::<DateTimeFormatter>("\"bogus\"").unwrap_err();
+        assert!(err.to_string().contains("bogus"));
     }
 }

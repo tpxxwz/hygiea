@@ -1,117 +1,31 @@
-//! # WJJ Standard Library
+//! hygiea：基于组件的 Rust 应用框架（`hygiea::app`），附带错误、日志、日期、字符串等基础功能的封装和扩展。
 //!
-//! WJJ's comprehensive standard library for Rust projects, providing a unified
-//! toolkit with error handling, utilities, and more.
-//!
-//! ## Features
-//!
-//! - **Error Handling**: Template-based error generation with automatic error code management
-//! - **String Utils**: String manipulation utilities
-//! - **HTTP Utils**: HTTP client utilities
-//! - **JSON Utils**: JSON processing utilities (coming soon)
-//! - **Time Utils**: Time and date utilities (coming soon)
-//!
-//! ## Quick Start
-//!
-//! ### Error Handling
-//!
-//! ```rust
-//! # #[cfg(feature = "error")]
-//! # {
-//! use hygiea::{err, hy_err};
-//!
-//! // Templates with variables use err!(X, { .. }); fixed messages use err!(X).
-//! // Using the wrong form is a compile error.
-//! // The project prefix comes from Cargo.toml ([package.metadata.hygiea] err_code_project_prefix);
-//! // each enum picks a 2-digit module prefix, and variants use 3-digit codes.
-//! #[derive(hy_err)]
-//! #[err_code_module_prefix = "01"]
-//! pub enum UserErrors {
-//!     #[error(err_code = "001", err_tpl = "User {{ name }} not found")]
-//!     UserNotFound,
-//!
-//!     #[error(err_code = "002", err_tpl = "Invalid email: {{ email }}")]
-//!     InvalidEmail,
-//! }
-//!
-//! #[derive(hy_err)]
-//! #[err_code_module_prefix = "02"]
-//! pub enum SystemErrors {
-//!     #[error(err_code = "001", err_tpl = "Database connection failed")]
-//!     DbConnectionFailed,
-//!
-//!     #[error(err_code = "002", err_tpl = "Configuration error")]
-//!     ConfigError,
-//! }
-//!
-//! fn main() {
-//!     // Template with variables
-//!     let err = err!(UserErrors::UserNotFound, "Alice");
-//!     println!("Error: {}", err);  // Error: User Alice not found
-//!
-//!     // Fixed message
-//!     let err = err!(SystemErrors::DbConnectionFailed);
-//!     println!("Error: {}", err);  // Error: Database connection failed
-//! }
-//! # }
-//! ```
-//!
-//! ## Architecture
-//!
-//! This library uses a facade pattern with three internal crates:
-//! - `hygiea`: Public API (this crate)
-//! - `hygiea-core`: Core implementation
-//! - `hygiea-macros`: Procedural macros
-//!
-//! ## Feature Flags
-//!
-//! Always available (no feature needed): error handling, `redact`, `datetime`, `env`, `string`.
-//!
-//! - `http`: HTTP client on top of reqwest
-//! - `log`: tracing setup (implies `datetime-iana`)
-//! - `app`: Component-based application framework (implies `log`)
-//! - `distributed-lock`: `DistributedLock` trait
-//! - `datetime-iana` / `datetime-chrono`: IANA timezones, chrono bridge
-//! - `ws`: WebSocket client (work in progress, currently empty)
-//! - `json`: Reserved, currently empty
-//! - `full`: Enable all features
-//!
-//! ## Error Code System
-//!
-//! Error codes follow an 8-digit format: `PPPNNNNN`
-//! - `PPP`: Prefix (3 digits) - Module identifier
-//! - `NNNNN`: Number (5 digits) - Specific error identifier
-//!
-//! Example: `00100001` = Module `001`, Error `00001`
+//! 这是 facade crate，使用方只依赖它：core 的内容全部在根上重新导出，组件（db / redis / http / grpc）
+//! 按 feature 导出到对应的子模块。用法、feature 列表、错误码规则见
+//! [README](https://github.com/tpxxwz/hygiea#readme)。
 
-#![doc(html_root_url = "https://docs.rs/hygiea/0.0.1")]
 #![deny(missing_docs)]
 
-// 为了让宏生成的代码能找到 ::hygiea:: 路径
-extern crate self as hygiea;
+// core 的全部内容（包括经由 core 导出的过程宏、#[macro_export] 的宏）。哪些模块存在由 core 的 feature 决定
+pub use hygiea_core::*;
 
-// ========== 常开 ==========
-#[doc(hidden)]
-pub use hygiea_core::__private;
-pub use hygiea_core::{
-    BaseErr, ErrKind, HyErr, ResultExt, SUCCESS_CODE, bail, datetime, env, err, hy_err, redact,
-    sync,
-};
+// ========== 组件（各自一个 crate，core 不能依赖它们，所以由 facade 导出） ==========
+/// 数据库组件：`db-sqlx-postgres`、`db-sqlx-sqlite`、`db-seaorm-postgres`
+#[cfg(any(
+    feature = "db-sqlx-postgres",
+    feature = "db-sqlx-sqlite",
+    feature = "db-seaorm-postgres"
+))]
+pub use hygiea_db as db;
 
-// ========== 按 feature，模块名与 hygiea-core 一致 ==========
-#[cfg(feature = "log")]
-pub use hygiea_core::log;
+/// Redis 组件：`redis-fred`
+#[cfg(feature = "redis-fred")]
+pub use hygiea_redis as redis;
 
-#[cfg(feature = "app")]
-pub use hygiea_core::app;
+/// HTTP 服务组件：`http-axum`。HTTP 客户端是 `hygiea::net::http_client`（`http-client` feature）
+#[cfg(feature = "http-axum")]
+pub use hygiea_http as http;
 
-#[cfg(any(feature = "http", feature = "ws"))]
-pub use hygiea_core::net;
-
-/// 字符串工具：core 的正则和模板函数，加上 `fmt_tpl!` 等宏（宏由 `#[macro_export]` 导出在 crate 根）
-pub mod string;
-
-// ========== Feature: json ==========
-/// JSON utilities module (coming soon)
-#[cfg(feature = "json")]
-pub mod json {}
+/// gRPC 服务组件：`grpc-tonic`
+#[cfg(feature = "grpc-tonic")]
+pub use hygiea_grpc as grpc;

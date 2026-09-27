@@ -1,0 +1,5 @@
+error: expected `=`
+ --> tests/hy_err_ui/fail/error_attr_parse_failed.rs:6:21
+  |
+6 |     #[error(err_code)]
+  |                     ^

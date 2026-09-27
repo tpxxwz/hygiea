@@ -1,0 +1,5 @@
+error: expected string literal
+ --> tests/hy_err_ui/fail/hy_err_crate_not_string.rs:5:18
+  |
+5 | #[hy_err(crate = 123)]
+  |                  ^^^

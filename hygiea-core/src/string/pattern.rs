@@ -354,4 +354,67 @@ mod tests {
         let result = first_two_groups(r"(\w+)@(\w+)", "no match").unwrap();
         assert_eq!(result, (None, None));
     }
+
+    // ===== replace_literal / replace_all_literal =====
+
+    /// replace_literal 和 replace_all_literal 里 `$` 不被展开（成对测）
+    #[test]
+    fn test_replace_literal_dollar_not_expanded() {
+        // 普通版本展开：$1 被替换成捕获组的内容
+        let expanded = replace(r"(\w+)-(\w+)", "a-b", "$2-$1").unwrap();
+        assert_eq!(expanded, "b-a");
+
+        // literal 版本不展开：`$2-$1` 作为字面量
+        let literal = replace_literal(r"(\w+)-(\w+)", "a-b", "$2-$1").unwrap();
+        assert_eq!(literal, "$2-$1");
+
+        // replace_all 也展开：多个匹配时每个都替换成对应的捕获组
+        // 正则 (\d) 匹配两个数字，每个数字就是 $1
+        let expanded_all = replace_all(r"(\d)", "a1b2", "X$1").unwrap();
+        assert_eq!(expanded_all, "aX1bX2");
+
+        // literal 版本在 replace_all 中也不展开
+        let literal_all = replace_all_literal(r"(\d)", "a1b2", "X$1").unwrap();
+        assert_eq!(literal_all, "aX$1bX$1");
+
+        // `$$` 在普通版本是转义成 `$`，在 literal 版本是字面的两个 `$`
+        let normal_dollar = replace_all(r"\d", "a1", "$$").unwrap();
+        assert_eq!(normal_dollar, "a$");
+
+        let literal_dollar = replace_all_literal(r"\d", "a1", "$$").unwrap();
+        assert_eq!(literal_dollar, "a$$");
+    }
+
+    /// 正则缓存有上限，超出后最早插入的被淘汰
+    #[test]
+    fn test_pattern_cache_bounded() {
+        // 生成足够多的不同正则，超过缓存上限
+        for i in 0..PATTERN_CACHE_CAPACITY.get() * 2 {
+            // 每个正则都是独一无二的，但都能匹配同一个输入
+            let regex = format!(r"(?:pattern filler {i} )?(\d+)");
+            let matched = find(&regex, "42").unwrap();
+            // 每个正则都应该能匹配，说明缓存在工作
+            assert_eq!(matched, Some("42".to_string()), "regex {}: {}", i, regex);
+        }
+        let cache = PATTERN_CACHE.read();
+        // 最早的那条（0）已经被淘汰
+        assert!(!cache.contains(r"(?:pattern filler 0 )(\d+)"));
+        // 缓存里的条目不应该超过上限
+        assert!(cache.len() <= PATTERN_CACHE_CAPACITY.get());
+    }
+
+    /// 空串和 Unicode 输入
+    #[test]
+    fn test_pattern_empty_and_unicode() {
+        // 空串匹配任意位置
+        assert!(is_match("", "abc").unwrap());
+        assert!(is_match("", "").unwrap());
+
+        // Unicode 正则
+        assert!(is_match("你好", "hello 你好 world").unwrap());
+        assert_eq!(
+            captures(r"用户=(\w+)", "用户=alice").unwrap(),
+            Some(vec![Some("alice".to_string())])
+        );
+    }
 }

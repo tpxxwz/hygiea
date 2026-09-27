@@ -417,6 +417,177 @@ mod tests {
             };
             assert_eq!(log_of(&v), json!({"code":"0","data":[1.5]}));
         }
+
+        /// Vec<带打码字段的 struct>
+        #[test]
+        fn vec_of_struct_with_redact() {
+            let keys = vec![key(), key()];
+            assert_eq!(log_of(&keys), json!([key_log(), key_log()]));
+        }
+
+        /// HashMap<K, 带打码字段的 struct>
+        #[test]
+        fn hashmap_value_with_redact() {
+            let map = HashMap::from([("first", key()), ("second", key())]);
+            let logged = log_of(&map);
+            // HashMap 序列化成对象，值按打码规则处理
+            assert_eq!(logged, json!({"first": key_log(), "second": key_log()}));
+        }
+
+        /// Option<嵌套 struct>：Some 时打码，None 时按原样
+        #[test]
+        fn option_nested_struct_with_redact() {
+            assert_eq!(log_of(&Some(key())), key_log());
+            assert_eq!(log_of(&(None::<Key>)), Value::Null);
+        }
+    }
+
+    /// mask 字段本身是 Vec 或 struct 时，整体替换成占位符
+    mod complex_mask {
+        use super::*;
+
+        #[redact]
+        #[derive(Serialize)]
+        struct VecField {
+            #[redact(mask)]
+            items: Vec<String>,
+        }
+
+        #[redact]
+        #[derive(Serialize)]
+        struct NestedStruct {
+            #[redact(mask)]
+            inner: Key,
+        }
+
+        #[test]
+        fn vec_mask_becomes_placeholder() {
+            let v = VecField {
+                items: vec!["a".into(), "b".into()],
+            };
+            // mask 字段本身是 Vec，整体替换成 ***
+            assert_eq!(log_of(&v), json!({"items":"***"}));
+            // 平时序列化照常输出
+            assert_eq!(both(&v).1, json!({"items": ["a", "b"]}));
+        }
+
+        #[test]
+        fn struct_mask_becomes_placeholder() {
+            let v = NestedStruct { inner: key() };
+            // mask 字段本身是 struct，整体替换成 ***（不是嵌套打码）
+            assert_eq!(log_of(&v), json!({"inner":"***"}));
+            // 平时序列化照常输出
+            assert_eq!(both(&v).1, json!({"inner": key_raw()}));
+        }
+    }
+
+    /// skip 用在 Option 字段：存在时跳过，None 也跳过
+    mod option_skip {
+        use super::*;
+
+        #[redact]
+        #[derive(Serialize)]
+        struct WithSkipped {
+            name: String,
+            #[redact(skip)]
+            optional_field: Option<String>,
+        }
+
+        #[test]
+        fn skip_on_option_some() {
+            let v = WithSkipped {
+                name: "test".into(),
+                optional_field: Some("value".into()),
+            };
+            assert_eq!(log_of(&v), json!({"name": "test"}));
+            assert_eq!(
+                both(&v).1,
+                json!({"name": "test", "optional_field": "value"})
+            );
+        }
+
+        #[test]
+        fn skip_on_option_none() {
+            let v = WithSkipped {
+                name: "test".into(),
+                optional_field: None,
+            };
+            assert_eq!(log_of(&v), json!({"name": "test"}));
+            assert_eq!(both(&v).1, json!({"name": "test", "optional_field": null}));
+        }
+    }
+
+    /// 枚举变体：#[serde(tag)]、tag + content、untagged
+    mod enum_variants {
+        use super::*;
+
+        #[redact]
+        #[derive(Serialize)]
+        #[serde(tag = "type")]
+        enum TaggedEnum {
+            Login {
+                #[redact(mask)]
+                password: String,
+            },
+            Logout,
+        }
+
+        #[redact]
+        #[derive(Serialize)]
+        #[serde(tag = "t", content = "c")]
+        enum TagContentEnum {
+            Data(#[redact(mask)] String),
+            Empty,
+        }
+
+        #[redact]
+        #[derive(Serialize)]
+        #[serde(untagged)]
+        enum UntaggedEnum {
+            Text(String),
+            Secret(#[redact(mask)] String),
+        }
+
+        #[test]
+        fn tag_enum() {
+            let v = TaggedEnum::Login {
+                password: "secret".into(),
+            };
+            // tag 枚举：type 字段识别变体，password 打码
+            assert_eq!(log_of(&v), json!({"type": "Login", "password": "***"}));
+            // 没有字段的变体只剩 tag
+            assert_eq!(log_of(&TaggedEnum::Logout), json!({"type": "Logout"}));
+        }
+
+        #[test]
+        fn tag_content_enum() {
+            let v = TagContentEnum::Data("sensitive".into());
+            // tag + content：t 字段是 tag，c 字段是 content
+            assert_eq!(log_of(&v), json!({"t": "Data", "c": "***"}));
+            // 没有内容的变体只有 tag
+            assert_eq!(log_of(&TagContentEnum::Empty), json!({"t": "Empty"}));
+        }
+
+        #[test]
+        fn untagged_enum() {
+            let v = UntaggedEnum::Secret("hidden".into());
+            // untagged：直接序列化为字符串，打码生效
+            assert_eq!(log_of(&v), json!("***"));
+            // 没标 mask 的变体原样输出
+            assert_eq!(log_of(&UntaggedEnum::Text("plain".into())), json!("plain"));
+        }
+    }
+
+    /// 普通 serde_json::to_string 不打码
+    #[test]
+    fn normal_serialize_not_redacted() {
+        let k = key();
+        let normal = serde_json::to_string(&k).unwrap();
+        let json: Value = serde_json::from_str(&normal).unwrap();
+        // 普通序列化输出原文
+        assert_eq!(json, key_raw());
+        // 不包含 ***
+        assert!(!normal.contains(MASKED));
     }
 
     /// 和字段上已有的 serde 属性组合

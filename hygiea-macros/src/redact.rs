@@ -378,3 +378,164 @@ fn parse_path_value(meta: &syn::Meta) -> syn::Result<syn::ExprPath> {
     let lit = lit_str(meta)?;
     lit.parse()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ===== take_redact_attr =====
+
+    #[test]
+    fn take_redact_attr_mask() {
+        let mut attrs: Vec<syn::Attribute> = vec![syn::parse_quote!(#[redact(mask)])];
+        let (action, _attr) = take_redact_attr(&mut attrs)
+            .unwrap()
+            .expect("应识别出 mask");
+        assert!(matches!(action, Action::Mask));
+        assert!(attrs.is_empty());
+    }
+
+    #[test]
+    fn take_redact_attr_skip() {
+        let mut attrs: Vec<syn::Attribute> = vec![syn::parse_quote!(#[redact(skip)])];
+        let (action, _attr) = take_redact_attr(&mut attrs)
+            .unwrap()
+            .expect("应识别出 skip");
+        assert!(matches!(action, Action::Skip));
+        assert!(attrs.is_empty());
+    }
+
+    #[test]
+    fn take_redact_attr_none_when_absent() {
+        // 没有 #[redact(..)] 时返回 None，其他属性原样保留
+        let mut attrs: Vec<syn::Attribute> = vec![syn::parse_quote!(#[serde(rename = "x")])];
+        let result = take_redact_attr(&mut attrs).unwrap();
+        assert!(result.is_none());
+        assert_eq!(attrs.len(), 1);
+    }
+
+    #[test]
+    fn take_redact_attr_keeps_other_attrs() {
+        // 取出 #[redact(..)] 之后，字段上别的属性不受影响
+        let mut attrs: Vec<syn::Attribute> = vec![
+            syn::parse_quote!(#[serde(rename = "x")]),
+            syn::parse_quote!(#[redact(mask)]),
+        ];
+        let result = take_redact_attr(&mut attrs).unwrap();
+        assert!(result.is_some());
+        assert_eq!(attrs.len(), 1);
+        assert!(attrs[0].path().is_ident("serde"));
+    }
+
+    #[test]
+    fn take_redact_attr_empty_is_err() {
+        // #[redact()] 里什么都没写
+        let mut attrs: Vec<syn::Attribute> = vec![syn::parse_quote!(#[redact()])];
+        assert!(take_redact_attr(&mut attrs).is_err());
+    }
+
+    #[test]
+    fn take_redact_attr_unknown_option_is_err() {
+        let mut attrs: Vec<syn::Attribute> = vec![syn::parse_quote!(#[redact(hide)])];
+        assert!(take_redact_attr(&mut attrs).is_err());
+    }
+
+    #[test]
+    fn take_redact_attr_duplicate_mask_and_skip_is_err() {
+        let mut attrs: Vec<syn::Attribute> = vec![
+            syn::parse_quote!(#[redact(mask)]),
+            syn::parse_quote!(#[redact(skip)]),
+        ];
+        assert!(take_redact_attr(&mut attrs).is_err());
+    }
+
+    #[test]
+    fn take_redact_attr_duplicate_within_one_attr_is_err() {
+        // 一个 #[redact(..)] 里同时写 mask 和 skip
+        let mut attrs: Vec<syn::Attribute> = vec![syn::parse_quote!(#[redact(mask, skip)])];
+        assert!(take_redact_attr(&mut attrs).is_err());
+    }
+
+    // ===== serde_metas =====
+
+    #[test]
+    fn serde_metas_collects_single_attr() {
+        let attrs: Vec<syn::Attribute> = vec![syn::parse_quote!(#[serde(rename = "x", skip)])];
+        let metas = serde_metas(&attrs).unwrap();
+        assert_eq!(metas.len(), 2);
+        assert!(metas[0].path().is_ident("rename"));
+        assert!(metas[1].path().is_ident("skip"));
+    }
+
+    #[test]
+    fn serde_metas_merges_multiple_attrs() {
+        let attrs: Vec<syn::Attribute> = vec![
+            syn::parse_quote!(#[serde(rename = "x")]),
+            syn::parse_quote!(#[serde(skip)]),
+        ];
+        let metas = serde_metas(&attrs).unwrap();
+        assert_eq!(metas.len(), 2);
+    }
+
+    #[test]
+    fn serde_metas_ignores_non_serde_attrs() {
+        let attrs: Vec<syn::Attribute> = vec![syn::parse_quote!(#[redact(mask)])];
+        let metas = serde_metas(&attrs).unwrap();
+        assert!(metas.is_empty());
+    }
+
+    #[test]
+    fn serde_metas_invalid_content_is_err() {
+        // 括号里不是合法的 Meta（既不是 path，也不是 name = value / name(..)）
+        let attrs: Vec<syn::Attribute> = vec![syn::parse_quote!(#[serde(1)])];
+        assert!(serde_metas(&attrs).is_err());
+    }
+
+    // ===== lit_str =====
+
+    #[test]
+    fn lit_str_accepts_name_value_string() {
+        let meta: syn::Meta = syn::parse_quote!(with = "my_mod");
+        let lit = lit_str(&meta).unwrap();
+        assert_eq!(lit.value(), "my_mod");
+    }
+
+    #[test]
+    fn lit_str_rejects_non_string_literal() {
+        let meta: syn::Meta = syn::parse_quote!(with = 1);
+        assert!(lit_str(&meta).is_err());
+    }
+
+    #[test]
+    fn lit_str_rejects_non_name_value_meta() {
+        // 既不是 name = value，也不是字符串
+        let meta: syn::Meta = syn::parse_quote!(skip);
+        assert!(lit_str(&meta).is_err());
+    }
+
+    // ===== helper_path_prefix =====
+
+    #[test]
+    fn helper_path_prefix_no_generics() {
+        let name: syn::Ident = syn::parse_quote!(Foo);
+        let generics: syn::Generics = syn::parse_quote!();
+        assert_eq!(helper_path_prefix(&name, &generics), "Foo::");
+    }
+
+    #[test]
+    fn helper_path_prefix_single_type_param() {
+        let name: syn::Ident = syn::parse_quote!(Foo);
+        let generics: syn::Generics = syn::parse_quote!(<T>);
+        assert_eq!(helper_path_prefix(&name, &generics), "Foo::<T>::");
+    }
+
+    #[test]
+    fn helper_path_prefix_lifetime_type_and_const() {
+        let name: syn::Ident = syn::parse_quote!(Composed);
+        let generics: syn::Generics = syn::parse_quote!(<'a, T, const N: usize>);
+        assert_eq!(
+            helper_path_prefix(&name, &generics),
+            "Composed::<'a, T, N>::"
+        );
+    }
+}

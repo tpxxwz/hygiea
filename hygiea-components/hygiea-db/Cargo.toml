@@ -1,0 +1,38 @@
+[package]
+name = "hygiea-db"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Database components for hygiea: connection pools for PostgreSQL and SQLite"
+
+# 两个维度分开选：框架（sqlx / seaorm）和数据库（postgres / sqlite / mysql），
+# 同时打开的组合才会编译，比如 ["sqlx", "postgres"] 得到 SqlxPgComponent。默认什么都不开
+[features]
+default = []
+# ---- 框架 ----
+sqlx = ["dep:sqlx"]
+seaorm = ["dep:sea-orm", "dep:log"]
+# ---- 数据库 ----
+postgres = ["sqlx?/postgres"]
+sqlite = ["sqlx?/sqlite"]
+# 预留，还没有实现
+mysql = []
+
+[dependencies]
+hygiea-core = { workspace = true, features = ["app"] }
+sqlx = { workspace = true, features = ["time"], optional = true }
+sea-orm = { workspace = true, features = ["with-time"], optional = true }
+log = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["rt", "sync", "macros"] }
+tracing = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+tempfile = { workspace = true }
+
+[package.metadata.docs.rs]
+all-features = true

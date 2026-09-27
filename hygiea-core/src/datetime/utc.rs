@@ -587,6 +587,82 @@ mod tests {
         );
     }
 
+    /// 跨年周：一周的起止落在不同年份
+    #[test]
+    fn test_utc_week_boundaries_cross_year() {
+        // 2024-12-31 是周二，所在周从 2024-12-30 开始，一路跨到 2025-01-05 结束
+        let dt = utc_datetime!(2024-12-31 10:00:00);
+        assert_eq!(
+            dt.start_of_week().unwrap(),
+            utc_datetime!(2024-12-30 0:00:00)
+        );
+        assert_eq!(
+            dt.end_of_week().unwrap(),
+            utc_datetime!(2025-01-05 23:59:59.999_999_999)
+        );
+
+        // 2020-12-31 是周四，所在周结束于 2021-01-03，跨年
+        let dt = utc_datetime!(2020-12-31 10:00:00);
+        assert_eq!(
+            dt.start_of_week().unwrap(),
+            utc_datetime!(2020-12-28 0:00:00)
+        );
+        assert_eq!(
+            dt.end_of_week().unwrap(),
+            utc_datetime!(2021-01-03 23:59:59.999_999_999)
+        );
+    }
+
+    /// 世纪年不是闰年：2100 能被 100 整除但不能被 400 整除，2 月只有 28 天
+    #[test]
+    fn test_utc_end_of_month_century_non_leap_year() {
+        let dt = utc_datetime!(2024-02-10 0:00:00);
+        assert_eq!(
+            dt.end_of_month().unwrap(),
+            utc_datetime!(2024-02-29 23:59:59.999_999_999)
+        );
+        let dt = utc_datetime!(2100-02-10 0:00:00);
+        assert_eq!(
+            dt.end_of_month().unwrap(),
+            utc_datetime!(2100-02-28 23:59:59.999_999_999)
+        );
+    }
+
+    #[test]
+    fn test_shift_cross_month_and_year() {
+        let dt = utc_datetime!(2024-01-31 12:00:00);
+        assert_eq!(
+            dt.shift(Duration::days(1)).unwrap(),
+            utc_datetime!(2024-02-01 12:00:00)
+        );
+        let dt = utc_datetime!(2024-12-31 12:00:00);
+        assert_eq!(
+            dt.shift(Duration::days(1)).unwrap(),
+            utc_datetime!(2025-01-01 12:00:00)
+        );
+    }
+
+    /// 负时间戳（1970 年之前），以及带小数部分的负毫秒
+    #[test]
+    fn test_from_unix_timestamps_before_epoch() {
+        let dt = UtcDateTime::from_secs(-3600).unwrap();
+        assert_eq!(dt, utc_datetime!(1969-12-31 23:00:00));
+
+        let dt = UtcDateTime::from_millis(-500).unwrap();
+        assert_eq!(dt, utc_datetime!(1969-12-31 23:59:59.500_000_000));
+
+        let dt = UtcDateTime::from_millis(-1_500).unwrap();
+        assert_eq!(dt, utc_datetime!(1969-12-31 23:59:58.500_000_000));
+
+        let dt = OffsetDateTime::from_secs(-3600).unwrap();
+        assert_eq!(dt, OffsetDateTime::from(utc_datetime!(1969-12-31 23:00:00)));
+        let dt = OffsetDateTime::from_millis(-1_500).unwrap();
+        assert_eq!(
+            dt,
+            OffsetDateTime::from(utc_datetime!(1969-12-31 23:59:58.500_000_000))
+        );
+    }
+
     #[test]
     fn test_utc_start_of_next() {
         // 2024-01-03 是周三

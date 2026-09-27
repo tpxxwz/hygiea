@@ -1,0 +1,28 @@
+[package]
+name = "hygiea-redis"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Redis component for hygiea: connection pool and distributed lock"
+
+# 选客户端实现：目前只有 fred。默认什么都不开
+[features]
+default = []
+fred = ["dep:fred"]
+
+[dependencies]
+hygiea-core = { workspace = true, features = ["app"] }
+fred = { version = "10.1.0", features = ["sentinel-auth"], optional = true }
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
+tracing = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+serde_json = { workspace = true }
+
+[package.metadata.docs.rs]
+all-features = true

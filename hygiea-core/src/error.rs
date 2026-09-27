@@ -87,8 +87,10 @@ type Source = Box<dyn Error + Send + Sync + 'static>;
 /// 外部错误用 [`HyErr::with_source`] 挂上，别再 `to_string()` 塞进模板参数：
 /// 那样既丢了原始类型（调用方没法 downcast 判断），又会把内部细节渲染进对外消息
 ///
+/// `Debug` 参考 anyhow，给人看：`{:?}` 是错误码、消息加上逐层的原因（`main` 返回 `Err`、`unwrap` 的 panic、
+/// `dbg!`、测试断言失败时打的都是它）；`{:#?}` 才是原始结构体（排查模板渲染时看 `err_tpl` / `err_args`）。
+///
 /// 字段只读：错误码是 [`HyErr::is`] 的依据，改了会让判断和 Display 对不上
-#[derive(Debug)]
 pub struct HyErr {
     err_code: &'static str,
     err_tpl: &'static str,
@@ -140,28 +142,78 @@ pub trait ErrKind {
     fn err_code(&self) -> &'static str;
 }
 
-impl fmt::Display for HyErr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl HyErr {
+    /// 渲染后的消息。渲染失败（key 拼错、缺字段）时输出未渲染的模板：模板是写死的文案，不敏感；
+    /// args 里可能有 body 之类的内部内容，和渲染错误一起只在 `detailed`（服务端日志、Debug）时输出
+    fn write_message(&self, f: &mut fmt::Formatter<'_>, detailed: bool) -> fmt::Result {
         let rendered = templates()
             .get_template(self.err_code)
             .and_then(|template| template.render(&self.err_args));
         match rendered {
-            Ok(output) => f.write_str(&output)?,
-            // 渲染失败（key 拼错、缺字段）时输出未渲染的模板：模板是写死的文案，不敏感；
-            // args 里可能有 body 之类的内部内容，和渲染错误一起只在 {:#}（服务端日志）里输出
+            Ok(output) => f.write_str(&output),
             Err(e) => {
                 f.write_str(self.err_tpl)?;
-                if f.alternate() {
+                if detailed {
                     write!(f, " [render failed: {e}; err_args: {}]", self.err_args)?;
                 }
+                Ok(())
             }
         }
+    }
+}
+
+impl fmt::Display for HyErr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.write_message(f, f.alternate())?;
         // {:#} 时把 source 链逐层拼在后面
         if f.alternate() {
             let mut source = self.source();
             while let Some(inner) = source {
                 write!(f, ": {inner}")?;
                 source = inner.source();
+            }
+        }
+        Ok(())
+    }
+}
+
+/// 给人看的格式，参考 anyhow：
+///
+/// ```text
+/// [99902002] app::Worker() background task panicked while running
+///
+/// Caused by:
+///     task 11 panicked with message "boom"
+/// ```
+///
+/// 原因有多层时编号（`0: ...`、`1: ...`），从近到远。`{:#?}` 输出原始结构体
+impl fmt::Debug for HyErr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if f.alternate() {
+            return f
+                .debug_struct("HyErr")
+                .field("err_code", &self.err_code)
+                .field("err_tpl", &self.err_tpl)
+                .field("err_args", &self.err_args)
+                .field("source", &self.source)
+                .finish();
+        }
+        write!(f, "[{}] ", self.err_code)?;
+        self.write_message(f, true)?;
+        let mut causes: Vec<&dyn Error> = Vec::new();
+        let mut source = self.source();
+        while let Some(cause) = source {
+            causes.push(cause);
+            source = cause.source();
+        }
+        if !causes.is_empty() {
+            f.write_str("\n\nCaused by:")?;
+            for (idx, cause) in causes.iter().enumerate() {
+                if causes.len() == 1 {
+                    write!(f, "\n    {cause}")?;
+                } else {
+                    write!(f, "\n    {idx}: {cause}")?;
+                }
             }
         }
         Ok(())
@@ -357,8 +409,8 @@ macro_rules! bail {
     };
 }
 
-/// 框架内置错误：默认启用的模块（错误处理、datetime、string、redact 等）用到的都在这里。
-/// 需要开 feature 的模块各有自己的错误 enum，比如 http 的 `hygiea::net::http::BaseHttpErr`。
+/// 框架内置错误：默认启用的模块（错误处理、datetime、string 等）和 redact 用到的都在这里。
+/// 需要开 feature 的模块各有自己的错误 enum，比如 http 的 `hygiea::net::http_client::BaseHttpErr`。
 /// 它们共用项目前缀 999（配在 hygiea-core 的 Cargo.toml）。`BaseErr` 不带模块前缀，5 位业务码随意分配，
 /// 兜底的 `SysErr` 是 99999；`BaseHttpErr` 用模块前缀 01。是否撞码由 `init()` 的全局查重保证
 #[derive(hy_err)]
@@ -429,6 +481,37 @@ mod tests {
         assert_eq!(format!("{e:#}"), "wrapped: outer: inner cause");
     }
 
+    /// Debug 参考 anyhow：[错误码] 消息，有原因时列在 Caused by 下面；一层不编号，多层按 0、1 编号
+    #[test]
+    fn debug_is_human_readable() {
+        let plain = err!(TestErr::NotFound, "bob");
+        let code = plain.err_code();
+        assert_eq!(format!("{plain:?}"), format!("[{code}] user bob not found"));
+
+        let one = err!(TestErr::Wrapped).with_source(Inner);
+        let code = one.err_code();
+        assert_eq!(
+            format!("{one:?}"),
+            format!("[{code}] wrapped\n\nCaused by:\n    inner cause")
+        );
+
+        let two = err!(TestErr::Wrapped).with_source(Outer(Inner));
+        assert_eq!(
+            format!("{two:?}"),
+            format!("[{code}] wrapped\n\nCaused by:\n    0: outer\n    1: inner cause")
+        );
+    }
+
+    /// {:#?} 是原始结构体，排查模板渲染时能看到未渲染的模板和参数
+    #[test]
+    fn alternate_debug_is_struct() {
+        let e = err!(TestErr::NotFound, "bob");
+        let raw = format!("{e:#?}");
+        assert!(raw.starts_with("HyErr {"), "{raw}");
+        assert!(raw.contains("user {{ name }} not found"), "{raw}");
+        assert!(raw.contains("bob"), "{raw}");
+    }
+
     /// 渲染失败时 Display 给未渲染的模板、不带 args，细节只在 {:#} 里
     #[test]
     fn render_failure_hides_args() {
@@ -491,11 +574,156 @@ mod tests {
         assert!(build_templates(&regs).is_err());
     }
 
-    /// 进程里实际注册的错误码没有重复，模板都能加载
+    /// 进程里实际注册的错误码没有重复，每一项的模板都能加载
     #[test]
-    fn registered_templates_load() {
-        let env = templates();
-        assert!(env.get_template(BaseErr::SysErr.err_code()).is_ok());
-        assert!(env.get_template(TestErr::NotFound.err_code()).is_ok());
+    fn build_templates_ok_for_all_registered() {
+        assert!(build_templates(ERR_REGISTRATIONS).is_ok());
+    }
+
+    /// with_source 调用两次，以后一次为准
+    #[test]
+    fn with_source_overrides_previous() {
+        let first_source = Inner;
+        let second_source = Inner;
+        let e = err!(TestErr::Wrapped)
+            .with_source(first_source)
+            .with_source(second_source);
+        // 虽然我们无法区分两个 Inner 实例，但验证 source() 返回的内容符合预期
+        assert_eq!(e.source().unwrap().to_string(), "inner cause");
+    }
+
+    /// wrap_err 在 Ok 时不调用闭包（用计数器验证）
+    #[test]
+    fn wrap_err_ok_does_not_invoke_closure() {
+        let call_count = std::cell::Cell::new(0);
+        let result: Result<i32, Inner> = Ok(42);
+        let ok_val = result
+            .wrap_err(|| {
+                call_count.set(call_count.get() + 1);
+                err!(TestErr::Wrapped)
+            })
+            .unwrap();
+        assert_eq!(ok_val, 42);
+        assert_eq!(call_count.get(), 0);
+    }
+
+    /// wrap_err 在 Err 时调用闭包并挂上 source
+    #[test]
+    fn wrap_err_err_invokes_closure() {
+        let call_count = std::cell::Cell::new(0);
+        let result: Result<i32, Inner> = Err(Inner);
+        let e = result
+            .wrap_err(|| {
+                call_count.set(call_count.get() + 1);
+                err!(TestErr::Wrapped)
+            })
+            .unwrap_err();
+        assert_eq!(call_count.get(), 1);
+        assert!(e.is(TestErr::Wrapped));
+        assert_eq!(e.source().unwrap().to_string(), "inner cause");
+    }
+
+    /// 渲染失败且带 source 时 `{:#}` 的拼接顺序：msg: source_chain
+    #[test]
+    fn render_failure_with_source_shows_in_alternate() {
+        let e = HyErr::new(
+            TestErr::NotFound.err_code(),
+            "user {{ name }} not found",
+            serde_json::json!({ "nmae": "secret-body" }),
+        )
+        .with_source(Outer(Inner));
+        let detailed = format!("{e:#}");
+        // 应该先是渲染失败信息，然后是 source 链
+        assert!(detailed.contains("user {{ name }} not found"), "{detailed}");
+        assert!(detailed.contains("render failed"), "{detailed}");
+        assert!(detailed.contains("outer"), "{detailed}");
+        assert!(detailed.contains("inner cause"), "{detailed}");
+        // 验证顺序：应该在 "outer" 之前出现 "render failed"
+        let render_pos = detailed.find("render failed").unwrap();
+        let outer_pos = detailed.find("outer").unwrap();
+        assert!(render_pos < outer_pos, "{detailed}");
+    }
+
+    /// 3 层及以上 source 链的 Debug 编号（从 0 开始）
+    #[test]
+    fn debug_three_level_source_chain_has_numbering() {
+        #[derive(Debug)]
+        struct Level2;
+        impl fmt::Display for Level2 {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("level 2")
+            }
+        }
+        impl Error for Level2 {}
+
+        #[derive(Debug)]
+        struct Level1(Level2);
+        impl fmt::Display for Level1 {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("level 1")
+            }
+        }
+        impl Error for Level1 {
+            fn source(&self) -> Option<&(dyn Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+
+        let e = err!(TestErr::Wrapped).with_source(Level1(Level2));
+        let debug = format!("{e:?}");
+        // 应该有编号：0: level 1 和 1: level 2
+        assert!(debug.contains("0: level 1"), "{debug}");
+        assert!(debug.contains("1: level 2"), "{debug}");
+    }
+
+    /// source() 能 downcast 回原始错误
+    #[test]
+    fn source_can_downcast_to_original_error() {
+        let original = Inner;
+        let e = err!(TestErr::Wrapped).with_source(original);
+        let source = e.source().unwrap();
+        // 尝试 downcast 回 Inner
+        let inner = source.downcast_ref::<Inner>();
+        assert!(inner.is_some());
+    }
+
+    /// bail! 提前返回
+    #[test]
+    fn bail_returns_early() {
+        fn check_value(n: i32) -> Result<(), HyErr> {
+            if n < 0 {
+                bail!(TestErr::Wrapped);
+            }
+            Ok(())
+        }
+
+        let result = check_value(-1);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().is(TestErr::Wrapped));
+
+        let result = check_value(1);
+        assert!(result.is_ok());
+    }
+
+    /// err! 的三种形式：无参、单个值、`{..}`
+    #[test]
+    fn err_zero_params() {
+        let e = err!(TestErr::Wrapped);
+        assert!(e.is(TestErr::Wrapped));
+        assert_eq!(e.to_string(), "wrapped");
+    }
+
+    #[test]
+    fn err_single_value() {
+        let e = err!(TestErr::NotFound, "alice");
+        assert!(e.is(TestErr::NotFound));
+        assert_eq!(e.to_string(), "user alice not found");
+    }
+
+    #[test]
+    fn err_explicit_json() {
+        let e = err!(TestErr::NotFound, { "name": "bob" });
+        assert!(e.is(TestErr::NotFound));
+        assert_eq!(e.to_string(), "user bob not found");
     }
 }

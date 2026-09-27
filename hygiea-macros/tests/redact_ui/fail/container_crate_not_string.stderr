@@ -1,0 +1,5 @@
+error: expected string literal
+ --> tests/redact_ui/fail/container_crate_not_string.rs:5:18
+  |
+5 | #[redact(crate = 1)]
+  |                  ^

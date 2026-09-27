@@ -113,8 +113,33 @@ pub fn tpl_pos(source: &str, args: &[serde_json::Value]) -> Result<String, HyErr
 mod tests {
     use super::*;
     use serde_json::json;
+    use serial_test::serial;
 
     // ===== tpl_once / tpl_cached =====
+    // 下面几个测试会读写全局的 CACHE，`test_tpl_cached_bounded` 还会把它冲到上限，
+    // 并行跑会互相干扰，所以都标 #[serial(tpl_cache)] 串行
+
+    #[test]
+    #[serial(tpl_cache)]
+    fn test_tpl_cached_basic() {
+        let result = tpl_cached("Hello {{ name }}", json!({"name": "Bob"})).unwrap();
+        assert_eq!(result, "Hello Bob");
+    }
+
+    #[test]
+    #[serial(tpl_cache)]
+    fn test_tpl_cached_hits_cache() {
+        let tpl = "hits-cache test {{ v }}";
+        assert!(!CACHE.read().contains(tpl));
+        let r1 = tpl_cached(tpl, json!({"v": 1})).unwrap();
+        assert_eq!(r1, "hits-cache test 1");
+        assert!(CACHE.read().contains(tpl));
+        let len_before = CACHE.read().len();
+        // 第二次渲染命中缓存，不会再新增条目
+        let r2 = tpl_cached(tpl, json!({"v": 2})).unwrap();
+        assert_eq!(r2, "hits-cache test 2");
+        assert_eq!(CACHE.read().len(), len_before);
+    }
 
     #[test]
     fn test_tpl_once_basic() {
@@ -122,23 +147,9 @@ mod tests {
         assert_eq!(result, "Hello Alice");
     }
 
-    #[test]
-    fn test_tpl_cached_basic() {
-        let result = tpl_cached("Hello {{ name }}", json!({"name": "Bob"})).unwrap();
-        assert_eq!(result, "Hello Bob");
-    }
-
-    #[test]
-    fn test_tpl_cached_hits_cache() {
-        let tpl = "value is {{ v }}";
-        let r1 = tpl_cached(tpl, json!({"v": 1})).unwrap();
-        let r2 = tpl_cached(tpl, json!({"v": 2})).unwrap();
-        assert_eq!(r1, "value is 1");
-        assert_eq!(r2, "value is 2");
-    }
-
     /// 参数可以是任何 Serialize，不必先转成 json
     #[test]
+    #[serial(tpl_cache)]
     fn test_tpl_accepts_serialize() {
         #[derive(Serialize)]
         struct Ctx {
@@ -167,6 +178,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(tpl_cache)]
     fn test_tpl_cached_syntax_error_not_cached() {
         let tpl = "{{ broken";
         assert!(
@@ -179,6 +191,7 @@ mod tests {
 
     /// 条数有上限，超出后最早插入的被淘汰
     #[test]
+    #[serial(tpl_cache)]
     fn test_tpl_cached_bounded() {
         for i in 0..CACHE_CAPACITY.get() * 2 {
             let tpl = format!("bounded filler {i} {{{{ v }}}}");
@@ -193,6 +206,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(tpl_cache)]
     fn test_tpl_cached_concurrent() {
         let handles: Vec<_> = (0..8)
             .map(|t| {
@@ -278,6 +292,45 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("expected 2 positional arguments, got 1")
+        );
+    }
+
+    /// tpl_once 不写缓存：多次调用同一个模板，缓存里仍然没有
+    #[test]
+    #[serial(tpl_cache)]
+    fn test_tpl_once_no_cache() {
+        let tpl = "tpl_once no cache {{ v }}";
+        assert!(!CACHE.read().contains(tpl));
+        let _ = tpl_once(tpl, json!({"v": 1})).unwrap();
+        assert!(!CACHE.read().contains(tpl));
+        let _ = tpl_once(tpl, json!({"v": 2})).unwrap();
+        assert!(!CACHE.read().contains(tpl));
+    }
+
+    /// 空串和 Unicode 输入
+    #[test]
+    #[serial(tpl_cache)]
+    fn test_tpl_empty_and_unicode() {
+        // 空模板
+        assert_eq!(tpl_once("", json!({})).unwrap(), "");
+        assert_eq!(tpl_cached("", json!({})).unwrap(), "");
+
+        // 纯 Unicode 文本（无变量）
+        assert_eq!(
+            tpl_once("Hello 世界 🌍", json!({})).unwrap(),
+            "Hello 世界 🌍"
+        );
+
+        // Unicode 作为变量的值（变量名必须是 ASCII，minijinja 的限制）
+        assert_eq!(
+            tpl_once("{{ name }}", json!({"name": "太郎"})).unwrap(),
+            "太郎"
+        );
+
+        // 模板文本中包含 Unicode，再加上变量值中的 Unicode
+        assert_eq!(
+            tpl_once("User: {{ name }}", json!({"name": "Alice"})).unwrap(),
+            "User: Alice"
         );
     }
 

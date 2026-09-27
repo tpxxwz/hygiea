@@ -648,6 +648,34 @@ fn is_numeric_with_len(s: &str, len: usize) -> bool {
     s.len() == len && s.bytes().all(|b| b.is_ascii_digit())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_numeric_with_len_matches_exact_digits() {
+        assert!(is_numeric_with_len("00042", 5));
+    }
+
+    #[test]
+    fn is_numeric_with_len_rejects_wrong_length() {
+        assert!(!is_numeric_with_len("42", 5));
+        assert!(!is_numeric_with_len("000420", 5));
+    }
+
+    #[test]
+    fn is_numeric_with_len_rejects_non_digits() {
+        assert!(!is_numeric_with_len("0004a", 5));
+        assert!(!is_numeric_with_len("-0042", 5));
+    }
+
+    #[test]
+    fn is_numeric_with_len_rejects_empty_when_len_not_zero() {
+        assert!(!is_numeric_with_len("", 5));
+        assert!(is_numeric_with_len("", 0));
+    }
+}
+
 /// 结构错误 - 用于 AST 节点类型不符、属性放错位置等
 fn expand_err_span(token: impl quote::ToTokens, msg: &str) -> proc_macro2::TokenStream {
     syn::Error::new_spanned(token, msg).to_compile_error()

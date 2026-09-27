@@ -1,0 +1,5 @@
+error: expected `#[redact(mask)]` or `#[redact(skip)]`
+ --> tests/redact_ui/fail/empty_redact_attr.rs:8:5
+  |
+8 |     #[redact()]
+  |     ^^^^^^^^^^^

@@ -1,0 +1,27 @@
+[package]
+name = "hygiea-grpc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "gRPC server component for hygiea"
+
+# 选框架实现：目前只有 tonic。默认什么都不开
+[features]
+default = []
+tonic = ["dep:tokio-stream"]
+
+[dependencies]
+hygiea-core = { workspace = true, features = ["app"] }
+tokio-stream = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["rt", "sync", "net", "macros"] }
+tracing = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
+
+[package.metadata.docs.rs]
+all-features = true

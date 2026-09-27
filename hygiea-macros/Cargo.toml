@@ -11,6 +11,11 @@ description = "Procedural macros for hygiea error handling"
 [lib]
 proc-macro = true
 
+[features]
+default = []
+# #[redact] 属性宏，不常用，开了才编译
+redact = []
+
 [dependencies]
 quote.workspace = true
 syn.workspace = true
@@ -21,3 +26,11 @@ minijinja.workspace = true
 toml.workspace = true
 # 找调用方实际依赖的 hygiea / hygiea-core 叫什么名字，生成代码里的路径跟着它
 proc-macro-crate.workspace = true
+
+[dev-dependencies]
+# 宏的编译期检查（trybuild）：fixture 通过 facade 使用宏，和下游的实际写法一样（生成 ::hygiea:: 路径）。
+# facade 间接依赖本 crate，dev-dependency 形成的循环 Cargo 允许
+hygiea = { workspace = true, features = ["redact"] }
+trybuild = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
