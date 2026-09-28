@@ -25,7 +25,7 @@ async fn main() -> Result<(), HyErr> {
         .add_named::<SqlxSqliteComponent>("replica", memory_db());
 
     let (result, _log_guard) = registry
-        .run(|resources| async move {
+        .before_activate(|resources| async move {
             // 组件把连接池按自己的名字放进 Resources，取的时候带上名字
             let primary = resources.require_named::<SqlxSqlitePool>("primary")?;
             let replica = resources.require_named::<SqlxSqlitePool>("replica")?;
@@ -39,10 +39,13 @@ async fn main() -> Result<(), HyErr> {
             if let Err(e) = resources.require_named::<SqlxSqlitePool>("analytics") {
                 tracing::warn!("expected failure: {e:#}");
             }
-
+            Ok(())
+        })
+        .on_ready(|_| async {
             tracing::info!("press Ctrl+C to exit");
             Ok(())
         })
+        .run()
         .await;
     result
 }

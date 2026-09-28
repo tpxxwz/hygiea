@@ -1,0 +1,5 @@
+error: `#[component]` only takes `crate = "path"`
+ --> tests/component_ui/fail/unknown_arg.rs:9:13
+  |
+9 | #[component(kind = "deferred")]
+  |             ^^^^

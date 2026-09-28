@@ -34,6 +34,12 @@ pub enum BaseAppErr {
         err_tpl = "{{ type_name }}({{ name }}) background task {{ reason }} while running"
     )]
     TaskExited,
+    /// Deferred 组件第二阶段 `activate` 返回错误，Registry 带上是第几个、哪个组件，组件的错误挂在 source 上
+    #[error(
+        err_code = "003",
+        err_tpl = "component[{{ index }}] {{ type_name }}({{ name }}) failed to activate"
+    )]
+    ComponentActivateFailed,
 
     // ---- 启动前检查：配置、依赖关系 ----
     /// 必填配置没给，比如 AxumConfig.router、TonicConfig.serve_fn

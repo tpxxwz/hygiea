@@ -53,6 +53,72 @@
 
 - 做法：在 `hygiea-http-client/tests/` 加 trybuild 用例（参考 `hygiea-macros/tests/` 的写法）
 
+### 8. 没有响应缓存
+
+静态资源（js、css、图片）、字典表、配置这类短时间内不变的数据，每次都真的发请求。要在 client 上配缓存容量和规则，单个请求能决定怎么用缓存。
+
+语义是应用层缓存：按请求算 key、按规则的 TTL 过期，不看响应的 `Cache-Control` / `ETag`（要 HTTP 语义缓存得换 reqwest-middleware + http-cache，另说）。
+
+**`Client` 包一层**：组件往 Resources 里放 `HttpClient { inner: reqwest::Client, cache: Option<ResponseCache> }`，替代现在的 `reqwest::Client`；`IntoSender` 的 `&Client` 换成 `&HttpClient`，`send(&client)` 写法不变，要原生 API 用 `client.reqwest()`。破坏性改动：`require::<Client>()` 要改成 `require::<HttpClient>()`。
+
+**client 级别配置**（`ReqwestConfig.cache`，不配就没有缓存，行为和现在完全一样）：
+
+```toml
+[http_client.cache]
+max_bytes = 67108864          # 总容量，按 body 长度 + 响应头估算，超了按 LRU 淘汰；单条比它大的不缓存
+default_ttl_secs = 60         # 规则没写 ttl_secs、或者请求显式指定模式时用
+
+# 按顺序匹配，第一条命中的生效；写了的条件都要满足，没写的不限制
+[[http_client.cache.rules]]
+suffixes = [".js", ".css", ".woff2", ".png", ".svg"]   # 路径后缀，不看 query，不区分大小写
+ttl_secs = 86400
+
+[[http_client.cache.rules]]
+hosts = ["config.internal"]                            # 域名完全匹配
+path_prefixes = ["/api/dict/", "/api/config/"]
+ttl_secs = 300
+
+[[http_client.cache.rules]]
+hosts = ["search.partner.com"]
+path_prefixes = ["/api/query"]
+methods = ["POST"]                                     # 不写默认只匹配 GET
+ttl_secs = 30
+```
+
+**请求级别**（`RequestConfig.cache: CacheMode`），读和写分开：
+
+| `CacheMode` | 读缓存 | 写缓存 |
+|---|---|---|
+| `Auto`（默认） | 命中规则才读 | 命中规则才写，TTL 用规则的 |
+| `ReadWrite` | 读 | 写（不看规则，TTL 用 `default_ttl_secs`） |
+| `Refresh` | 不读，强制发请求 | 写，覆盖旧的 |
+| `ReadOnly` | 读 | 不写 |
+| `Off` | 不读 | 不写 |
+
+- client 没配缓存时所有模式都等于 `Off`，每次都真的发请求；显式写了 `ReadWrite` / `Refresh` / `ReadOnly` 的打一条 WARN（代码和配置对不上），请求照常发
+- 实现上先把 client 级别和请求级别合成 `Option<{ cache, read, write }>`，`None` 走现在的发送流程，一行不改
+
+**缓存 key 和内容**：
+
+- key：method + 拼好 params 的完整 URL + auth 和请求头的哈希 + 请求 body 的哈希（GET 为 0）。认证头算进 key，不同用户的响应不会互相命中；只存哈希，不让 token 明文常驻内存
+- 流式请求 body（`RawStream`、`Multipart` 里的文件流）算不了哈希，不走缓存，打 debug 日志
+- 存原样的状态码、响应头、body 字节，只存 2xx；命中时按 `FromBytes` 再解码，同一个 URL 可以解成不同类型。`BodyStream` 走缓存编译不过（和重试一样要求 `FromBytes`）
+- 命中打 `http cache hit` 日志（method、url、剩余 TTL），日志里分得清哪些请求没真的发出去
+
+**实现**：
+
+- 用 `moka::future::Cache`（`future` feature，只在 `reqwest` feature 下引入）：`weigher` 按字节算容量，`Expiry` 给每条单独 TTL，`try_get_with` 让并发 miss 同一个 key 时只发一次
+- 并发去重只在读 + 写（`Auto` 命中规则、`ReadWrite`）时生效；`Refresh` 要强制发，`ReadOnly` 没命中的结果不共享，各发各的
+- 带重试时先查缓存，没命中再进重试循环；重试成功的 2xx 照常写入
+- 新增 `cache.rs`（`ResponseCache`、`CacheConfig`、`CacheRule`、`CacheMode`、key 计算）；组件按配置创建；同步 `docs/config-template.toml`
+
+**要定的**：
+
+- `rules` 为空时：什么都不缓存（只有显式模式的请求走缓存），还是缓存所有 GET。倾向前者，开了缓存也不会误缓存业务接口
+- 要不要支持按响应 `Content-Type` 匹配（URL 没后缀的静态资源）：只能拿到响应后判断，只影响写不影响读
+- 请求头存哈希还是存完整内容（哈希理论上会碰撞，概率极低）
+- 通配符（`/static/**/*.js`）先不做，前缀 + 后缀组合不够用时再引入 glob
+
 ## 已知的使用限制
 
 不打算改，先记下来，写文档或者有人问时用。

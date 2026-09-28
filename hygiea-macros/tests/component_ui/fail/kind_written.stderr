@@ -1,0 +1,5 @@
+error: `type Kind` is set by `#[component]` from the trait, remove it
+  --> tests/component_ui/fail/kind_written.rs:12:10
+   |
+12 |     type Kind = hygiea::app::Deferred;
+   |          ^^^^

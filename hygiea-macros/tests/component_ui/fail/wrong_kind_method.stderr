@@ -1,0 +1,20 @@
+error[E0407]: method `activate` is not a member of trait `ImmediateComponent`
+  --> tests/component_ui/fail/wrong_kind_method.rs:17:5
+   |
+17 | /     async fn activate(
+18 | |         &mut self,
+19 | |         _resources: ReadyResources,
+20 | |         _shutdown: CancellationToken,
+21 | |     ) -> Result<Option<JoinHandle<()>>, HyErr> {
+22 | |         Ok(None)
+23 | |     }
+   | |_____^ not a member of trait `ImmediateComponent`
+
+error[E0046]: not all trait items implemented, missing: `startup`
+ --> tests/component_ui/fail/wrong_kind_method.rs:9:1
+  |
+9 | #[component]
+  | ^^^^^^^^^^^^ missing `startup` in implementation
+  |
+  = note: this error originates in the attribute macro `component` (in Nightly builds, run with -Z macro-backtrace for more info)
+  = help: implement the missing item: `fn startup<'life0: 'async_trait, 'life1: 'async_trait, 'async_trait>(&'life0 mut self, _: &'life1 Resources, _: CancellationToken) -> Pin<Box<(dyn Future<Output = Result<Option<tokio::task::JoinHandle<()>>, HyErr>> + Send + 'async_trait)>> { todo!() }`

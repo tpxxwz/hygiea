@@ -1,4 +1,4 @@
-//! 全局状态：组件都启动后，在 `run` 的闭包里把要用的资源收进一个全局 `AppState`，
+//! 全局状态：组件都启动后，在 `before_activate` 里把要用的资源收进一个全局 `AppState`，
 //! 业务代码直接取，不用一路传 `Resources`。
 //!
 //! ```bash
@@ -23,7 +23,7 @@ pub struct AppState {
 static APP_STATE: OnceLock<AppState> = OnceLock::new();
 
 impl AppState {
-    /// 只在 run 的闭包里调一次
+    /// 只在 before_activate 里调一次
     fn init(state: AppState) -> Result<(), HyErr> {
         APP_STATE.set(state).map_err(|_| {
             err!(BaseErr::SysErr).with_source(std::io::Error::other("AppState already initialized"))
@@ -64,16 +64,19 @@ async fn main() -> Result<(), HyErr> {
         .add_named::<SqlxSqliteComponent>("replica", memory_db());
 
     let (result, _log_guard) = registry
-        .run(|resources| async move {
+        // 初始化全局状态放在 before_activate：之后才开始对外服务（有 HTTP 组件时），业务代码取的时候一定已经初始化好了
+        .before_activate(|resources| async move {
             AppState::init(AppState {
                 primary: resources.require_named::<SqlxSqlitePool>("primary")?,
                 replica: resources.require_named::<SqlxSqlitePool>("replica")?,
-            })?;
-
+            })
+        })
+        .on_ready(|_| async {
             report()?;
             tracing::info!("press Ctrl+C to exit");
             Ok(())
         })
+        .run()
         .await;
     result
 }

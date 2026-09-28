@@ -5,7 +5,9 @@ use std::pin::Pin;
 
 use serde::Deserialize;
 
-use hygiea_core::app::{BaseAppErr, CancellationToken, Component, Name, Resources, async_trait};
+use hygiea_core::app::{
+    BaseAppErr, CancellationToken, DeferredComponent, Name, ReadyResources, ResourceSink, component,
+};
 use hygiea_core::{HyErr, ResultExt, err};
 
 // ---- types ------------------------------------------------------------------
@@ -81,23 +83,31 @@ impl Default for TonicConfig {
 
 // ---- component --------------------------------------------------------------
 
+/// gRPC 服务组件，Deferred：`prepare` 校验配置、绑定端口，`activate` 才开始接请求
 pub struct TonicComponent {
     config: TonicConfig,
+    /// `prepare` 绑好的端口和取出的 serve_fn，`activate` 里交给后台任务
+    prepared: Option<(tokio::net::TcpListener, TonicServeFn)>,
 }
 
-#[async_trait]
-impl Component for TonicComponent {
+#[component]
+impl DeferredComponent for TonicComponent {
     type Config = TonicConfig;
 
     fn build(_name: Name, config: Self::Config) -> Self {
-        Self { config }
+        Self {
+            config,
+            prepared: None,
+        }
     }
 
-    async fn startup(
-        &mut self,
-        _resources: &Resources,
-        shutdown: CancellationToken,
-    ) -> Result<Option<tokio::task::JoinHandle<()>>, HyErr> {
+    fn shutdown_timeout(&self) -> Option<std::time::Duration> {
+        self.config
+            .shutdown_timeout_secs
+            .map(std::time::Duration::from_secs)
+    }
+
+    async fn prepare(&mut self, _sink: &ResourceSink) -> Result<(), HyErr> {
         let serve_fn = self
             .config
             .serve_fn
@@ -120,6 +130,21 @@ impl Component for TonicComponent {
             .wrap_err(|| err!(BaseAppErr::BindFailed, &self.config.addr))?;
 
         tracing::info!("gRPC server listener bound to {}", self.config.addr);
+        self.prepared = Some((listener, serve_fn));
+        Ok(())
+    }
+
+    async fn activate(
+        &mut self,
+        _resources: ReadyResources,
+        shutdown: CancellationToken,
+    ) -> Result<Option<tokio::task::JoinHandle<()>>, HyErr> {
+        let (listener, serve_fn) = self.prepared.take().ok_or_else(|| {
+            err!(
+                BaseAppErr::ComponentError,
+                "TonicComponent activated before prepare"
+            )
+        })?;
 
         let addr_str = self.config.addr.clone();
         let handle = tokio::spawn(async move {
@@ -133,19 +158,13 @@ impl Component for TonicComponent {
 
         Ok(Some(handle))
     }
-
-    fn shutdown_timeout(&self) -> Option<std::time::Duration> {
-        self.config
-            .shutdown_timeout_secs
-            .map(std::time::Duration::from_secs)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
-    use hygiea_core::app::Registry;
+    use hygiea_core::app::{Component, ImmediateComponent, Registry, Resources};
 
     use super::*;
 
@@ -157,16 +176,16 @@ mod tests {
         )
     }
 
-    /// `TonicComponent::startup` 需要一份真正可用的 `Resources`，但 `Resources::new` 对外不可见，
+    /// `TonicComponent::prepare` 的 `ResourceSink` 要从一份真正可用的 `Resources` 构造，但 `Resources::new` 对外不可见，
     /// 外部（这里是本 crate 的单元测试，和 core 不是同一个 crate）唯一能拿到实例的公开途径是
     /// `Registry::run` 递给回调的那份：用一个什么都不做的占位组件把 Registry 拉起来，从回调里把
     /// `Resources` 捞出来，真正要测的 `TonicComponent` 完全绕开 Registry，自己直接调
-    /// `Component::build` / `startup`
+    /// `Component::build` / `prepare`
     async fn real_resources() -> Resources {
         struct NoopComponent;
 
-        #[async_trait]
-        impl Component for NoopComponent {
+        #[component]
+        impl ImmediateComponent for NoopComponent {
             type Config = ();
 
             fn build(_name: Name, _config: ()) -> Self {
@@ -186,10 +205,11 @@ mod tests {
         tokio::spawn(
             Registry::new()
                 .add::<NoopComponent>(())
-                .run(move |resources| async move {
+                .on_ready(move |resources| async move {
                     let _ = tx.send(resources);
                     Ok(())
-                }),
+                })
+                .run(),
         );
         rx.await.expect("registry 应该把 resources 递回来")
     }
@@ -224,7 +244,7 @@ mod tests {
             },
         );
         let err = component
-            .startup(&resources, CancellationToken::new())
+            .prepare(&ResourceSink::new(&resources))
             .await
             .expect_err("缺 serve_fn 应该启动失败");
         assert!(err.is(BaseAppErr::ConfigMissing));
@@ -242,7 +262,7 @@ mod tests {
             },
         );
         let err = component
-            .startup(&resources, CancellationToken::new())
+            .prepare(&ResourceSink::new(&resources))
             .await
             .expect_err("非法地址应该启动失败");
         assert!(err.is(BaseAppErr::InvalidConfig));
@@ -266,7 +286,7 @@ mod tests {
             },
         );
         let err = component
-            .startup(&resources, CancellationToken::new())
+            .prepare(&ResourceSink::new(&resources))
             .await
             .expect_err("端口被占用应该启动失败");
         assert!(err.is(BaseAppErr::BindFailed));

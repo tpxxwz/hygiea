@@ -4,12 +4,14 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-use hygiea_core::app::{BaseAppErr, CancellationToken, Component, Name, Resources, async_trait};
+use hygiea_core::app::{
+    BaseAppErr, CancellationToken, DeferredComponent, Name, ReadyResources, ResourceSink, component,
+};
 use hygiea_core::{HyErr, ResultExt, err};
 
 // ---- config -----------------------------------------------------------------
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Clone, Debug, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct HttpTimeout {
     pub connect_secs: Option<u64>,
@@ -18,31 +20,11 @@ pub struct HttpTimeout {
     pub response_write_secs: Option<u64>,
 }
 
-impl Default for HttpTimeout {
-    fn default() -> Self {
-        Self {
-            connect_secs: None,
-            header_read_secs: None,
-            request_read_secs: None,
-            response_write_secs: None,
-        }
-    }
-}
-
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Clone, Debug, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct HttpLimits {
     pub max_body_size: Option<usize>,
     pub max_header_size: Option<usize>,
-}
-
-impl Default for HttpLimits {
-    fn default() -> Self {
-        Self {
-            max_body_size: None,
-            max_header_size: None,
-        }
-    }
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -82,36 +64,58 @@ impl AxumConfig {
 
 // ---- component --------------------------------------------------------------
 
+/// HTTP 服务组件，Deferred：`prepare` 检查配置、绑定端口，`activate` 才开始接请求
 pub struct AxumComponent {
     config: AxumConfig,
+    /// `prepare` 绑好的端口和取出的 router，`activate` 里交给后台任务
+    prepared: Option<(tokio::net::TcpListener, axum::Router)>,
 }
 
-#[async_trait]
-impl Component for AxumComponent {
+#[component]
+impl DeferredComponent for AxumComponent {
     type Config = AxumConfig;
 
     fn build(_name: Name, config: Self::Config) -> Self {
-        Self { config }
+        Self {
+            config,
+            prepared: None,
+        }
     }
 
-    async fn startup(
-        &mut self,
-        _resources: &Resources,
-        shutdown: CancellationToken,
-    ) -> Result<Option<tokio::task::JoinHandle<()>>, HyErr> {
+    fn shutdown_timeout(&self) -> Option<Duration> {
+        self.config.shutdown_timeout_secs.map(Duration::from_secs)
+    }
+
+    async fn prepare(&mut self, _sink: &ResourceSink) -> Result<(), HyErr> {
         let addr = self.config.addr();
         let router = self
             .config
             .router
             .take()
             .ok_or_else(|| err!(BaseAppErr::ConfigMissing, "AxumConfig.router"))?;
-        let config = self.config.clone();
 
         let listener = tokio::net::TcpListener::bind(&addr)
             .await
             .wrap_err(|| err!(BaseAppErr::BindFailed, &addr))?;
 
         tracing::info!("HTTP server listener bound to {}", addr);
+        self.prepared = Some((listener, router));
+        Ok(())
+    }
+
+    async fn activate(
+        &mut self,
+        _resources: ReadyResources,
+        shutdown: CancellationToken,
+    ) -> Result<Option<tokio::task::JoinHandle<()>>, HyErr> {
+        let (listener, router) = self.prepared.take().ok_or_else(|| {
+            err!(
+                BaseAppErr::ComponentError,
+                "AxumComponent activated before prepare"
+            )
+        })?;
+        let addr = self.config.addr();
+        let config = self.config.clone();
 
         let handle = tokio::spawn(async move {
             tracing::info!("HTTP server serving on {}", addr);
@@ -131,10 +135,6 @@ impl Component for AxumComponent {
         });
 
         Ok(Some(handle))
-    }
-
-    fn shutdown_timeout(&self) -> Option<Duration> {
-        self.config.shutdown_timeout_secs.map(Duration::from_secs)
     }
 }
 
@@ -274,7 +274,7 @@ where
 
 // ---- router 构造 --------------------------------------------------------------
 
-/// 给业务的 router 加上超时、body 大小限制等中间件，`startup` 用它拼出最终对外服务的 router。
+/// 给业务的 router 加上超时、body 大小限制等中间件，`activate` 用它拼出最终对外服务的 router。
 ///
 /// 公开出来是为了让集成测试能不占端口、直接用 `tower::ServiceExt::oneshot` 打这个 router，
 /// 验证 413 / 408 等中间件行为；`AxumConfig` 里没配的项不加对应的 layer，行为和不配一样。

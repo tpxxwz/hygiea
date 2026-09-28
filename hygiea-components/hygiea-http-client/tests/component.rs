@@ -28,10 +28,11 @@ async fn with_resources<T: Send + 'static>(
     let (tx, rx) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(async move {
         let _ = registry
-            .run(move |resources| async move {
+            .on_ready(move |resources| async move {
                 let _ = tx.send(check(resources));
                 Ok(())
             })
+            .run()
             .await;
     });
     let result = rx.await.unwrap();
@@ -97,7 +98,8 @@ async fn invalid_config_fails_startup() {
     };
     let (result, _guard) = Registry::new()
         .add::<ReqwestComponent>(config)
-        .run(|_| async { panic!("init callback must not run") as Result<(), HyErr> })
+        .on_ready(|_| async { panic!("init callback must not run") as Result<(), HyErr> })
+        .run()
         .await;
     let err = result.unwrap_err();
     assert!(err.is(BaseAppErr::ComponentStartFailed), "{err:#}");

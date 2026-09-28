@@ -41,7 +41,7 @@ async fn main() -> Result<(), HyErr> {
     let (result, _log_guard) = registry
         .add::<SqlxSqliteComponent>(config.db)
         .add::<AxumComponent>(config.http)
-        .run(|_| async { Ok(()) })
+        .run()
         .await;
     result
 }

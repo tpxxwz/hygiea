@@ -21,6 +21,8 @@ hygiea = { workspace = true, features = ["full", "db-sqlx-sqlite", "http-axum", 
 axum = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
+# app_two_phase 在 run 的闭包里建表、handler 里查询
+sqlx = { workspace = true, features = ["sqlite"] }
 serde = { workspace = true, features = ["derive"] }
 # redact_basic 对比普通序列化
 serde_json = { workspace = true }
@@ -51,6 +53,10 @@ path = "examples/app/background_task.rs"
 [[example]]
 name = "app_config"
 path = "examples/app/config.rs"
+
+[[example]]
+name = "app_two_phase"
+path = "examples/app/two_phase.rs"
 
 [[example]]
 name = "error_basic"

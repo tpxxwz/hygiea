@@ -1,0 +1,7 @@
+error[E0407]: method `provide` is not a member of trait `ImmediateComponent`
+  --> tests/component_ui/fail/misspelled_method.rs:17:5
+   |
+17 | /     fn provide(&self) -> Vec<ResourceId> {
+18 | |         Vec::new()
+19 | |     }
+   | |_____^ not a member of trait `ImmediateComponent`

@@ -1,0 +1,5 @@
+error: `#[component]` must be on `impl ImmediateComponent for ..` or `impl DeferredComponent for ..`
+  --> tests/component_ui/fail/inherent_impl.rs:10:6
+   |
+10 | impl Db {}
+   |      ^^

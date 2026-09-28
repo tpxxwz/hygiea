@@ -1,0 +1,24 @@
+error[E0277]: the trait bound `Db: DeferredComponent` is not satisfied
+  --> tests/component_ui/fail/hand_written_kind_mismatch.rs:11:17
+   |
+11 |     type Kind = hygiea::app::Deferred;
+   |                 ^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `DeferredComponent` is not implemented for `Db`
+  --> tests/component_ui/fail/hand_written_kind_mismatch.rs:7:1
+   |
+ 7 | struct Db;
+   | ^^^^^^^^^
+help: the trait `app::component::sealed::Kind<C>` is conditionally implemented for `Deferred`
+  --> $WORKSPACE/hygiea-core/src/app/component.rs
+   |
+   |     impl<C: DeferredComponent> Kind<C> for Deferred {
+   |     ^^^^^^^^-----------------^^^^^^^^^^^^^^^^^^^^^^
+   |             |
+   |             unsatisfied requirement introduced here: `Db: DeferredComponent`
+   = note: required for `Deferred` to implement `app::component::sealed::Kind<Db>`
+note: required by a bound in `hygiea::app::Component::Kind`
+  --> $WORKSPACE/hygiea-core/src/app/component.rs
+   |
+   |     type Kind: sealed::Kind<Self>;
+   |                ^^^^^^^^^^^^^^^^^^ required by this bound in `Component::Kind`

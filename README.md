@@ -19,11 +19,12 @@
 
 | 能力 | 说明 |
 |---|---|
-| 组件注册 | 实现 `Component` trait，`Registry::add` / `add_named` 注册；同一种组件可以按名字注册多个实例（比如主库和从库） |
-| 依赖排序 | 组件声明 `provides` / `depends_on`，Registry 做拓扑排序决定启动顺序，跟 `add` 的顺序无关；缺依赖、依赖成环、重复提供都在启动任何组件之前报错 |
+| 组件注册 | 在 `impl ImmediateComponent`（立即启动）或 `impl DeferredComponent`（延迟启动）上标 `#[component]`，`Registry::add` / `add_named` 注册；同一种组件可以按名字注册多个实例（比如主库和从库） |
+| 两阶段启动 | 第一阶段启动所有组件（连接池连上、HTTP / gRPC 只绑端口），然后调用 `before_activate` 的回调（建表、初始化全局状态），第二阶段 Deferred 组件才开始对外服务，最后调用 `on_ready` 的回调（注册中心、已就绪打点）；Deferred 组件第一阶段在类型上就读不到资源 |
+| 依赖排序 | 组件声明 `provides` / `depends_on`，Registry 做拓扑排序决定第一阶段的启动顺序，跟 `add` 的顺序无关；缺依赖、依赖成环、重复提供都在启动任何组件之前报错 |
 | 资源共享 | 先启动的组件把资源放进 `Resources`，后启动的组件和业务代码按类型和名字取出来 |
 | 配置加载 | 环境配置文件 → 额外配置文件 → 环境变量 → 命令行，后面的覆盖前面的；环境用 `--env` 或 `HYGIEA_ENV` 选 |
-| 优雅关闭 | 收到 Ctrl+C / SIGTERM 后按启动的逆序关闭组件，每个组件单独计时，超时强制结束；支持关闭前延迟，方便 k8s 摘流量 |
+| 优雅关闭 | 收到 Ctrl+C / SIGTERM 后先关 Deferred 组件（停止接请求），再按启动的逆序关其余组件，每个组件单独计时，超时强制结束；支持关闭前延迟，方便 k8s 摘流量 |
 | 日志 | 启动时按配置初始化 tracing（控制台、按时间滚动的文件） |
 | 现成组件 | 数据库连接池（sqlx / SeaORM × PostgreSQL / SQLite）、Redis 连接池、HTTP 服务（axum）、gRPC 服务（tonic），见下文「组件」 |
 
@@ -143,19 +144,20 @@ async fn main() -> Result<(), HyErr> {
     let (result, _log_guard) = registry
         .add::<SqlxSqliteComponent>(config.db)
         .add::<AxumComponent>(config.http)
-        .run(|_| async { Ok(()) })
+        .run()
         .await;
     result
 }
 ```
 
 - 环境名默认 `dev`，用 `--env prod` 或 `HYGIEA_ENV=prod` 切换到 `config/prod.toml`；`-f local` 叠加 `config/local.toml`，`HYGIEA__HTTP__PORT=9090` 或 `--set http.port=9090` 覆盖单个配置项。配置项的层级就是 `AppConfig` 的字段层级，比如日志级别是 `registry.tracing.root_env_filter`。
-- 按 Ctrl+C 退出时，组件按启动的逆序关闭：先停 HTTP（处理完手上的请求），再关连接池。
+- 启动分两个阶段：先连上 SQLite、HTTP 绑好端口，然后 HTTP 才开始接请求；要在接请求之前做的初始化放进 `before_activate`（见 `app_two_phase`）。
+- 按 Ctrl+C 退出时，先停 HTTP（处理完手上的请求），再按启动的逆序关连接池。
 
 - 框架和所有组件的全部配置项、默认值和说明见 [docs/config-template.toml](docs/config-template.toml)，复制过去删掉用不到的段、改需要改的值即可。
 - 配置目录默认是相对当前目录的 `config/`，可以用命令行 `-d <目录>`（`--config-dir`）或代码里 `ConfigArgs::from_cli().default_config_dir(..)` 换，命令行优先。
 
-这段就是 `app_basic` 示例（示例里用 `default_config_dir` 指向 `hygiea-examples/config/app_basic/`）。自己实现组件、依赖排序、多实例、全局状态、后台任务、配置加载各有一个单独的示例，见下文「示例」。
+这段就是 `app_basic` 示例（示例里用 `default_config_dir` 指向 `hygiea-examples/config/app_basic/`）。自己实现组件、依赖排序、多实例、全局状态、后台任务、配置加载、两阶段启动各有一个单独的示例，见下文「示例」。
 
 ### 错误处理
 
@@ -378,6 +380,7 @@ pub enum LegacyErrors {
 | `app_dependencies` | 自己实现组件；`provides` / `depends_on` 决定启动顺序，缺依赖时启动前就报错 |
 | `app_named_instances` | 同一种组件注册多个实例（主库、从库），按名字取 |
 | `app_global_state` | 启动后把资源收进全局 `AppState`，业务代码直接取 |
+| `app_two_phase` | 两阶段启动：`before_activate` 在 HTTP 开始接请求之前建表、初始化全局 `AppState`，handler 从 `AppState` 取连接池 |
 | `app_background_task` | 后台任务、优雅关闭、超时强制结束、`stop` 收尾 |
 | `app_config` | 配置文件、`-f`、环境变量、`--set` 的合并，框架参数合进自己的命令行 |
 | `error_basic` | 错误 enum、`err!` 的写法、错误码 |
@@ -393,7 +396,7 @@ pub enum LegacyErrors {
 cargo run -p hygiea-examples --example app_basic
 ```
 
-app 的示例启动后按 Ctrl+C 退出，可以看到组件按启动的逆序关闭。
+app 的示例启动后按 Ctrl+C 退出，可以看到组件的关闭顺序：先关 HTTP 这类 Deferred 组件，再按启动的逆序关其余组件。
 
 ## 开发
 

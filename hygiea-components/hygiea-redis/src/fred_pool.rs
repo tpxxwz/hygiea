@@ -3,7 +3,7 @@
 use fred::prelude::*;
 use fred::types::config::ClusterDiscoveryPolicy;
 use hygiea_core::app::{
-    BaseAppErr, CancellationToken, Component, Name, ResourceId, Resources, async_trait,
+    BaseAppErr, CancellationToken, ImmediateComponent, Name, ResourceId, Resources, component,
 };
 use hygiea_core::{HyErr, ResultExt, err};
 use serde::Deserialize;
@@ -161,8 +161,8 @@ pub struct RedisComponent {
     pool: Option<FredRedisPool>,
 }
 
-#[async_trait]
-impl Component for RedisComponent {
+#[component]
+impl ImmediateComponent for RedisComponent {
     type Config = RedisConfig;
 
     fn build(name: Name, config: Self::Config) -> Self {

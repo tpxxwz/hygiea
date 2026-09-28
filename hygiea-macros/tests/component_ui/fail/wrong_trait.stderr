@@ -1,0 +1,5 @@
+error: `#[component]` must be on `impl ImmediateComponent for ..` or `impl DeferredComponent for ..`
+  --> tests/component_ui/fail/wrong_trait.rs:12:6
+   |
+12 | impl Other for Db {}
+   |      ^^^^^

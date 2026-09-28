@@ -7,7 +7,7 @@ use reqwest::redirect::Policy;
 use serde::Deserialize;
 
 use hygiea_core::app::{
-    BaseAppErr, CancellationToken, Component, Name, ResourceId, Resources, async_trait,
+    BaseAppErr, CancellationToken, ImmediateComponent, Name, ResourceId, Resources, component,
 };
 use hygiea_core::{HyErr, ResultExt, err};
 
@@ -268,8 +268,8 @@ pub struct ReqwestComponent {
     config: ReqwestConfig,
 }
 
-#[async_trait]
-impl Component for ReqwestComponent {
+#[component]
+impl ImmediateComponent for ReqwestComponent {
     type Config = ReqwestConfig;
 
     fn build(name: Name, config: Self::Config) -> Self {

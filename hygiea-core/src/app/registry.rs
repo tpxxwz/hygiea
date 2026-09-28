@@ -2,20 +2,31 @@
 
 use std::any::TypeId;
 use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 
 use super::component::ComponentEntry;
 use super::signal::{ShutdownSignals, force_exit};
-use super::{
-    BaseAppErr, CancellationToken, Component, Name, RegistryConfig, ResourceId, Resources,
-};
+use super::{BaseAppErr, Component, Name, RegistryConfig, ResourceId, Resources};
 use crate::log::{BaseLogErr, LogGuard};
 use crate::{HyErr, err};
 
+/// [`Registry::before_activate`] / [`Registry::on_ready`] 的回调，装箱后存进 Registry
+type Hook =
+    Box<dyn FnOnce(Resources) -> Pin<Box<dyn Future<Output = Result<(), HyErr>> + Send>> + Send>;
+
 /// 组件注册表：按注册顺序启动组件，收到退出信号后关闭。
+///
+/// 用法是 `add` 组件、按需设置 `before_activate` / `on_ready`，最后 `run().await`：
+/// 不调用 `run` 什么都不会发生，所以标了 `#[must_use]`，漏了编译器会警告
+#[must_use = "Registry 在调用 `run().await` 之前什么都不做"]
 pub struct Registry {
     state: Resources,
     components: Vec<ComponentEntry>,
+    /// 第一阶段完成后、Deferred 组件 activate 之前调用，见 [`Registry::before_activate`]
+    before_activate: Option<Hook>,
+    /// 所有组件都启动完、开始对外服务之后调用，见 [`Registry::on_ready`]
+    on_ready: Option<Hook>,
     /// 启动成功的组件数，也就是 `components` 的前多少个；关闭时只关这些
     started: usize,
     /// 组件没单独指定时，关闭每个组件最多等多久
@@ -58,6 +69,8 @@ impl Registry {
         Self {
             state: Resources::new(),
             components: Vec::new(),
+            before_activate: None,
+            on_ready: None,
             started: 0,
             shutdown_timeout: Duration::from_secs(config.shutdown_timeout_secs),
             shutdown_delay: Duration::from_secs(config.shutdown_delay_secs),
@@ -88,31 +101,80 @@ impl Registry {
         {
             panic!("component {type_name}({name}) already added");
         }
-        self.components.push(ComponentEntry {
-            type_id,
-            name: name.clone(),
-            type_name,
-            component: Box::new(C::build(name, config)),
-            shutdown: CancellationToken::new(),
-            handle: None,
-        });
+        self.components.push(ComponentEntry::new::<C>(name, config));
         self
     }
 
-    /// 启动所有组件，调用 `f` 做应用初始化，然后一直运行到收到退出信号。
+    /// 设置所有组件第一阶段完成后、Deferred 组件 activate 之前调用的回调。
     ///
-    /// `f` 是 async 的，可以在里面 `.await`（比如预热缓存），返回 `Err` 时和组件启动失败一样：
-    /// 关闭已启动的组件后返回。`f` 拿到的 `Resources` 是共享的同一份，克隆很便宜。
+    /// 这时资源都齐了（包括 Deferred 组件在 `prepare` 里放的），还没有组件在对外服务，
+    /// 适合建表、预热缓存、把资源收进全局状态：HTTP / gRPC 开始接请求时，这些一定已经做完。
+    /// 往 `Resources` 里放的资源，Deferred 组件在 `activate` 里能读到；这类资源不属于任何组件，
+    /// 不能写进 `depends_on`，在 `activate` 里直接取。
+    ///
+    /// 返回 `Err` 时和组件启动失败一样：关闭已启动的组件，`run` 返回这个错误。不设置就跳过这一步。
+    /// 只能设置一次，重复设置会 panic（和重复 `add_named` 一样，基本都是写错了）
+    ///
+    /// ```ignore
+    /// registry
+    ///     .add::<SqlxPgComponent>(cfg.db)
+    ///     .add::<AxumComponent>(cfg.http)
+    ///     .before_activate(|res| async move { AppState::setup(&res).await })
+    ///     .run()
+    ///     .await
+    /// ```
+    pub fn before_activate<F, Fut>(mut self, f: F) -> Self
+    where
+        F: FnOnce(Resources) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<(), HyErr>> + Send + 'static,
+    {
+        if self.before_activate.is_some() {
+            panic!("before_activate already set");
+        }
+        self.before_activate = Some(Box::new(move |resources| Box::pin(f(resources))));
+        self
+    }
+
+    /// 设置所有组件都启动完之后调用的回调：Deferred 组件已经 activate，服务已经在接请求。
+    ///
+    /// 适合注册到注册中心、打"已就绪"的点、请求一下自己做自检。要在对外服务之前做完的初始化
+    /// （建表、初始化全局状态）放进 [`before_activate`](Self::before_activate)，放在这里时请求可能比它先到。
+    ///
+    /// 返回 `Err` 时和组件启动失败一样：关闭所有组件，`run` 返回这个错误。不设置就跳过这一步。
+    /// 只能设置一次，重复设置会 panic
+    pub fn on_ready<F, Fut>(mut self, f: F) -> Self
+    where
+        F: FnOnce(Resources) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<(), HyErr>> + Send + 'static,
+    {
+        if self.on_ready.is_some() {
+            panic!("on_ready already set");
+        }
+        self.on_ready = Some(Box::new(move |resources| Box::pin(f(resources))));
+        self
+    }
+
+    /// 分两个阶段启动所有组件，然后一直运行到收到退出信号。
+    ///
+    /// 1. 第一阶段：按依赖顺序调 [`ImmediateComponent::startup`](super::ImmediateComponent::startup) / [`DeferredComponent::prepare`](super::DeferredComponent::prepare)，
+    ///    每个组件完了检查它声明的 `provides` 都放进去了；
+    /// 2. 调 [`before_activate`](Self::before_activate) 设置的回调（没设置就跳过）：资源都齐了，
+    ///    Deferred 组件（HTTP / gRPC 等）还没开始工作；
+    /// 3. 第二阶段：按同样的顺序调 Deferred 组件的 [`DeferredComponent::activate`](super::DeferredComponent::activate)，开始对外服务；
+    /// 4. 调 [`on_ready`](Self::on_ready) 设置的回调（没设置就跳过）：服务已经在接请求。
+    ///
+    /// 两个回调拿到的 `Resources` 都是共享的同一份，克隆很便宜；返回 `Err` 时和组件启动失败一样，
+    /// 关闭已启动的组件后返回。
     ///
     /// 退出信号：Linux / macOS 是 Ctrl+C（SIGINT）和 SIGTERM（`docker stop`、k8s 发的都是它）；
     /// Windows 是 Ctrl+C、Ctrl+Break、关闭控制台窗口和系统关机。信号在 `run` 一开始就开始监听，
     /// 组件启动期间收到的也不会丢：等启动完直接进入关闭。收到后：
     /// 1. 先照常服务 [`RegistryConfig::shutdown_delay_secs`]（默认 0，k8s 下一般配 5），
     ///    让负载均衡器把流量切走；
-    /// 2. 按启动的**逆序**逐个关组件：触发它的 `shutdown` 信号，等它的后台任务结束，调它的
-    ///    [`Component::stop`]（比如关连接池），再关下一个。
-    ///    启动顺序按依赖排好（被依赖的先启动），逆序就是先停 HTTP / gRPC（处理完手上的请求），
-    ///    后停数据库（提交完数据）；
+    /// 2. 逐个关组件：触发它的 `shutdown` 信号，等它的后台任务结束，调它的
+    ///    [`Component::stop`]（比如关连接池），再关下一个。先按启动的逆序关 Deferred 组件
+    ///    （HTTP / gRPC 不再接新请求，处理完手上的），再按启动的逆序关 Immediate 组件
+    ///    （被依赖的后关，数据库最后提交完数据）；
     /// 3. 每个组件单独计时，最多等 [`Component::shutdown_timeout`]（默认
     ///    [`RegistryConfig::shutdown_timeout_secs`] = 15 秒），超时的 abort 并打 WARN，接着关下一个；
     /// 4. 上面任何阶段再收到一次信号，直接退出进程（退出码 130）。k8s 里只会发一次 SIGTERM，
@@ -125,7 +187,8 @@ impl Registry {
     /// `terminationGracePeriodSeconds` 要比它大，否则关到一半会被 SIGKILL。
     ///
     /// 返回 `(结果, 日志 guard)`：
-    /// - 结果：组件启动失败时是 [`BaseAppErr::ComponentStartFailed`]，`f` 失败时是 `f` 的错误。
+    /// - 结果：组件第一阶段失败时是 [`BaseAppErr::ComponentStartFailed`]，第二阶段失败时是
+    ///   [`BaseAppErr::ComponentActivateFailed`]，`before_activate` / `on_ready` 的回调失败时是它们返回的错误。
     ///   这时错误已经打过日志，调用方只需要决定怎么退出（比如 `main` 直接返回这个 `Err`，
     ///   退出码非 0），不用再打一遍；
     /// - 日志 guard：**要持有到 `main` 结束**。日志写文件靠它背后的线程，guard 一丢，
@@ -136,7 +199,7 @@ impl Registry {
     /// #[tokio::main]
     /// async fn main() -> Result<(), HyErr> {
     ///     let (registry, cfg) = Registry::load_config::<AppConfig>(&ConfigArgs::from_cli());
-    ///     let (result, _log_guard) = registry.run(|res| async move { Ok(()) }).await;
+    ///     let (result, _log_guard) = registry.run().await;
     ///     tracing::info!("bye");   // _log_guard 还活着，能写进文件
     ///     result
     /// }
@@ -144,21 +207,13 @@ impl Registry {
     ///
     /// 注意别写成 `let (result, _) = ..`：`_` 会让 guard 立刻被丢掉
     #[must_use = "持有返回的日志 guard 到 main 结束，并处理结果"]
-    pub async fn run<F, Fut>(mut self, f: F) -> (Result<(), HyErr>, Option<LogGuard>)
-    where
-        F: FnOnce(Resources) -> Fut,
-        Fut: Future<Output = Result<(), HyErr>>,
-    {
-        let result = self.run_until_shutdown(f).await;
+    pub async fn run(mut self) -> (Result<(), HyErr>, Option<LogGuard>) {
+        let result = self.run_until_shutdown().await;
         // guard 交出去之后 self 才 drop，组件在 Drop 里打的日志照样能写进文件
         (result, self.log_guard.take())
     }
 
-    async fn run_until_shutdown<F, Fut>(&mut self, f: F) -> Result<(), HyErr>
-    where
-        F: FnOnce(Resources) -> Fut,
-        Fut: Future<Output = Result<(), HyErr>>,
-    {
+    async fn run_until_shutdown(&mut self) -> Result<(), HyErr> {
         // 最先装好信号监听：之后组件启动期间收到的信号会留着，不会按系统默认行为直接杀掉进程
         let mut signals = ShutdownSignals::install();
 
@@ -172,8 +227,22 @@ impl Registry {
             self.shutdown_or_force_exit(&mut signals).await;
             return Err(e);
         }
-        if let Err(e) = f(self.state.clone()).await {
-            tracing::error!("application init failed: {e:#}");
+        if let Some(before_activate) = self.before_activate.take()
+            && let Err(e) = before_activate(self.state.clone()).await
+        {
+            tracing::error!("before_activate failed: {e:#}");
+            self.shutdown_or_force_exit(&mut signals).await;
+            return Err(e);
+        }
+        if let Err(e) = self.activate_components().await {
+            tracing::error!("{e:#}");
+            self.shutdown_or_force_exit(&mut signals).await;
+            return Err(e);
+        }
+        if let Some(on_ready) = self.on_ready.take()
+            && let Err(e) = on_ready(self.state.clone()).await
+        {
+            tracing::error!("on_ready failed: {e:#}");
             self.shutdown_or_force_exit(&mut signals).await;
             return Err(e);
         }
@@ -209,7 +278,8 @@ impl Registry {
 
     /// 按 `provides` / `depends_on` 把组件排成启动顺序（拓扑排序），直接重排 `components`。
     ///
-    /// - A 依赖的资源由 B 提供，B 就排在 A 前面；没有依赖关系的保持 `add` 的先后
+    /// - Immediate 组件 A 依赖的资源由 B 提供，B 就排在 A 前面；没有依赖关系的保持 `add` 的先后
+    /// - Deferred 组件的依赖只在第二阶段读，那时第一阶段都完成了，所以只检查有没有组件提供，不参与排序
     /// - 依赖的资源没有组件提供：[`BaseAppErr::ResourceMissing`]
     /// - 同一个资源两个组件都提供：[`BaseAppErr::DuplicateProvider`]
     /// - 依赖成环：[`BaseAppErr::DependencyCycle`]，报出环上的组件
@@ -226,7 +296,7 @@ impl Registry {
         let mut provider: std::collections::HashMap<ResourceId, usize> =
             std::collections::HashMap::new();
         for idx in 0..n {
-            for id in self.components[idx].component.provides() {
+            for id in self.components[idx].provides.iter().cloned() {
                 if let Some(&first) = provider.get(&id) {
                     return Err(err!(BaseAppErr::DuplicateProvider, {
                         "resource": id.to_string(),
@@ -243,8 +313,10 @@ impl Registry {
         let mut pending_deps = vec![0usize; n];
         for (idx, pending) in pending_deps.iter_mut().enumerate() {
             let mut deps: Vec<usize> = Vec::new();
-            for id in self.components[idx].component.depends_on() {
-                match provider.get(&id) {
+            let deferred = self.components[idx].deferred;
+            for id in &self.components[idx].depends_on {
+                match provider.get(id) {
+                    Some(_) if deferred => {}
                     Some(&dep) => deps.push(dep),
                     None => {
                         return Err(err!(
@@ -317,11 +389,7 @@ impl Registry {
                     // 先记为已启动：下面校验失败时，这个组件也要被关掉
                     self.started = idx + 1;
                     // 声明了 provides 就必须真的放进去，否则依赖它的组件会在后面取不到
-                    let missing = entry
-                        .component
-                        .provides()
-                        .into_iter()
-                        .find(|id| !self.state.contains_id(id));
+                    let missing = entry.provides.iter().find(|id| !self.state.contains_id(id));
                     if let Some(id) = missing {
                         let cause = err!(
                             BaseAppErr::ResourceMissing,
@@ -356,6 +424,41 @@ impl Registry {
             "All {} components started successfully",
             self.components.len()
         );
+        Ok(())
+    }
+
+    /// 第二阶段：按启动顺序调 Deferred 组件的 `activate`。所有组件第一阶段都成功了才会走到这里，
+    /// 失败时由 run 统一关闭全部组件
+    async fn activate_components(&mut self) -> Result<(), HyErr> {
+        for idx in 0..self.components.len() {
+            let entry = &mut self.components[idx];
+            if !entry.deferred {
+                continue;
+            }
+            let (name, type_name) = (entry.name.clone(), entry.type_name);
+            match entry
+                .component
+                .activate(&self.state, entry.shutdown.clone())
+                .await
+            {
+                Ok(handle) => {
+                    if handle.is_some() {
+                        tracing::info!("{type_name}({name}) activated with background task");
+                    } else {
+                        tracing::info!("{type_name}({name}) activated");
+                    }
+                    entry.handle = handle;
+                }
+                Err(e) => {
+                    return Err(err!(BaseAppErr::ComponentActivateFailed, {
+                        "index": idx,
+                        "type_name": type_name,
+                        "name": name,
+                    })
+                    .with_source(e));
+                }
+            }
+        }
         Ok(())
     }
 
@@ -397,18 +500,25 @@ impl Registry {
 
     /// 组件关闭时实际用的超时：组件自己指定的，没有就用全局默认
     fn shutdown_timeout_of(&self, entry: &ComponentEntry) -> Duration {
-        entry
-            .component
-            .shutdown_timeout()
-            .unwrap_or(self.shutdown_timeout)
+        entry.shutdown_timeout.unwrap_or(self.shutdown_timeout)
+    }
+
+    /// 已启动组件的关闭顺序（下标）：先按启动的逆序关 Deferred，再按启动的逆序关 Immediate。
+    /// Deferred 组件（HTTP / gRPC 等）先停止接活，它们用到的连接池这时都还在
+    fn shutdown_order(&self) -> Vec<usize> {
+        let (deferred, immediate): (Vec<usize>, Vec<usize>) = (0..self.started)
+            .rev()
+            .partition(|&idx| self.components[idx].deferred);
+        deferred.into_iter().chain(immediate).collect()
     }
 
     /// 打出最长关闭时间，部署时照着配 k8s 的 terminationGracePeriodSeconds。
     /// 每个已启动的组件都算上它的超时（等后台任务 + `stop` 都在这个时间里）
     fn log_max_shutdown_time(&self) {
-        let parts: Vec<(String, Duration)> = self.components[..self.started]
-            .iter()
-            .rev()
+        let parts: Vec<(String, Duration)> = self
+            .shutdown_order()
+            .into_iter()
+            .map(|idx| &self.components[idx])
             .map(|entry| {
                 let label = format!("{}({})", entry.type_name, entry.name);
                 (label, self.shutdown_timeout_of(entry))
@@ -443,15 +553,17 @@ impl Registry {
         }
     }
 
-    /// 按启动的逆序逐个关闭已启动的组件：触发它的退出信号 → 等它的后台任务结束 → 调它的 `stop` → 下一个。
+    /// 按 [`shutdown_order`](Self::shutdown_order) 逐个关闭已启动的组件：
+    /// 触发它的退出信号 → 等它的后台任务结束 → 调它的 `stop` → 下一个。
     ///
-    /// 启动顺序按依赖排好（被依赖的先启动），逆序关闭就是先停依赖别人的（比如 HTTP），
-    /// 后停被依赖的（比如数据库），HTTP 收尾时数据库还在。
+    /// 先停 Deferred 组件（比如 HTTP），再按启动的逆序停 Immediate 组件，被依赖的（比如数据库）后停，
+    /// HTTP 收尾时数据库还在。
     /// 每个组件单独计时（等任务 + `stop` 共用），这样一个卡住的组件不会占掉后面组件（往往是数据库）的
     /// 收尾时间；超时的 abort 它的任务、打 WARN，接着关下一个，不会卡死
     async fn shutdown(&mut self) {
-        let started = std::mem::take(&mut self.started);
-        for idx in (0..started).rev() {
+        let order = self.shutdown_order();
+        self.started = 0;
+        for idx in order {
             let timeout = self.shutdown_timeout_of(&self.components[idx]);
             let entry = &mut self.components[idx];
             entry.shutdown.cancel();

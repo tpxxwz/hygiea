@@ -9,7 +9,7 @@ use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 
 use hygiea_core::app::{
-    BaseAppErr, CancellationToken, Component, Name, ResourceId, Resources, async_trait,
+    BaseAppErr, CancellationToken, ImmediateComponent, Name, ResourceId, Resources, component,
 };
 use hygiea_core::{HyErr, ResultExt, err};
 
@@ -209,8 +209,8 @@ pub struct SqlxSqliteComponent {
     pool: Option<SqlxSqlitePool>,
 }
 
-#[async_trait]
-impl Component for SqlxSqliteComponent {
+#[component]
+impl ImmediateComponent for SqlxSqliteComponent {
     type Config = SqlxSqliteConfig;
 
     fn build(name: Name, config: Self::Config) -> Self {

@@ -119,34 +119,36 @@ async fn registry_startup_and_stop_with_primary_and_replica() {
 
     // 运行时的实际行为：回调执行完后，run 会等待退出信号
     // 我们用一个后台任务发送信号来退出测试
-    let run_future = registry.run(move |state| {
-        let holder = Arc::clone(&pools_holder_clone);
-        async move {
-            // 通过 get_named 获取两个连接池
-            let primary = state
-                .get_named::<SqlxSqlitePool>("primary")
-                .expect("primary pool should exist");
-            let replica = state
-                .get_named::<SqlxSqlitePool>("replica")
-                .expect("replica pool should exist");
+    let run_future = registry
+        .on_ready(move |state| {
+            let holder = Arc::clone(&pools_holder_clone);
+            async move {
+                // 通过 get_named 获取两个连接池
+                let primary = state
+                    .get_named::<SqlxSqlitePool>("primary")
+                    .expect("primary pool should exist");
+                let replica = state
+                    .get_named::<SqlxSqlitePool>("replica")
+                    .expect("replica pool should exist");
 
-            // 验证两个连接池都可用（执行查询）
-            let _: (i32,) = sqlx::query_as("SELECT 1")
-                .fetch_one(&*primary)
-                .await
-                .expect("primary pool should be usable");
+                // 验证两个连接池都可用（执行查询）
+                let _: (i32,) = sqlx::query_as("SELECT 1")
+                    .fetch_one(&*primary)
+                    .await
+                    .expect("primary pool should be usable");
 
-            let _: (i32,) = sqlx::query_as("SELECT 1")
-                .fetch_one(&*replica)
-                .await
-                .expect("replica pool should be usable");
+                let _: (i32,) = sqlx::query_as("SELECT 1")
+                    .fetch_one(&*replica)
+                    .await
+                    .expect("replica pool should be usable");
 
-            // 克隆连接池到外面，带出回调
-            *holder.lock().unwrap() = Some((primary.clone(), replica.clone()));
+                // 克隆连接池到外面，带出回调
+                *holder.lock().unwrap() = Some((primary.clone(), replica.clone()));
 
-            Ok(())
-        }
-    });
+                Ok(())
+            }
+        })
+        .run();
 
     // 在后台发送 SIGTERM 给自己来优雅退出 run()
     // 这会导致 Registry 正常关闭所有组件

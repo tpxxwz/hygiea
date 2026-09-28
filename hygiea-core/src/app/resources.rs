@@ -204,6 +204,75 @@ impl Resources {
     }
 }
 
+/// [`Deferred`](super::Deferred) 组件第一阶段（[`DeferredComponent::prepare`](super::DeferredComponent::prepare)）
+/// 拿到的 Resources：只能放、不能读。
+///
+/// 这时别的组件可能还没启动完，读到什么取决于启动顺序；读不了就不会写出依赖顺序的代码，
+/// 要读的资源等第二阶段的 [`ReadyResources`]
+pub struct ResourceSink(Resources);
+
+impl ResourceSink {
+    /// Registry 在第一阶段构造。组件的单元测试里也可以用它直接调 `prepare`
+    pub fn new(resources: &Resources) -> Self {
+        Self(resources.clone())
+    }
+
+    /// 插入匿名资源，见 [`Resources::insert`]
+    pub fn insert<T: Resource>(&self, value: T) {
+        self.0.insert(value)
+    }
+
+    /// 插入具名资源，见 [`Resources::insert_named`]
+    pub fn insert_named<T: Resource>(&self, name: impl Into<Name>, value: T) {
+        self.0.insert_named(name, value)
+    }
+}
+
+/// [`Deferred`](super::Deferred) 组件第二阶段（[`DeferredComponent::activate`](super::DeferredComponent::activate)）
+/// 拿到的 Resources：只能读。
+///
+/// 这时所有组件的第一阶段、[`Registry::before_activate`](super::Registry::before_activate) 的回调都执行完了，之后不会再有组件往里放东西。
+/// 克隆很便宜（内部是 `Arc`），可以存进 handler 的 state
+#[derive(Clone)]
+pub struct ReadyResources(Resources);
+
+impl ReadyResources {
+    /// Registry 在第二阶段构造。组件的单元测试里也可以用它直接调 `activate`
+    pub fn new(resources: &Resources) -> Self {
+        Self(resources.clone())
+    }
+
+    /// 见 [`Resources::get`]
+    pub fn get<T: Resource>(&self) -> Option<T> {
+        self.0.get()
+    }
+
+    /// 见 [`Resources::get_named`]
+    pub fn get_named<T: Resource>(&self, name: &str) -> Option<T> {
+        self.0.get_named(name)
+    }
+
+    /// 见 [`Resources::require`]
+    pub fn require<T: Resource>(&self) -> Result<T, HyErr> {
+        self.0.require()
+    }
+
+    /// 见 [`Resources::require_named`]
+    pub fn require_named<T: Resource>(&self, name: &str) -> Result<T, HyErr> {
+        self.0.require_named(name)
+    }
+
+    /// 见 [`Resources::contains`]
+    pub fn contains<T: Resource>(&self) -> bool {
+        self.0.contains::<T>()
+    }
+
+    /// 见 [`Resources::contains_named`]
+    pub fn contains_named<T: Resource>(&self, name: &str) -> bool {
+        self.0.contains_named::<T>(name)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

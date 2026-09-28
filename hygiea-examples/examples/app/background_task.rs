@@ -14,14 +14,14 @@
 use std::time::Duration;
 
 use hygiea::HyErr;
-use hygiea::app::{CancellationToken, Component, Name, Registry, Resources, async_trait};
+use hygiea::app::{CancellationToken, ImmediateComponent, Name, Registry, Resources, component};
 
 // ---- 正常的后台任务：每秒打一行，收到退出信号就结束 ----
 
 pub struct TickerComponent;
 
-#[async_trait]
-impl Component for TickerComponent {
+#[component]
+impl ImmediateComponent for TickerComponent {
     type Config = ();
 
     fn build(_name: Name, _config: Self::Config) -> Self {
@@ -63,8 +63,8 @@ impl Component for TickerComponent {
 
 pub struct StuckComponent;
 
-#[async_trait]
-impl Component for StuckComponent {
+#[component]
+impl ImmediateComponent for StuckComponent {
     type Config = ();
 
     fn build(_name: Name, _config: Self::Config) -> Self {
@@ -97,10 +97,11 @@ async fn main() -> Result<(), HyErr> {
     let (result, _log_guard) = Registry::new()
         .add::<TickerComponent>(())
         .add::<StuckComponent>(())
-        .run(|_| async {
+        .on_ready(|_| async {
             tracing::info!("press Ctrl+C to start graceful shutdown");
             Ok(())
         })
+        .run()
         .await;
     result
 }

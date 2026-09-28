@@ -7,7 +7,7 @@ use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 use serde::Deserialize;
 
 use hygiea_core::app::{
-    BaseAppErr, CancellationToken, Component, Name, ResourceId, Resources, async_trait,
+    BaseAppErr, CancellationToken, ImmediateComponent, Name, ResourceId, Resources, component,
 };
 use hygiea_core::{HyErr, ResultExt, err};
 
@@ -195,8 +195,8 @@ pub struct SeaOrmPgComponent {
     pool: Option<SeaOrmPgPool>,
 }
 
-#[async_trait]
-impl Component for SeaOrmPgComponent {
+#[component]
+impl ImmediateComponent for SeaOrmPgComponent {
     type Config = SeaOrmPgConfig;
 
     fn build(name: Name, config: Self::Config) -> Self {

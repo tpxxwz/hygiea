@@ -11,7 +11,7 @@
 
 use hygiea::HyErr;
 use hygiea::app::{
-    CancellationToken, Component, Name, Registry, ResourceId, Resources, async_trait,
+    CancellationToken, ImmediateComponent, Name, Registry, ResourceId, Resources, component,
 };
 
 // ---- 组件之间传递的资源 ----
@@ -26,8 +26,8 @@ pub struct Cache;
 
 pub struct DbComponent;
 
-#[async_trait]
-impl Component for DbComponent {
+#[component]
+impl ImmediateComponent for DbComponent {
     type Config = ();
 
     fn build(_name: Name, _config: Self::Config) -> Self {
@@ -53,8 +53,8 @@ impl Component for DbComponent {
 
 pub struct CacheComponent;
 
-#[async_trait]
-impl Component for CacheComponent {
+#[component]
+impl ImmediateComponent for CacheComponent {
     type Config = ();
 
     fn build(_name: Name, _config: Self::Config) -> Self {
@@ -86,8 +86,8 @@ impl Component for CacheComponent {
 
 pub struct ApiComponent;
 
-#[async_trait]
-impl Component for ApiComponent {
+#[component]
+impl ImmediateComponent for ApiComponent {
     type Config = ();
 
     fn build(_name: Name, _config: Self::Config) -> Self {
@@ -113,11 +113,8 @@ impl Component for ApiComponent {
 #[tokio::main]
 async fn main() -> Result<(), HyErr> {
     // 1. 缺依赖：Api 依赖 Db、Cache，但没有注册提供它们的组件。
-    //    run 在启动任何组件之前就返回 ResourceMissing，闭包不会执行
-    let (result, _log_guard) = Registry::new()
-        .add::<ApiComponent>(())
-        .run(|_| async { Ok(()) })
-        .await;
+    //    run 在启动任何组件之前就返回 ResourceMissing，回调都不会执行
+    let (result, _log_guard) = Registry::new().add::<ApiComponent>(()).run().await;
     // 错误 Registry 已经打过 ERROR 日志，这里不用再打
     if result.is_err() {
         tracing::info!("registry refused to start, as expected");
@@ -129,10 +126,11 @@ async fn main() -> Result<(), HyErr> {
         .add::<ApiComponent>(())
         .add::<CacheComponent>(())
         .add::<DbComponent>(())
-        .run(|_| async {
+        .on_ready(|_| async {
             tracing::info!("all started, press Ctrl+C to exit");
             Ok(())
         })
+        .run()
         .await;
     result
 }

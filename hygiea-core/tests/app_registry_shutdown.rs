@@ -12,15 +12,15 @@ use std::time::Duration;
 
 use hygiea_core::HyErr;
 use hygiea_core::app::{
-    CancellationToken, Component, Name, Registry, RegistryConfig, Resources, async_trait,
+    CancellationToken, ImmediateComponent, Name, Registry, RegistryConfig, Resources, component,
 };
 use tokio::task::JoinHandle;
 
 /// 只记事件、不做别的的组件：有一个等 shutdown 信号才结束的后台任务
 struct Marker(Arc<Mutex<Vec<String>>>);
 
-#[async_trait]
-impl Component for Marker {
+#[component]
+impl ImmediateComponent for Marker {
     type Config = Arc<Mutex<Vec<String>>>;
 
     fn build(_name: Name, events: Self::Config) -> Self {
@@ -56,7 +56,7 @@ async fn shutdown_delay_postpones_component_stop() {
     .add::<Marker>(events.clone());
 
     // run 本身要等到收到信号才会往下走，放到后台任务里跑，测试主体负责发信号、在不同时间点检查状态
-    let handle = tokio::spawn(registry.run(|_state| async { Ok(()) }));
+    let handle = tokio::spawn(registry.run());
 
     // 给调度器一点时间把 startup 跑完，再发信号
     tokio::time::sleep(Duration::from_millis(100)).await;

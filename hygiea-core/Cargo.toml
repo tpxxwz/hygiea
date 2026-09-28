@@ -20,7 +20,7 @@ default = []
 
 
 # Application framework module
-app = ["log", "dep:async-trait", "dep:dashmap", "dep:clap", "dep:config", "dep:tokio", "dep:tokio-util", "tokio/rt", "tokio/sync", "tokio/macros", "tokio/signal", "tokio/time"]
+app = ["log", "hygiea-macros/component", "dep:async-trait", "dep:dashmap", "dep:clap", "dep:config", "dep:tokio", "dep:tokio-util", "tokio/rt", "tokio/sync", "tokio/macros", "tokio/signal", "tokio/time"]
 
 # 日志配置和初始化，可脱离 app 单独用
 log = ["datetime-iana", "dep:tracing", "dep:tracing-subscriber", "dep:tracing-log", "dep:tracing-appender", "serde/derive"]

@@ -4,7 +4,7 @@
 //! 不建 `Registry` 来跑被测组件本身：`Resources::new` 对外不可见，外部 crate 拿到一份可用
 //! `Resources` 的唯一公开途径是 `Registry::run` 递给回调的那份。这里用一个什么都不做的占位组件
 //! 把 Registry 拉起来，只是为了从回调里把 `Resources` 捞出来；真正要测的 `AxumComponent` 完全绕开
-//! Registry，自己直接调 `Component::build` / `startup`，自己持有 `CancellationToken` 手动取消。
+//! Registry，自己直接调 `Component::build` / `prepare` / `activate`，自己持有 `CancellationToken` 手动取消。
 
 #![cfg(feature = "axum")]
 
@@ -13,13 +13,16 @@ use std::time::Duration;
 use axum::Router;
 use axum::routing::get;
 use hygiea_core::HyErr;
-use hygiea_core::app::{CancellationToken, Component, Name, Registry, Resources, async_trait};
+use hygiea_core::app::{
+    CancellationToken, Component, DeferredComponent, ImmediateComponent, Name, ReadyResources,
+    Registry, ResourceSink, Resources, component,
+};
 use hygiea_http::{AxumComponent, AxumConfig};
 
 struct NoopComponent;
 
-#[async_trait]
-impl Component for NoopComponent {
+#[component]
+impl ImmediateComponent for NoopComponent {
     type Config = ();
 
     fn build(_name: Name, _config: ()) -> Self {
@@ -41,10 +44,11 @@ async fn real_resources() -> Resources {
     tokio::spawn(
         Registry::new()
             .add::<NoopComponent>(())
-            .run(move |resources| async move {
+            .on_ready(move |resources| async move {
                 let _ = tx.send(resources);
                 Ok(())
-            }),
+            })
+            .run(),
     );
     rx.await.expect("registry 应该把 resources 递回来")
 }
@@ -70,10 +74,14 @@ async fn serves_real_request_then_shuts_down_on_cancel() {
 
     let mut component = AxumComponent::build(Name::from(""), config);
     let shutdown = CancellationToken::new();
-    let handle = component
-        .startup(&resources, shutdown.clone())
+    component
+        .prepare(&ResourceSink::new(&resources))
         .await
-        .expect("组件应该启动成功")
+        .expect("prepare 应该成功");
+    let handle = component
+        .activate(ReadyResources::new(&resources), shutdown.clone())
+        .await
+        .expect("activate 应该成功")
         .expect("axum 组件总是有后台任务");
 
     let resp = reqwest::get(format!("http://{addr}/ping"))

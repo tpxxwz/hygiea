@@ -29,7 +29,7 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 | `env` | 常开 | 环境变量 |
 | `string` | 常开 | 缓存的正则、模板渲染，`fmt_tpl!` / `fmt_tpl_once!` / `fmt_pos!` 宏 |
 | `log` | `log` | 日志配置和初始化 |
-| `app` | `app` | 应用框架：组件注册、依赖排序、启动与优雅退出 |
+| `app` | `app` | 应用框架：组件（`Component` 加上 `ImmediateComponent` / `DeferredComponent` 两种启动方式）、注册、依赖排序、两阶段启动（`before_activate` / `on_ready`）、优雅退出；`#[component]` 宏从这里导出 |
 | `net` | `ws-client` | WebSocket 客户端 |
 
 ### hygiea-macros
@@ -38,8 +38,9 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 |---|---|
 | `src/error.rs` | `#[derive(hy_err)]`：校验错误码和模板，生成错误码注册 |
 | `src/redact.rs` | `#[redact]`：字段打码、跳过。`redact` feature 开了才编译 |
+| `src/component.rs` | `#[component]`：把 `impl ImmediateComponent` / `impl DeferredComponent` 块拆成 `impl Component` 和启动 trait 两个 impl，按 trait 填 `Kind`。`component` feature（core 的 `app` 会打开）开了才编译 |
 | `src/krate.rs` | 按调用方的依赖名决定生成代码里用 `::hygiea` 还是 `::hygiea_core`，`crate = "path"` 可以覆盖 |
-| `tests/` | trybuild 测试：`hy_err_ui`（`#[derive(hy_err)]`、`err!`）、`redact_ui`（`#[redact]`）。dev-dependency 依赖 facade，fixture 用 `hygiea::` 路径，和下游写法一样 |
+| `tests/` | trybuild 测试：`hy_err_ui`（`#[derive(hy_err)]`、`err!`）、`redact_ui`（`#[redact]`）、`component_ui`（`#[component]`，包括 Deferred 组件第一阶段读不到资源）。dev-dependency 依赖 facade，fixture 用 `hygiea::` 路径，和下游写法一样 |
 
 ### 组件
 
@@ -81,7 +82,7 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 
 | 目录 | 示例 |
 |---|---|
-| `examples/app/` | `app_basic`、`app_dependencies`、`app_named_instances`、`app_global_state`、`app_background_task`、`app_config` |
+| `examples/app/` | `app_basic`、`app_dependencies`、`app_named_instances`、`app_global_state`、`app_background_task`、`app_config`、`app_two_phase` |
 | `examples/error/` | `error_basic` |
 | `examples/string/` | `string_template` |
 | `config/<示例名>/` | 读配置文件的示例各用一个目录（`ConfigArgs::default_config_dir` 指定）：`app_basic/dev.toml`；`app_config/` 下 `dev.toml`、`prod.toml`、`local.toml` |

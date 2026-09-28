@@ -1,0 +1,5 @@
+error[E0599]: no method named `require` found for reference `&'life1 ResourceSink` in the current scope
+  --> tests/component_ui/fail/prepare_reads_resources.rs:21:14
+   |
+21 |         sink.require::<Pool>()?;
+   |              ^^^^^^^ method not found in `&'life1 ResourceSink`

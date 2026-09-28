@@ -70,10 +70,11 @@ async fn main() -> Result<(), HyErr> {
 
     let (result, _log_guard) = registry
         .add::<SqlxSqliteComponent>(config.db)
-        .run(|_| async {
+        .on_ready(|_| async {
             tracing::info!("press Ctrl+C to exit");
             Ok(())
         })
+        .run()
         .await;
     result
 }

@@ -15,6 +15,8 @@ proc-macro = true
 default = []
 # #[redact] 属性宏，不常用，开了才编译
 redact = []
+# #[component] 属性宏，app 用，开了 app 才编译
+component = []
 
 [dependencies]
 quote.workspace = true
@@ -30,7 +32,9 @@ proc-macro-crate.workspace = true
 [dev-dependencies]
 # 宏的编译期检查（trybuild）：fixture 通过 facade 使用宏，和下游的实际写法一样（生成 ::hygiea:: 路径）。
 # facade 间接依赖本 crate，dev-dependency 形成的循环 Cargo 允许
-hygiea = { workspace = true, features = ["redact"] }
+hygiea = { workspace = true, features = ["redact", "app"] }
 trybuild = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+# #[component] 的 fixture：启动方法的签名里要写 tokio::task::JoinHandle
+tokio = { workspace = true }

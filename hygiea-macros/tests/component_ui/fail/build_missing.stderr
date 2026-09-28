@@ -1,0 +1,8 @@
+error[E0046]: not all trait items implemented, missing: `build`
+ --> tests/component_ui/fail/build_missing.rs:9:1
+  |
+9 | #[component]
+  | ^^^^^^^^^^^^ missing `build` in implementation
+  |
+  = note: this error originates in the attribute macro `component` (in Nightly builds, run with -Z macro-backtrace for more info)
+  = help: implement the missing item: `fn build(_: Cow<'static, str>, _: <Self as hygiea::app::Component>::Config) -> Self { todo!() }`

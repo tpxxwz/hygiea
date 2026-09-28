@@ -8,7 +8,7 @@ use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
 
 use hygiea_core::app::{
-    BaseAppErr, CancellationToken, Component, Name, ResourceId, Resources, async_trait,
+    BaseAppErr, CancellationToken, ImmediateComponent, Name, ResourceId, Resources, component,
 };
 use hygiea_core::{HyErr, ResultExt, err};
 
@@ -162,8 +162,8 @@ pub struct SqlxPgComponent {
     pool: Option<SqlxPgPool>,
 }
 
-#[async_trait]
-impl Component for SqlxPgComponent {
+#[component]
+impl ImmediateComponent for SqlxPgComponent {
     type Config = SqlxPgConfig;
 
     fn build(name: Name, config: Self::Config) -> Self {

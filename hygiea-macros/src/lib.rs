@@ -1,5 +1,7 @@
 use proc_macro::TokenStream;
 
+#[cfg(feature = "component")]
+mod component;
 mod error;
 mod krate;
 #[cfg(feature = "redact")]
@@ -16,4 +18,12 @@ pub fn derive_hy_err(input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn redact(attr: TokenStream, item: TokenStream) -> TokenStream {
     redact::expand(attr, item)
+}
+
+/// 标在 `impl ImmediateComponent for ..` / `impl DeferredComponent for ..` 上，把 `Component` 的项和启动方法
+/// 写在一个 impl 块里，展开成两个 impl，见 `hygiea::app::component`
+#[cfg(feature = "component")]
+#[proc_macro_attribute]
+pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
+    component::expand(attr, item)
 }
