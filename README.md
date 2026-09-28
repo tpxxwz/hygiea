@@ -206,7 +206,7 @@ fn main() {
 
 ```rust
 use hygiea::HyErr;
-use hygiea::http_client::reqwest_client::{Client, ReqwestConfig, HttpResponse, Json, Method, RequestConfig};
+use hygiea::http_client::reqwest_client::{Client, ReqwestConfig, Json, Method, RequestConfig};
 use hygiea::redact::redact;
 use serde::{Deserialize, Serialize};
 
@@ -228,16 +228,18 @@ struct LoginResp {
 
 async fn login(client: &Client) -> Result<String, HyErr> {
     let req = LoginReq { user: "alice".into(), password: "p@ss".into() };
-    let resp: HttpResponse<Json<LoginResp>> =
-        RequestConfig::with_body(Method::POST, "https://api.example.com/login", Json(req))
-            .send(client)
-            .await?;
-    Ok(resp.body.0.token)
+    // 请求体 Json(..) 表示按 JSON 编码；send::<Json<LoginResp>> 表示按 JSON 解码，resp.body 是 LoginResp
+    let resp = RequestConfig::with_body(Method::POST, "https://api.example.com/login", Json(req))
+        .send::<Json<LoginResp>>(client)
+        .await?;
+    Ok(resp.body.token)
 }
 
 // client 只建一次并共享：连接池在它里面
 // let client = ReqwestConfig::default().build()?;
 ```
+
+`send::<Decoder>` 的 `Decoder` 是解码器：`Json<T>` 解出 `T`，`String` / `Bytes` / `()` / `BodyStream` 解出它们自己。`resp.body` 的类型是解码器的输出，所以解码器要写在 turbofish 里，不能靠接收处的类型标注推断。自定义解码（拆 `{code, msg, data}` 外壳、解密……）实现 `FromBytes`，`Output` 可以是拆出来的业务数据。
 
 请求发出去之后失败（传输失败、非 2xx、响应解码失败）时，错误的 err_args 统一带 `method`、`url`、`status`（还没收到响应时是 `null`）；读完了 body 的，还带 `body` 原文，不渲染进对外消息。
 
@@ -253,7 +255,7 @@ async fn login(client: &Client) -> Result<String, HyErr> {
 
 **只在两种情况下重试**：对方接口幂等（GET / PUT / DELETE，或者带了幂等键），或者根据错误调整请求后再发（401 换 token、签名过期重签……）。超时、读 body 中断时请求可能已经被对方执行了，不幂等的请求（下单、转账）不要原样重发。
 
-重试要求请求体整个在内存里（`Json`、`Form`、`Raw`、`Multipart`，也就是实现了 `Clone` 的），响应类型实现 `FromBytes`（body 读完再解码）；流式的 `RawStream`、reqwest 原生的 `multipart::Form`、`BodyStream` 开不了重试，编译期报错。
+重试要求请求体整个在内存里（`Json`、`Form`、`Raw`、`Multipart`，也就是实现了 `Clone` 的），解码器实现 `FromBytes`（body 读完再解码）；流式的 `RawStream`、reqwest 原生的 `multipart::Form`、`BodyStream` 开不了重试，编译期报错。
 
 ```rust
 use std::time::Duration;
@@ -261,9 +263,9 @@ use hygiea::http_client::reqwest_client::{Auth, FailStage, RequestConfig, RetryC
 
 type Cfg = RequestConfig<(), ()>;
 
-let resp: HttpResponse<Json<Profile>> = RequestConfig::plain(Method::GET, url)
+let resp = RequestConfig::plain(Method::GET, url)
     .auth(Auth::Bearer(token))
-    .send((&client, RetryCtx::new(3, |attempt: usize, cfg: Cfg, f: SendFailure| async move {
+    .send::<Json<Profile>>((&client, RetryCtx::new(3, |attempt: usize, cfg: Cfg, f: SendFailure| async move {
         match &f.stage {
             // 401：刷新 token 后再发
             FailStage::Status(resp) if resp.status == 401 => match refresh_token().await {

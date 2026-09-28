@@ -1,5 +1,9 @@
 //! 响应体：读完再解码的 [`FromBytes`]（`Bytes` / `String` / `Json` / `()`，可以重试），
-//! `send` 用的总入口 [`FromBody`]（`FromBytes` 自动实现，另有流式的 [`BodyStream`]）。读 body 的 [`RespBody`] 在 send.rs
+//! `send` 用的总入口 [`FromBody`]（`FromBytes` 自动实现，另有流式的 [`BodyStream`]）。读 body 的 [`RespBody`] 在 send.rs。
+//!
+//! 两个 trait 实现在「解码器」上，解码结果是关联类型 `Output`：`send::<Json<User>>` 里的 `Json<User>`
+//! 只用来选解码方式，`HttpResponse.body` 是 `User`。`Bytes` / `String` / `()` / `BodyStream` 的
+//! `Output` 是它们自己
 
 use std::fmt;
 use std::future::Future;
@@ -18,60 +22,76 @@ use super::send::RespBody;
 use super::text::decode_charset;
 use super::{Bytes, HeaderMap};
 
-/// 读完整个 body 再解码成 `Self`。现成的实现：[`Bytes`]（原样）、`String`（按 `Content-Type` 的 charset 解码）、
-/// [`Json<T>`]（反序列化）、`()`（丢弃 body）。自定义解码（拆业务外壳、解密、验签……）也实现这个。
+/// 读完整个 body 再解码的解码器，解码结果是 [`Output`](FromBytes::Output)。现成的实现：
+/// [`Bytes`]（原样）、`String`（按 `Content-Type` 的 charset 解码）、[`Json<T>`]（反序列化成 `T`）、
+/// `()`（丢弃 body）。自定义解码（拆业务外壳、解密、验签……）也实现这个，`Output` 可以是拆出来的业务数据。
 ///
 /// 实现了它的类型自动实现 [`FromBody`]，`send` 直接能用；带重试发送（见 [`RetryCtx`](super::RetryCtx)）
-/// 要求响应类型实现它：body 整个在内存里，失败时原始响应才留得住，交给重试判断。
+/// 要求解码器实现它：body 整个在内存里，失败时原始响应才留得住，交给重试判断。
 ///
 /// `from_bytes` 返回 `Err` 就算这次没拿到想要的结果：`send` 把它包成
 /// [`DecodeFailed`](super::BaseHttpErr::DecodeFailed)（原错误在 source 上）并打一条带原文的失败日志；
 /// 带重试时交给重试判断。比如 `{code, msg, data}` 外壳在 `code` 不是成功时返回 `Err`，业务失败也能触发重试
-pub trait FromBytes: Sized {
+pub trait FromBytes {
+    /// 解码结果，也就是 `HttpResponse.body` 的类型
+    type Output;
+
     /// 从读完的 body 解码。`headers` 是响应头
-    fn from_bytes(headers: &HeaderMap, body: Bytes) -> Result<Self, HyErr>;
+    fn from_bytes(headers: &HeaderMap, body: Bytes) -> Result<Self::Output, HyErr>;
 
     /// 解码成功后日志里怎么打这个响应。默认 `None`，成功日志里不输出 `resp`：
     /// 没有类型信息就没法打码，body 也可能很大。
     /// `Json<T>` 按 [`redact::to_redacted_json`] 重新序列化，`T` 里标了 `#[redact(..)]` 的字段会打码
-    fn decoded_preview(&self) -> Option<String> {
+    fn decoded_preview(_output: &Self::Output) -> Option<String> {
         None
     }
 }
 
-/// 响应 body 变成什么类型，给 [`RequestConfig::send`](super::RequestConfig::send) 用。
+/// 响应 body 怎么变成 [`Output`](FromBody::Output)，给 [`RequestConfig::send`](super::RequestConfig::send) 用。
 ///
 /// 一般不直接实现它：实现 [`FromBytes`] 就自动有了。要流式处理（不把 body 整个读进内存）才直接实现，
 /// 比如 [`BodyStream`]；这种类型不能用于带重试发送
-pub trait FromBody: Sized {
-    /// 从还没读的响应体得到 `Self`
-    fn from_body(body: RespBody<'_>) -> impl Future<Output = Result<Self, HyErr>> + Send;
+pub trait FromBody {
+    /// 得到的结果，也就是 `HttpResponse.body` 的类型
+    type Output;
+
+    /// 从还没读的响应体得到结果
+    fn from_body(body: RespBody<'_>) -> impl Future<Output = Result<Self::Output, HyErr>> + Send;
 
     /// 成功日志里的响应摘要，`None` 表示不输出 `resp`。[`FromBytes`] 类型用它的 `decoded_preview`
-    fn resp_preview(&self) -> Option<String> {
+    fn resp_preview(_output: &Self::Output) -> Option<String> {
         None
     }
 }
 
-impl<T: FromBytes + Send> FromBody for T {
-    async fn from_body(body: RespBody<'_>) -> Result<Self, HyErr> {
-        body.decode().await.map_err(|f| f.err)
+impl<T: FromBytes> FromBody for T
+where
+    T::Output: Send,
+{
+    type Output = T::Output;
+
+    async fn from_body(body: RespBody<'_>) -> Result<Self::Output, HyErr> {
+        body.decode::<T>().await.map_err(|f| f.err)
     }
 
-    fn resp_preview(&self) -> Option<String> {
-        self.decoded_preview()
+    fn resp_preview(output: &Self::Output) -> Option<String> {
+        T::decoded_preview(output)
     }
 }
 
 impl FromBytes for Bytes {
-    fn from_bytes(_: &HeaderMap, body: Bytes) -> Result<Self, HyErr> {
+    type Output = Bytes;
+
+    fn from_bytes(_: &HeaderMap, body: Bytes) -> Result<Bytes, HyErr> {
         Ok(body)
     }
 }
 
 impl FromBytes for String {
+    type Output = String;
+
     /// 按 `Content-Type` 里的 charset 解码（没写或不认识就按 UTF-8），和日志、错误里的规则一致
-    fn from_bytes(headers: &HeaderMap, body: Bytes) -> Result<Self, HyErr> {
+    fn from_bytes(headers: &HeaderMap, body: Bytes) -> Result<String, HyErr> {
         let content_type = headers
             .get(CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
@@ -81,33 +101,38 @@ impl FromBytes for String {
 
     /// 调用方要的就是文本，原样打（没法打码；有敏感内容就用 `Json<T>` 标 `#[redact]`，
     /// 或者 `enable_logging(false)`）。`Bytes` 可能是二进制、`()` 不关心内容，这两个不打
-    fn decoded_preview(&self) -> Option<String> {
-        Some(self.clone())
+    fn decoded_preview(output: &String) -> Option<String> {
+        Some(output.clone())
     }
 }
 
 impl FromBytes for () {
-    fn from_bytes(_: &HeaderMap, _: Bytes) -> Result<Self, HyErr> {
+    type Output = ();
+
+    fn from_bytes(_: &HeaderMap, _: Bytes) -> Result<(), HyErr> {
         Ok(())
     }
 }
 
+/// 反序列化成 `T`，`HttpResponse.body` 是 `T`。
+///
 /// 反序列化失败报 `JsonError`，`send` 再包成 [`DecodeFailed`](super::BaseHttpErr::DecodeFailed)，
 /// body 原文在 `DecodeFailed` 的 err_args 里；响应体和预期结构对不上时，光看 serde 的报错很难定位，排查时看它和失败日志。
 ///
 /// `T` 要同时实现 `Serialize`，日志打的是解码后重新序列化的结果：没在 `T` 里定义的字段不会出现，
 /// 数值格式、字段顺序也可能和原文不同
 impl<T: serde::de::DeserializeOwned + serde::Serialize> FromBytes for Json<T> {
-    fn from_bytes(_: &HeaderMap, body: Bytes) -> Result<Self, HyErr> {
+    type Output = T;
+
+    fn from_bytes(_: &HeaderMap, body: Bytes) -> Result<T, HyErr> {
         serde_json::from_slice(&body)
-            .map(Json)
             .wrap_err(|| err!(BaseErr::JsonError, "deserialize response body failed"))
     }
 
     /// 重新序列化失败时也不退回原文，否则打码就白做了
-    fn decoded_preview(&self) -> Option<String> {
+    fn decoded_preview(output: &T) -> Option<String> {
         Some(
-            redact::to_redacted_json(&self.0)
+            redact::to_redacted_json(output)
                 .unwrap_or_else(|e| format!("<log preview failed: {e}>")),
         )
     }
@@ -116,11 +141,11 @@ impl<T: serde::de::DeserializeOwned + serde::Serialize> FromBytes for Json<T> {
 /// 流式的响应体：`send` 拿到 2xx 的响应头就返回，body 一块块自己读，用于下载大文件，不整个读进内存。
 ///
 /// ```ignore
-/// let r: HttpResponse<BodyStream> = cfg.send(&client).await?;
+/// let r = cfg.send::<BodyStream>(&client).await?;
 /// let size = r.body.write_to(tokio::fs::File::create("a.zip").await?).await?;
 ///
 /// // 或者自己一块块处理
-/// let mut r: HttpResponse<BodyStream> = cfg.send(&client).await?;
+/// let mut r = cfg.send::<BodyStream>(&client).await?;
 /// while let Some(chunk) = r.body.next().await {
 ///     handle(chunk?);
 /// }
@@ -168,8 +193,10 @@ impl fmt::Debug for BodyStream {
 }
 
 impl FromBody for BodyStream {
+    type Output = BodyStream;
+
     /// 不读 body，直接把流接过去
-    async fn from_body(body: RespBody<'_>) -> Result<Self, HyErr> {
+    async fn from_body(body: RespBody<'_>) -> Result<BodyStream, HyErr> {
         Ok(body.into_stream())
     }
 }
@@ -234,10 +261,10 @@ mod tests {
             <()>::from_bytes(&HeaderMap::new(), Bytes::from_static(b"not json")).unwrap();
         }
 
-        /// `Json<T>` 反序列化结构体
+        /// `Json<T>` 反序列化结构体，解码结果是 `T`
         #[test]
         fn json_decodes_struct() {
-            let Json(t) = Json::<Token>::from_bytes(
+            let t = Json::<Token>::from_bytes(
                 &HeaderMap::new(),
                 Bytes::from_static(br#"{"user":"a","token":"t"}"#),
             )
@@ -254,12 +281,10 @@ mod tests {
         /// `Json<T>` 也能直接解码成标量
         #[test]
         fn json_decodes_scalars() {
-            let Json(n) =
-                Json::<u64>::from_bytes(&HeaderMap::new(), Bytes::from_static(b"42")).unwrap();
+            let n = Json::<u64>::from_bytes(&HeaderMap::new(), Bytes::from_static(b"42")).unwrap();
             assert_eq!(n, 42);
-            let Json(s) =
-                Json::<String>::from_bytes(&HeaderMap::new(), Bytes::from_static(br#""ok""#))
-                    .unwrap();
+            let s = Json::<String>::from_bytes(&HeaderMap::new(), Bytes::from_static(br#""ok""#))
+                .unwrap();
             assert_eq!(s, "ok");
         }
 
@@ -340,19 +365,22 @@ mod tests {
         /// `String` 调用方要的就是文本，原样返回
         #[test]
         fn raw_types() {
-            assert_eq!(Bytes::from_static(b"x").decoded_preview(), None);
-            assert_eq!(().decoded_preview(), None);
-            assert_eq!(String::from("x").decoded_preview().as_deref(), Some("x"));
+            assert_eq!(Bytes::decoded_preview(&Bytes::from_static(b"x")), None);
+            assert_eq!(<()>::decoded_preview(&()), None);
+            assert_eq!(
+                String::decoded_preview(&String::from("x")).as_deref(),
+                Some("x")
+            );
         }
 
         /// `Json<T>` 重新序列化，`T` 里标了的字段打码
         #[test]
         fn json_reserializes_with_masking() {
-            let t = Json(Token {
+            let t = Token {
                 user: "a".into(),
                 token: "secret".into(),
-            });
-            let preview = t.decoded_preview().unwrap();
+            };
+            let preview = Json::<Token>::decoded_preview(&t).unwrap();
             assert_eq!(
                 serde_json::from_str::<Value>(&preview).unwrap(),
                 json!({"user":"a","token":"***"})
@@ -372,7 +400,7 @@ mod tests {
         /// 重新序列化失败时给一个标记，不退回原文，否则打码就白做了
         #[test]
         fn json_reserialize_failure_is_marked() {
-            let preview = Json(DecodeOnly).decoded_preview().unwrap();
+            let preview = Json::<DecodeOnly>::decoded_preview(&DecodeOnly).unwrap();
             assert!(preview.starts_with("<log preview failed:"), "{preview}");
         }
     }

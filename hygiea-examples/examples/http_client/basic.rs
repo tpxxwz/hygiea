@@ -63,7 +63,7 @@ async fn main() -> Result<(), HyErr> {
         .send::<Json<LoginResult>>(&client)
         .await?;
 
-    println!("\n服务端返回的 token: {}", resp.body.0.token);
+    println!("\n服务端返回的 token: {}", resp.body.token);
 
     // 请求做完了，服务端任务也不需要了；main 返回时进程退出，不用等 Ctrl+C
     server.abort();

@@ -23,7 +23,7 @@ mod request {
         .await
         .unwrap();
         // 服务端收到原文
-        assert!(seen.body.0["body"].as_str().unwrap().contains("secret-1"));
+        assert!(seen.body["body"].as_str().unwrap().contains("secret-1"));
         // 日志里 req 段打码；回显的响应是 Value，没有打码规则，所以只看 req 段
         let log = out.text();
         let start = log.lines().find(|l| l.contains("http call start")).unwrap();
@@ -64,7 +64,7 @@ mod url {
             .await
             .unwrap();
         // 服务端收到原文
-        assert_eq!(resp.body.0["query"], "user=alice&token=secret-q");
+        assert_eq!(resp.body["query"], "user=alice&token=secret-q");
         // HttpResponse.url 打码
         assert_eq!(resp.url.query(), Some(MASKED_QUERY));
         // 日志里只看 start 那条（success 那条会带上回显的响应原文）
@@ -139,7 +139,7 @@ mod url {
                 .await
                 .unwrap();
         // 重定向目标（服务端）收到的是原文
-        assert_eq!(resp.body.0["query"], "user=alice&token=secret-r");
+        assert_eq!(resp.body["query"], "user=alice&token=secret-r");
         // HttpResponse.url 是最初发出的地址，query 仍是打码后的
         assert_eq!(resp.url.query(), Some(MASKED_QUERY));
         let log = out.text();
@@ -208,13 +208,20 @@ mod response {
         data: T,
     }
 
-    async fn send<Resp: FromBody + Send>(
+    async fn send<Decoder>(
         path: &str,
-    ) -> (Result<HttpResponse<Resp>, hygiea_core::HyErr>, String) {
+    ) -> (
+        Result<HttpResponse<Decoder::Output>, hygiea_core::HyErr>,
+        String,
+    )
+    where
+        Decoder: FromBody,
+        Decoder::Output: Send,
+    {
         let base = serve_routes(ROUTES).await;
         let (out, _guard) = capture();
         let result = RequestConfig::plain(Method::GET, format!("{base}{path}"))
-            .send::<Resp>(&local_config().build().unwrap())
+            .send::<Decoder>(&local_config().build().unwrap())
             .await;
         (result, out.text())
     }
@@ -223,7 +230,7 @@ mod response {
     #[tokio::test]
     async fn single_object() {
         let (r, log) = send::<Json<Login>>("/one").await;
-        assert_eq!(r.unwrap().body.0.token, "secret-a");
+        assert_eq!(r.unwrap().body.token, "secret-a");
         assert!(log.contains(r#""token":"***""#), "{log}");
         assert!(!log.contains("secret-a"), "{log}");
     }
@@ -232,7 +239,7 @@ mod response {
     #[tokio::test]
     async fn top_level_array() {
         let (r, log) = send::<Json<Vec<Login>>>("/list").await;
-        assert_eq!(r.unwrap().body.0[1].token, "secret-b");
+        assert_eq!(r.unwrap().body[1].token, "secret-b");
         assert_eq!(log.matches(r#""token":"***""#).count(), 2, "{log}");
         assert!(!log.contains("secret-"), "{log}");
     }
@@ -241,7 +248,7 @@ mod response {
     #[tokio::test]
     async fn inside_generic_envelope() {
         let (r, log) = send::<Json<Wrapped<Vec<Login>>>>("/wrapped").await;
-        assert_eq!(r.unwrap().body.0.data[0].token, "secret-a");
+        assert_eq!(r.unwrap().body.data[0].token, "secret-a");
         assert!(log.contains(r#""token":"***""#), "{log}");
         assert!(!log.contains("secret-a"), "{log}");
     }

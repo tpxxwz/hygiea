@@ -5,7 +5,7 @@
 //! cfg.send::<Json<User>>((&client, RetryCtx::new(3, policy))).await?;  // 最多重试 3 次
 //! ```
 //!
-//! 流程：发一次，拿到解码成功的 `Resp` 就返回；请求发出去之后失败（传输失败、非 2xx、解码失败）就把
+//! 流程：发一次，解码成功就返回；请求发出去之后失败（传输失败、非 2xx、解码失败）就把
 //! 这次的配置和 [`SendFailure`] 交给 [`Retry::retry`]，按它返回的 [`RetryDecision`] 再发或者停下。
 //! 重试次数用完后不再问 `Retry`，返回最后一次的错误。发出之前的错误（URL、params、header、body 构造）
 //! 重试也没用，直接返回，不交给 `Retry`。
@@ -24,7 +24,7 @@
 //! # 要求
 //!
 //! params 和 body 是 `Clone`（每次发之前留一份，发出去的那份被消费掉；流式 body 不是 `Clone`，
-//! 开不了重试），响应类型实现 [`FromBytes`]（body 整个读进内存，失败时原始响应才留得住）
+//! 开不了重试），解码器实现 [`FromBytes`]（body 整个读进内存，失败时原始响应才留得住）
 
 use std::future::Future;
 
@@ -106,17 +106,18 @@ impl<T> RetryCtx<T> {
 
 impl<T> super::send::sealed::Sealed for (&Client, RetryCtx<T>) {}
 
-impl<Params, Req, Resp, T> IntoSender<Params, Req, Resp> for (&Client, RetryCtx<T>)
+impl<Params, Req, Decoder, T> IntoSender<Params, Req, Decoder> for (&Client, RetryCtx<T>)
 where
     Params: serde::Serialize + Clone + Send,
     Req: IntoBody + Clone + Send,
-    Resp: FromBytes + Send,
+    Decoder: FromBytes,
+    Decoder::Output: Send,
     T: Retry<Params, Req>,
 {
     fn send_request(
         self,
         cfg: RequestConfig<Params, Req>,
-    ) -> impl Future<Output = Result<HttpResponse<Resp>, HyErr>> + Send {
+    ) -> impl Future<Output = Result<HttpResponse<Decoder::Output>, HyErr>> + Send {
         let (
             client,
             RetryCtx {
@@ -131,7 +132,7 @@ where
                 attempt += 1;
                 let kept = cfg.clone();
                 // 外层 ? 是发出之前的错误：直接返回，不交给 retry
-                let failure = match cfg.send_once_bytes::<Resp>(client).await? {
+                let failure = match cfg.send_once_bytes::<Decoder>(client).await? {
                     Ok(resp) => return Ok(resp),
                     Err(failure) => failure,
                 };

@@ -82,8 +82,7 @@ async fn each_named_client_uses_its_own_config() {
             .send::<Json<serde_json::Value>>(&client)
             .await
             .unwrap()
-            .body
-            .0;
+            .body;
         assert_eq!(seen["headers"]["user-agent"], ua);
     }
 }

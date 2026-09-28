@@ -15,7 +15,6 @@ async fn echo_via(client: &Client, url: String) -> serde_json::Value {
         .await
         .unwrap()
         .body
-        .0
 }
 
 /// 请求头相关：User-Agent、默认头、透明压缩
@@ -51,8 +50,7 @@ mod headers {
             .send::<Json<serde_json::Value>>(&client)
             .await
             .unwrap()
-            .body
-            .0;
+            .body;
         assert_eq!(seen["headers"]["x-a"], "1");
         assert_eq!(seen["headers"]["x-b"], "2");
     }
@@ -103,7 +101,7 @@ mod redirects {
             .await
             .unwrap();
         assert_eq!(resp.status, StatusCode::OK);
-        assert_eq!(resp.body.0["path"], "/echo");
+        assert_eq!(resp.body["path"], "/echo");
         assert_eq!(resp.url.path(), "/redirect");
     }
 

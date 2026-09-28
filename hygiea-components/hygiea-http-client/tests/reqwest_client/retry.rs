@@ -82,7 +82,7 @@ mod attempts {
             ))
             .await
             .unwrap();
-        assert_eq!(resp.body.0, Item { id: 7 });
+        assert_eq!(resp.body, Item { id: 7 });
         assert_eq!(count.load(Ordering::SeqCst), 3);
         assert_eq!(recorder.attempts(), [1, 2]);
     }
@@ -207,7 +207,7 @@ mod stages {
             ))
             .await
             .unwrap();
-        assert_eq!(resp.body.0, Item { id: 2 });
+        assert_eq!(resp.body, Item { id: 2 });
         assert_eq!(count.load(Ordering::SeqCst), 2);
         let body = seen.lock().unwrap().take().unwrap();
         assert_eq!(body, &br#"{"id":"not a number"}"#[..]);

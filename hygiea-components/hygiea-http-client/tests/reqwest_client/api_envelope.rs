@@ -44,9 +44,12 @@ struct Envelope {
     data: serde_json::Value,
 }
 
+/// 解码结果就是 `ApiResult<T>` 自己；要拿到 `T` 的话把 `Output` 设成 `T`，业务失败时返回 `Err`
 impl<T: DeserializeOwned + Serialize> FromBytes for ApiResult<T> {
+    type Output = Self;
+
     fn from_bytes(headers: &HeaderMap, body: Bytes) -> Result<Self, HyErr> {
-        let Json(envelope) = Json::<Envelope>::from_bytes(headers, body)?;
+        let envelope = Json::<Envelope>::from_bytes(headers, body)?;
         let (data, raw_data) = if envelope.code == "0" {
             let data = serde_json::from_value(envelope.data)
                 .wrap_err(|| err!(BaseErr::JsonError, "deserialize response data failed"))?;
@@ -65,14 +68,14 @@ impl<T: DeserializeOwned + Serialize> FromBytes for ApiResult<T> {
     /// 业务成功时按 `T` 的规则打码；业务失败时 `data` 没解析、没法打码，把 code、msg 和原始 data
     /// 原样打出来，和非 2xx 一样，排查为什么失败要看对方到底回了什么。
     /// 返回 `None` 的话成功日志里没有 resp，所以这里自己拼
-    fn decoded_preview(&self) -> Option<String> {
-        if !self.is_ok() {
-            let raw =
-                serde_json::json!({ "code": self.code, "msg": self.msg, "data": self.raw_data });
+    fn decoded_preview(output: &Self) -> Option<String> {
+        if !output.is_ok() {
+            let raw = serde_json::json!({ "code": output.code, "msg": output.msg, "data": output.raw_data });
             return Some(raw.to_string());
         }
         Some(
-            redact::to_redacted_json(self).unwrap_or_else(|e| format!("<log preview failed: {e}>")),
+            redact::to_redacted_json(output)
+                .unwrap_or_else(|e| format!("<log preview failed: {e}>")),
         )
     }
 }
@@ -128,7 +131,7 @@ async fn fetch<T: DeserializeOwned + Serialize + Send>(
     path: &str,
 ) -> Result<HttpResponse<ApiResult<T>>, HyErr> {
     RequestConfig::plain(Method::GET, format!("{base}{path}"))
-        .send(&local_config().build().unwrap())
+        .send::<ApiResult<T>>(&local_config().build().unwrap())
         .await
 }
 

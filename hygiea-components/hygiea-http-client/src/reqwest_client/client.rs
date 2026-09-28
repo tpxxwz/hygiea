@@ -12,7 +12,7 @@ use hygiea_core::app::{
 use hygiea_core::{HyErr, ResultExt, err};
 
 use super::config::{HeaderMapConfig, ProxyConfig};
-use super::error::client_build_failed;
+use super::error::{client_build_failed, invalid_header};
 use super::headers::{IntoHeaders, checked_headers};
 use super::{Client, ClientBuilder, HeaderMap};
 
@@ -182,10 +182,13 @@ impl Default for ReqwestConfig {
 }
 
 impl ReqwestConfig {
-    /// 设置默认头，一次传全部，见 [`IntoHeaders`]。转换失败或使用了保留字段时返回 `Err`；
-    /// 重复调用以最后一次为准
+    /// 添加默认头，见 [`IntoHeaders`]。多次调用、或者一次传数组 / 元组，都和已有的（包括配置文件里的）按顺序合并，
+    /// 同名的以靠后的为准。转换失败、使用了保留字段、或者已有的默认头本身不合法时返回 `Err`
     pub fn default_headers(mut self, headers: impl IntoHeaders) -> Result<Self, HyErr> {
-        self.default_headers = checked_headers(headers)?.into();
+        let mut merged = HeaderMap::try_from(std::mem::take(&mut self.default_headers))
+            .map_err(invalid_header)?;
+        merged.extend(checked_headers(headers)?);
+        self.default_headers = merged.into();
         Ok(self)
     }
 
@@ -358,17 +361,19 @@ mod tests {
             }
         }
 
-        /// 重复调用以最后一次为准，不是合并
+        /// 多次调用按顺序合并：不同名的都保留，同名的以后一次为准
         #[test]
-        fn later_call_replaces_earlier() {
+        fn later_call_merges_into_earlier() {
             let c = ReqwestConfig::default()
-                .default_headers(header_map(&[("x-a", "1")]))
+                .default_headers(header_map(&[("x-a", "1"), ("x-b", "old")]))
                 .unwrap()
-                .default_headers(header_map(&[("x-b", "2")]))
+                .default_headers(header_map(&[("x-b", "new"), ("x-c", "3")]))
                 .unwrap();
             let headers = HeaderMap::try_from(c.default_headers).unwrap();
-            assert!(!headers.contains_key("x-a"));
-            assert_eq!(headers["x-b"], "2");
+            assert_eq!(headers["x-a"], "1");
+            assert_eq!(headers.get_all("x-b").iter().count(), 1);
+            assert_eq!(headers["x-b"], "new");
+            assert_eq!(headers["x-c"], "3");
         }
     }
 

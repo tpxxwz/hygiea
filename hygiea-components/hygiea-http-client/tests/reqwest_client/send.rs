@@ -15,7 +15,6 @@ mod request_content {
             .await
             .unwrap()
             .body
-            .0
     }
 
     /// 方法和路径
@@ -269,18 +268,17 @@ mod responses {
     async fn send_decodes_any_2xx() {
         let base = serve_routes(ROUTES).await;
         let client = local_config().build().unwrap();
-        let ok: HttpResponse<Json<Login>> = RequestConfig::plain(Method::GET, format!("{base}/ok"))
-            .send(&client)
+        let ok = RequestConfig::plain(Method::GET, format!("{base}/ok"))
+            .send::<Json<Login>>(&client)
             .await
             .unwrap();
-        assert_eq!(ok.body.0, login("t-1"));
-        let created: HttpResponse<Json<Login>> =
-            RequestConfig::plain(Method::GET, format!("{base}/created"))
-                .send(&client)
-                .await
-                .unwrap();
+        assert_eq!(ok.body, login("t-1"));
+        let created = RequestConfig::plain(Method::GET, format!("{base}/created"))
+            .send::<Json<Login>>(&client)
+            .await
+            .unwrap();
         assert_eq!(created.status, StatusCode::CREATED);
-        assert_eq!(created.body.0.user, "bob");
+        assert_eq!(created.body.user, "bob");
     }
 
     /// send 解码成 String / () / Bytes
@@ -289,17 +287,17 @@ mod responses {
         let base = serve_routes(ROUTES).await;
         let client = local_config().build().unwrap();
         let url = format!("{base}/ok");
-        let s: HttpResponse<String> = RequestConfig::plain(Method::GET, &url)
-            .send(&client)
+        let s = RequestConfig::plain(Method::GET, &url)
+            .send::<String>(&client)
             .await
             .unwrap();
         assert!(s.body.contains("alice"));
-        let _: HttpResponse<()> = RequestConfig::plain(Method::GET, &url)
-            .send(&client)
+        let _ = RequestConfig::plain(Method::GET, &url)
+            .send::<()>(&client)
             .await
             .unwrap();
-        let b: HttpResponse<Bytes> = RequestConfig::plain(Method::GET, &url)
-            .send(&client)
+        let b = RequestConfig::plain(Method::GET, &url)
+            .send::<Bytes>(&client)
             .await
             .unwrap();
         assert_eq!(b.body, s.body.as_bytes());
@@ -325,8 +323,8 @@ mod responses {
     async fn gbk_response_decodes_to_original_text() {
         let gbk = [0xc4, 0xe3, 0xba, 0xc3]; // "你好" 的 GBK 字节
         let base = serve(move |_| Reply::bytes(200, "text/plain; charset=gbk", gbk.to_vec())).await;
-        let resp: HttpResponse<String> = RequestConfig::plain(Method::GET, format!("{base}/gbk"))
-            .send(&local_config().build().unwrap())
+        let resp = RequestConfig::plain(Method::GET, format!("{base}/gbk"))
+            .send::<String>(&local_config().build().unwrap())
             .await
             .unwrap();
         assert_eq!(resp.body, "你好");
@@ -337,11 +335,10 @@ mod responses {
     async fn invalid_bytes_are_decoded_and_logged_lossy() {
         let base = serve(|_| Reply::bytes(200, "text/plain", vec![b'a', 0xff, b'b'])).await;
         let (out, _guard) = capture();
-        let resp: HttpResponse<String> =
-            RequestConfig::plain(Method::GET, format!("{base}/bad-bytes"))
-                .send(&local_config().build().unwrap())
-                .await
-                .unwrap();
+        let resp = RequestConfig::plain(Method::GET, format!("{base}/bad-bytes"))
+            .send::<String>(&local_config().build().unwrap())
+            .await
+            .unwrap();
         assert_eq!(resp.body, "a\u{fffd}b");
         let log = out.text();
         assert!(log.contains("a\u{fffd}b"), "{log}");

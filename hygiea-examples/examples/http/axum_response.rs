@@ -110,7 +110,7 @@ async fn main() -> Result<(), HyErr> {
     let resp = RequestConfig::plain(Method::GET, url("/user"))
         .send::<Json<Envelope<User>>>(&client)
         .await?;
-    let body = resp.body.0;
+    let body = resp.body;
     println!(
         "1. GET /user          -> code={:?} data={:?}",
         body.code, body.data
@@ -120,7 +120,7 @@ async fn main() -> Result<(), HyErr> {
     let resp = RequestConfig::plain(Method::GET, url("/missing"))
         .send::<Json<Envelope<User>>>(&client)
         .await?;
-    let body = resp.body.0;
+    let body = resp.body;
     println!(
         "2. GET /missing       -> code={:?} msg={:?}",
         body.code, body.msg
@@ -130,7 +130,7 @@ async fn main() -> Result<(), HyErr> {
     let resp = RequestConfig::plain(Method::GET, url("/boom"))
         .send::<Json<Envelope<User>>>(&client)
         .await?;
-    let body = resp.body.0;
+    let body = resp.body;
     println!(
         "3. GET /boom          -> code={:?} msg={:?}",
         body.code, body.msg
@@ -146,7 +146,7 @@ async fn main() -> Result<(), HyErr> {
     )
     .send::<Json<Envelope<Echo>>>(&client)
     .await?;
-    let body = resp.body.0;
+    let body = resp.body;
     println!(
         "4. POST /echo         -> code={:?} data={:?}",
         body.code, body.data

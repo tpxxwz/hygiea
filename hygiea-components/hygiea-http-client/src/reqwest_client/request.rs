@@ -91,10 +91,11 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
         }
     }
 
-    /// 设置请求头，一次传全部，见 [`IntoHeaders`]。转换失败或使用了保留字段时返回 `Err`；
-    /// 重复调用以最后一次为准
+    /// 添加请求头，见 [`IntoHeaders`]。多次调用、或者一次传数组 / 元组，都按顺序合并，同名的以靠后的为准
+    /// （整组值替换，不是追加），比如 `.headers(&*BASE_HEADERS)?.headers(&session)?`。
+    /// 转换失败或使用了保留字段时返回 `Err`；要清空已设置的请求头就重新构造一个 `RequestConfig`
     pub fn headers(mut self, headers: impl IntoHeaders) -> Result<Self, HyErr> {
-        self.headers = checked_headers(headers)?;
+        self.headers.extend(checked_headers(headers)?);
         Ok(self)
     }
 
@@ -264,16 +265,18 @@ mod tests {
     mod setters {
         use super::*;
 
-        /// 普通请求头收下，重复调用以最后一次为准
+        /// 多次调用按顺序合并：不同名的都保留，同名的以后一次为准
         #[test]
-        fn headers_replace_previous_call() {
+        fn headers_merge_across_calls() {
             let cfg = RequestConfig::plain(Method::GET, URL)
-                .headers(header_map(&[("x-a", "1")]))
+                .headers(header_map(&[("x-a", "1"), ("x-b", "old")]))
                 .unwrap()
-                .headers(header_map(&[("x-b", "2")]))
+                .headers(header_map(&[("x-b", "new"), ("x-c", "3")]))
                 .unwrap();
-            assert!(!cfg.headers.contains_key("x-a"));
-            assert_eq!(cfg.headers["x-b"], "2");
+            assert_eq!(cfg.headers["x-a"], "1");
+            assert_eq!(cfg.headers.get_all("x-b").iter().count(), 1);
+            assert_eq!(cfg.headers["x-b"], "new");
+            assert_eq!(cfg.headers["x-c"], "3");
         }
 
         /// auth 重复调用以最后一次为准

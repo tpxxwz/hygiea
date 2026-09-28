@@ -20,18 +20,18 @@
 //!  └─ sender.send_request(cfg)                            IntoSender，retry.rs：按 sender 的类型二选一
 //!      │
 //!      ├─ &Client ──────────────────────────────────────── 不重试
-//!      │   └─ send_once::<Resp: FromBody>
+//!      │   └─ send_once::<Decoder: FromBody>
 //!      │       ├─ dispatch ───────────────────────────────┐ 共用的前半段（见下）
 //!      │       ├─ 非 2xx → read_status_failure → Err(NonSuccessStatus)
-//!      │       ├─ 2xx    → Resp::from_body(RespBody)
+//!      │       ├─ 2xx    → Decoder::from_body(RespBody)
 //!      │       │           ├─ FromBytes 类型：RespBody::decode → 失败 Err(DecodeFailed)
 //!      │       │           └─ BodyStream：into_stream，不读 body
 //!      │       └─ 成功   → SendCtx::succeeded（打 success 日志）
 //!      │
-//!      └─ (&Client, RetryCtx) ───────────────────────────── 带重试，要求 Params / Req: Clone、Resp: FromBytes
+//!      └─ (&Client, RetryCtx) ───────────────────────────── 带重试，要求 Params / Req: Clone、Decoder: FromBytes
 //!          └─ loop {
 //!               kept = cfg.clone()                        发出去的那份会被消费，先留一份
-//!               send_once_bytes::<Resp: FromBytes>
+//!               send_once_bytes::<Decoder: FromBytes>
 //!                ├─ dispatch ─────────────────────────────┤ 外层 Err（发出之前的错误）→ 直接返回，不进 Retry
 //!                ├─ 非 2xx → read_status_failure → SendFailure { Status(原始响应) }
 //!                ├─ 2xx    → RespBody::decode → 失败 SendFailure { Decode(原始响应) }
@@ -50,7 +50,7 @@
 //!      └─ 成功 → (SendCtx, 响应头已到的 Response)
 //! ```
 //!
-//! 为什么拆成两条路：不重试时响应可以是流（[`BodyStream`](super::BodyStream)），读不读 body 由 `Resp` 决定；
+//! 为什么拆成两条路：不重试时响应可以是流（[`BodyStream`](super::BodyStream)），读不读 body 由 `Decoder` 决定；
 //! 重试时失败要把原始响应交给 `Retry`，body 必须先整个读进内存，所以只接受 `FromBytes`，失败带 `SendFailure`。
 //! 两条路的前半段（`dispatch`）、非 2xx 处理、日志都是同一套，行为一致。
 //!
@@ -78,18 +78,21 @@ use super::text::{body_preview, body_text, to_one_line};
 use super::{Bytes, Client, HeaderMap, Method, StatusCode, Url};
 
 impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
-    /// 发请求，2xx 时把 body 变成 `Resp`（见 [`FromBody`]），否则返回
+    /// 发请求，2xx 时按 `Decoder` 把 body 变成 `Decoder::Output`（见 [`FromBody`]），否则返回
     /// `BaseHttpErr::NonSuccessStatus`。要原样的字节就用 [`Bytes`](super::Bytes)（整个读进内存）；
     /// 大文件用 [`BodyStream`](super::BodyStream) 流式读，或者 `write_to` 直接写进文件。
-    /// 解码目标由接收处的类型标注推断：
+    /// 解码器写在 turbofish 里（同一个 `Output` 可能来自不同解码器，没法从接收处的类型推断）：
     ///
     /// ```ignore
-    /// let r: HttpResponse<Json<User>> = cfg.send(&client).await?;
-    /// let user = r.body.0;
+    /// let r = cfg.send::<Json<User>>(&client).await?;
+    /// let user: User = r.body;
     ///
     /// // 带重试：第二个参数换成 (&client, RetryCtx)，见 RetryCtx
-    /// let r: HttpResponse<Json<User>> = cfg.send((&client, RetryCtx::new(3, policy))).await?;
+    /// let r = cfg.send::<Json<User>>((&client, RetryCtx::new(3, policy))).await?;
     /// ```
+    ///
+    /// 请求和响应不对称：`Req` 是请求体的值，`Json(x)` 本身就表明按 JSON 编码，不需要单独的编码器；
+    /// `Decoder` 只给类型、不构造实例，调用的都是它的关联函数，解码结果是 `Decoder::Output`
     ///
     /// 失败时按阶段返回不同的错误：
     /// - 发出之前按 URL → 日志预览 → params → 认证头 → body 的顺序逐项检查，报第一个有问题的：
@@ -105,18 +108,21 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
     ///
     /// 响应日志：非 2xx 和解码失败打原文，排查问题要看对方到底回了什么；
     /// 解码成功后按 [`FromBytes::decoded_preview`](super::FromBytes::decoded_preview) 打，`Json<T>` 走 [`redact::to_redacted_json`]，可以打码
-    pub async fn send<Resp>(
+    pub async fn send<Decoder>(
         self,
-        sender: impl IntoSender<Params, Req, Resp>,
-    ) -> Result<HttpResponse<Resp>, HyErr> {
+        sender: impl IntoSender<Params, Req, Decoder>,
+    ) -> Result<HttpResponse<Decoder::Output>, HyErr>
+    where
+        Decoder: FromBody,
+    {
         sender.send_request(self).await
     }
 
     /// 发一次，不重试
-    pub(super) async fn send_once<Resp: FromBody>(
+    pub(super) async fn send_once<Decoder: FromBody>(
         self,
         client: &Client,
-    ) -> Result<HttpResponse<Resp>, HyErr> {
+    ) -> Result<HttpResponse<Decoder::Output>, HyErr> {
         let (ctx, resp) = match self.dispatch(client).await? {
             Ok(sent) => sent,
             Err(failure) => return Err(failure.err),
@@ -126,15 +132,15 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
             return Err(read_status_failure(&ctx, resp).await.err);
         }
         // 读 body 失败、解码失败的日志由 RespBody 打
-        let body = Resp::from_body(RespBody::new(resp, &ctx)).await?;
-        Ok(ctx.succeeded(status, headers, body, Resp::resp_preview))
+        let body = Decoder::from_body(RespBody::new(resp, &ctx)).await?;
+        Ok(ctx.succeeded(status, headers, body, Decoder::resp_preview))
     }
 
     /// 发一次，body 读完再解码；发出之后的失败带上重试判断要用的信息。重试时用
-    pub(super) async fn send_once_bytes<Resp: FromBytes>(
+    pub(super) async fn send_once_bytes<Decoder: FromBytes>(
         self,
         client: &Client,
-    ) -> Result<Result<HttpResponse<Resp>, SendFailure>, HyErr> {
+    ) -> Result<Result<HttpResponse<Decoder::Output>, SendFailure>, HyErr> {
         let (ctx, resp) = match self.dispatch(client).await? {
             Ok(sent) => sent,
             Err(failure) => return Ok(Err(failure)),
@@ -144,9 +150,9 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
             return Ok(Err(read_status_failure(&ctx, resp).await));
         }
         Ok(RespBody::new(resp, &ctx)
-            .decode::<Resp>()
+            .decode::<Decoder>()
             .await
-            .map(|body| ctx.succeeded(status, headers, body, Resp::decoded_preview)))
+            .map(|body| ctx.succeeded(status, headers, body, Decoder::decoded_preview)))
     }
 
     /// 发出之前逐项检查、构建请求，然后发出去拿到响应头。
@@ -288,8 +294,8 @@ pub enum FailStage {
 // 都是这个套路。命名跟本 crate 的 `IntoBody`、`IntoHeaders` 一致：`IntoSender` 表示「能当发送方的东西」。
 // 方法叫 `send_request` 而不是 `into_sender`：它不做类型转换，直接把请求发出去
 //
-// 用 trait 还有一个好处：每个实现可以有自己的约束。`&Client` 的实现只要求 `Resp: FromBody`；
-// `(&Client, RetryCtx)` 的实现额外要求 `Params: Clone`、`Req: Clone`、`Resp: FromBytes`。
+// 用 trait 还有一个好处：每个实现可以有自己的约束。`&Client` 的实现只要求 `Decoder: FromBody`；
+// `(&Client, RetryCtx)` 的实现额外要求 `Params: Clone`、`Req: Clone`、`Decoder: FromBytes`。
 // 所以不重试时流式 body / `BodyStream` 照常能用，开重试时才要求能重发，编译期检查。
 //
 // 考虑过的其他写法：
@@ -304,26 +310,28 @@ pub(super) mod sealed {
 impl sealed::Sealed for &Client {}
 
 /// [`RequestConfig::send`] 的第二个参数：`&Client`（发一次）或 `(&Client, RetryCtx<T>)`（带重试）。
-/// 不需要自己实现。两个实现分别调 `send_once` / `send_once_bytes`，整体流程见本文件开头
-pub trait IntoSender<Params, Req, Resp>: sealed::Sealed {
+/// `Decoder` 是解码器，见 [`FromBody`]。不需要自己实现。两个实现分别调 `send_once` / `send_once_bytes`，
+/// 整体流程见本文件开头
+pub trait IntoSender<Params, Req, Decoder: FromBody>: sealed::Sealed {
     #[doc(hidden)]
     fn send_request(
         self,
         cfg: RequestConfig<Params, Req>,
-    ) -> impl Future<Output = Result<HttpResponse<Resp>, HyErr>> + Send;
+    ) -> impl Future<Output = Result<HttpResponse<Decoder::Output>, HyErr>> + Send;
 }
 
-impl<Params, Req, Resp> IntoSender<Params, Req, Resp> for &Client
+impl<Params, Req, Decoder> IntoSender<Params, Req, Decoder> for &Client
 where
     Params: serde::Serialize + Send,
     Req: IntoBody + Send,
-    Resp: FromBody + Send,
+    Decoder: FromBody,
+    Decoder::Output: Send,
 {
     fn send_request(
         self,
         cfg: RequestConfig<Params, Req>,
-    ) -> impl Future<Output = Result<HttpResponse<Resp>, HyErr>> + Send {
-        cfg.send_once(self)
+    ) -> impl Future<Output = Result<HttpResponse<Decoder::Output>, HyErr>> + Send {
+        cfg.send_once::<Decoder>(self)
     }
 }
 
@@ -495,10 +503,10 @@ impl<'a> RespBody<'a> {
 
     /// 读完 body 并按 [`FromBytes`] 解码。解码失败时打失败日志，报
     /// [`DecodeFailed`](super::BaseHttpErr::DecodeFailed)，原始响应留在 [`FailStage::Decode`](super::FailStage::Decode) 里
-    pub(super) async fn decode<T: FromBytes>(self) -> Result<T, SendFailure> {
+    pub(super) async fn decode<Decoder: FromBytes>(self) -> Result<Decoder::Output, SendFailure> {
         let (status, headers, ctx) = (self.status(), self.headers().clone(), self.ctx);
         let bytes = self.read_all().await?;
-        match T::from_bytes(&headers, bytes.clone()) {
+        match Decoder::from_bytes(&headers, bytes.clone()) {
             Ok(body) => Ok(body),
             Err(e) => Err(ctx.decode_failed(status, headers, bytes, e)),
         }
