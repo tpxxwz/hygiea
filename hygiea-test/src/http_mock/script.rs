@@ -30,12 +30,32 @@
 //! | `request.form()` | body 按 `application/x-www-form-urlencoded` 解析，同名的取第一个 |
 //! | `request.body()` | 原始 body，blob |
 //! | `request.body_len` | body 字节数 |
+//!
+//! 时间是 `DateTime` 类型（底层 `time::UtcDateTime`），能放进 state，请求之间保持是对象：
+//!
+//! | 写法 | 返回 |
+//! |---|---|
+//! | `now_utc()` | 当前时刻 |
+//! | `parse_rfc3339(s)` | 解析 RFC 3339，带 offset 的换算成 UTC；解析不了脚本报错 |
+//! | `from_secs(n)` / `from_millis(n)` | Unix 秒 / 毫秒时间戳 |
+//! | `t.to_rfc3339()` / `t.to_string()` | UTC 的 RFC 3339 字符串，比如 `2026-01-01T00:00:00Z` |
+//! | `t.secs` / `t.millis` | Unix 秒 / 毫秒时间戳 |
+//! | `t.shift_secs(n)` / `t.shift_days(n)` | 平移后的新时刻，n 可以是负数；越界脚本报错 |
+//! | `a < b`、`a == b` 等比较 | 按时刻比较 |
+//!
+//! state 和 JSON 互转（加载 `data/state.json`、[`Mocked::state`](super::Mocked::state)、
+//! [`Mocked::update_state`](super::Mocked::update_state)）：`DateTime` 转成 `to_rfc3339()` 的字符串；
+//! 反过来 JSON 里的时间只是字符串，不会自动变成 `DateTime`，脚本里用 `parse_rfc3339` 转。
+//! 脚本返回的响应里有 `DateTime` 也一样转成字符串
 
 use std::sync::Arc;
 
 use httpmock::prelude::HttpMockRequest;
+use hygiea::HyErr;
+use hygiea::datetime::{HygieaDateTimeExt, now_utc};
 use rhai::{Blob, Dynamic, Engine, EvalAltResult, Scope};
 use serde_json::Value;
+use time::{Duration, UtcDateTime};
 
 use super::handler::Shared;
 use super::template::PathTemplate;
@@ -137,6 +157,49 @@ fn pairs_to_map<'a>(pairs: impl DoubleEndedIterator<Item = &'a (String, String)>
 }
 
 type ScriptResult = Result<Dynamic, Box<EvalAltResult>>;
+type DateTimeResult = Result<UtcDateTime, Box<EvalAltResult>>;
+
+fn date_err(e: HyErr) -> Box<EvalAltResult> {
+    e.to_string().into()
+}
+
+fn to_rfc3339(t: &mut UtcDateTime) -> Result<String, Box<EvalAltResult>> {
+    t.format_ext_rfc3339().map_err(date_err)
+}
+
+/// `Dynamic` 转 JSON：rhai 自带的 serde 不认自定义类型，`DateTime` 在这里转成 RFC 3339 字符串，其他的交给 rhai
+pub(crate) fn to_json(value: &Dynamic) -> Result<Value, String> {
+    let value = match value.flatten_clone().try_cast_result::<UtcDateTime>() {
+        Ok(t) => {
+            return t
+                .format_ext_rfc3339()
+                .map(Value::String)
+                .map_err(|e| e.to_string());
+        }
+        Err(value) => value,
+    };
+    let value = match value.try_cast_result::<rhai::Map>() {
+        Ok(map) => {
+            return map
+                .iter()
+                .map(|(k, v)| Ok((k.to_string(), to_json(v)?)))
+                .collect::<Result<serde_json::Map<_, _>, String>>()
+                .map(Value::Object);
+        }
+        Err(value) => value,
+    };
+    let value = match value.try_cast_result::<rhai::Array>() {
+        Ok(list) => {
+            return list
+                .iter()
+                .map(to_json)
+                .collect::<Result<_, _>>()
+                .map(Value::Array);
+        }
+        Err(value) => value,
+    };
+    rhai::serde::from_dynamic(&value).map_err(|e| e.to_string())
+}
 
 /// 从内存文件表读文本
 fn read(shared: &Shared, path: &str) -> Result<String, Box<EvalAltResult>> {
@@ -183,6 +246,7 @@ pub(crate) fn build_engine(shared: Arc<Shared>) -> Engine {
     engine.set_module_resolver(rhai::module_resolvers::FileModuleResolver::new());
     let (json_shared, text_shared, str_shared) = (shared.clone(), shared.clone(), shared.clone());
     let blob_shared = shared;
+    register_datetime(&mut engine);
     engine
         .register_type_with_name::<Req>("Request")
         .register_get("method", |r: &mut Req| r.method.clone())
@@ -293,4 +357,49 @@ pub(crate) fn build_engine(shared: Arc<Shared>) -> Engine {
             },
         );
     engine
+}
+
+/// `DateTime` 类型和它的方法，见文件开头
+fn register_datetime(engine: &mut Engine) {
+    engine
+        .register_type_with_name::<UtcDateTime>("DateTime")
+        .register_fn("now_utc", now_utc)
+        .register_fn("parse_rfc3339", |s: &str| -> DateTimeResult {
+            UtcDateTime::parse_ext_rfc3339(s).map_err(date_err)
+        })
+        .register_fn("from_secs", |n: i64| -> DateTimeResult {
+            UtcDateTime::from_secs(n).map_err(date_err)
+        })
+        .register_fn("from_millis", |n: i64| -> DateTimeResult {
+            UtcDateTime::from_millis(n).map_err(date_err)
+        })
+        .register_fn("to_rfc3339", to_rfc3339)
+        .register_fn("to_string", to_rfc3339)
+        .register_fn("to_debug", to_rfc3339)
+        .register_get("secs", |t: &mut UtcDateTime| t.unix_timestamp())
+        .register_get("millis", |t: &mut UtcDateTime| {
+            (t.unix_timestamp_nanos() / 1_000_000) as i64
+        })
+        .register_fn(
+            "shift_secs",
+            |t: &mut UtcDateTime, n: i64| -> DateTimeResult {
+                t.shift(Duration::seconds(n)).map_err(date_err)
+            },
+        )
+        .register_fn(
+            "shift_days",
+            |t: &mut UtcDateTime, n: i64| -> DateTimeResult {
+                // Duration::days 溢出会 panic，先自己乘
+                let secs = n
+                    .checked_mul(86_400)
+                    .ok_or_else(|| format!("shift_days: {n} days out of range"))?;
+                t.shift(Duration::seconds(secs)).map_err(date_err)
+            },
+        )
+        .register_fn("==", |a: UtcDateTime, b: UtcDateTime| a == b)
+        .register_fn("!=", |a: UtcDateTime, b: UtcDateTime| a != b)
+        .register_fn("<", |a: UtcDateTime, b: UtcDateTime| a < b)
+        .register_fn("<=", |a: UtcDateTime, b: UtcDateTime| a <= b)
+        .register_fn(">", |a: UtcDateTime, b: UtcDateTime| a > b)
+        .register_fn(">=", |a: UtcDateTime, b: UtcDateTime| a >= b);
 }

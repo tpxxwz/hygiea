@@ -453,6 +453,69 @@ async fn code_only_service() {
     mock.assert_valid();
 }
 
+/// 脚本里的 DateTime：放进 state 请求之间还是对象，能比较；转 JSON 是 UTC 的 RFC 3339
+#[tokio::test]
+async fn datetime_in_state() {
+    let mock = Cassette::new()
+        .state(json!({ "expire_at": "2026-01-01T09:00:00+09:00" }))
+        .route(
+            "POST",
+            "/renew",
+            Handler::script_str(
+                r#"state.expire_at = parse_rfc3339(state.expire_at).shift_days(5); #{ json: #{ at: state.expire_at } }"#,
+            ),
+        )
+        .route(
+            "GET",
+            "/check",
+            Handler::script_str(
+                r#"let e = state.expire_at;
+                #{ json: #{
+                    after: e > from_secs(e.secs - 1) && e >= e && e == parse_rfc3339(e.to_rfc3339()),
+                    expired: e < now_utc(),
+                    millis: e.millis,
+                    text: `${e}`,
+                } }"#,
+            ),
+        )
+        .route("GET", "/bad", Handler::script_str(r#"parse_rfc3339("x")"#))
+        .start()
+        .await
+        .unwrap();
+    let client = Client::new();
+
+    let renew: Value = client
+        .post(mock.url("/renew"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(renew["at"], "2026-01-06T00:00:00Z");
+    let check: Value = client
+        .get(mock.url("/check"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(check["after"], true);
+    assert_eq!(check["expired"], true);
+    assert_eq!(check["millis"], 1_767_657_600_000_i64);
+    assert_eq!(check["text"], "2026-01-06T00:00:00Z");
+    assert_eq!(
+        mock.state::<Value>().unwrap()["expire_at"],
+        "2026-01-06T00:00:00Z"
+    );
+
+    let bad = client.get(mock.url("/bad")).send().await.unwrap();
+    assert_eq!(bad.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(mock.take_problems().len(), 1);
+    mock.assert_valid();
+}
+
 /// 目录 + 代码补充：state 整个替换、文件覆盖、多一条路由，和目录里的路由一起检查冲突
 #[tokio::test]
 async fn dir_with_code_overrides() {

@@ -14,7 +14,7 @@ use parking_lot::Mutex;
 use rhai::{AST, Dynamic, Engine, Scope};
 
 use super::error::HttpMockRuntimeErr;
-use super::script::Req;
+use super::script::{Req, to_json};
 use super::spec::ResponseSpec;
 use super::template::PathTemplate;
 
@@ -182,9 +182,11 @@ impl RouteHandler {
         if result.is_unit() {
             return Ok(None);
         }
-        rhai::serde::from_dynamic(&result).map(Some).map_err(|e| {
-            err!(HttpMockRuntimeErr::InvalidResponse, { "route": route, "cause": format!("handler #{step} returned {e}") })
-        })
+        let invalid = |e: String| err!(HttpMockRuntimeErr::InvalidResponse, { "route": route, "cause": format!("handler #{step} returned {e}") });
+        let result = to_json(&result).map_err(invalid)?;
+        serde_json::from_value(result)
+            .map(Some)
+            .map_err(|e| invalid(e.to_string()))
     }
 
     /// 组装响应：`body` / `body_file` / `json` 三选一，文本里的 `{{base}}` 换成 mock server 的地址

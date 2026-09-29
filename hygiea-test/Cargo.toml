@@ -33,6 +33,7 @@ http-mock = [
     "dep:serde_json",
     "dep:parking_lot",
     "dep:http",
+    "dep:time",
 ]
 # 测试用的 reqwest client
 http-client = ["hygiea/http-client-reqwest"]
@@ -51,6 +52,8 @@ serde = { workspace = true, features = ["derive"], optional = true }
 serde_json = { workspace = true, optional = true }
 parking_lot = { workspace = true, optional = true }
 http = { workspace = true, optional = true }
+# 脚本里的 DateTime 类型
+time = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

@@ -77,6 +77,7 @@
 //!
 //! 一个 server 一个全局 state，所有脚本共用，改了会保留；只在内存里，测试之间互不影响。
 //! 初始值只有 `data/state.json` 一个来源，测试中途用 [`Mocked::update_state`] 改。
+//! 脚本可以往 state 里放 `DateTime`，转 JSON 时是 UTC 的 RFC 3339 字符串，见 `script.rs`。
 //!
 //! # cassette 格式
 //!
@@ -643,16 +644,17 @@ impl Mocked {
 
     /// 当前状态转成 `T`，断言用
     pub fn state<T: DeserializeOwned>(&self) -> Result<T, HyErr> {
-        let state = self.shared.state.lock();
-        rhai::serde::from_dynamic(&state)
+        let state = script::to_json(&self.shared.state.lock())
+            .map_err(|e| err!(HttpMockErr::StateConvertFailed).with_source(e))?;
+        serde_json::from_value(state)
             .map_err(|e| err!(HttpMockErr::StateConvertFailed).with_source(e.to_string()))
     }
 
     /// 在测试里改状态，比如清掉会话模拟过期：拿到当前状态（JSON），改完写回去
     pub fn update_state(&self, f: impl FnOnce(&mut Value)) -> Result<(), HyErr> {
         let mut state = self.shared.state.lock();
-        let mut value: Value = rhai::serde::from_dynamic(&state)
-            .map_err(|e| err!(HttpMockErr::StateConvertFailed).with_source(e.to_string()))?;
+        let mut value = script::to_json(&state)
+            .map_err(|e| err!(HttpMockErr::StateConvertFailed).with_source(e))?;
         f(&mut value);
         *state = rhai::serde::to_dynamic(value)
             .map_err(|e| err!(HttpMockErr::StateConvertFailed).with_source(e.to_string()))?;
