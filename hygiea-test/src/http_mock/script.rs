@@ -223,6 +223,8 @@ fn write(shared: &Shared, path: &str, bytes: Vec<u8>) -> Result<(), Box<EvalAltR
 /// `import` 按发起 import 的脚本文件所在目录解析
 /// 一次脚本最多执行多少步：正常脚本远用不完，写出死循环时中断报错（`ScriptFailed`），不让测试卡住
 const MAX_OPERATIONS: u64 = 1_000_000;
+/// 脚本和脚本函数里表达式最多嵌套几层
+const MAX_EXPR_DEPTH: usize = 64;
 
 /// handler 脚本里能用的外部变量
 pub(crate) const HANDLER_VARS: [&str; 4] = ["request", "state", "calls", "base"];
@@ -241,6 +243,9 @@ pub(crate) fn compile_scope(vars: &[&str]) -> Scope<'static> {
 pub(crate) fn build_engine(shared: Arc<Shared>) -> Engine {
     let mut engine = Engine::new();
     engine.set_max_operations(MAX_OPERATIONS);
+    // 表达式嵌套深度：rhai 在 debug 构建（测试就是）下默认只有 32，函数体里只有 16，
+    // 函数里写两层 for 加个 if 就会编译失败（Expression exceeds maximum complexity），统一放宽到 64
+    engine.set_max_expr_depths(MAX_EXPR_DEPTH, MAX_EXPR_DEPTH);
     // 严格变量：用了没定义的变量（拼错 state、request……）编译时就报错，不用等请求跑到那一行
     engine.set_strict_variables(true);
     engine.set_module_resolver(rhai::module_resolvers::FileModuleResolver::new());

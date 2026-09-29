@@ -56,6 +56,9 @@
 //!     └── static/     启动时读进内存文件表
 //! ```
 //!
+//! 数据目录默认叫 `data`，[`Cassette::data_suffix`] 可以换成同级的 `data_<后缀>`，比如同一套路由和脚本
+//! 配另一份录下来的数据 `data_record`。下面说的 `data/` 都指当前用的数据目录。
+//!
 //! 脚本里 `import` 的路径相对脚本文件所在的目录。
 //!
 //! # 路由
@@ -157,8 +160,10 @@ macro_rules! cassette_root {
     };
 }
 
-const STATE_FILE: &str = "data/state.json";
-const STATIC_DIR: &str = "data/static";
+/// 数据目录的默认名字，[`Cassette::data_suffix`] 换成 `data_<后缀>`
+const DATA_DIR: &str = "data";
+const STATE_FILE: &str = "state.json";
+const STATIC_DIR: &str = "static";
 const RHAI_DIR: &str = "rhai";
 /// 代码定义的路由、state、文件在报错里的来源
 const CODE: &str = "(code)";
@@ -168,6 +173,8 @@ const CODE: &str = "(code)";
 #[derive(Default)]
 pub struct Cassette {
     dir: Option<String>,
+    /// 服务目录下的数据目录名，`None` 是 `data`
+    data_dir: Option<String>,
     state: Option<Value>,
     files: Vec<(String, Vec<u8>)>,
     routes: Vec<RouteDef>,
@@ -185,6 +192,12 @@ impl Cassette {
             dir: Some(format!("{root}/{dir}")),
             ..Self::default()
         }
+    }
+
+    /// 数据目录换成服务目录下的 `data_<suffix>`（比如 `data_record`），state.json 和 static/ 都从那里读
+    pub fn data_suffix(mut self, suffix: &str) -> Self {
+        self.data_dir = Some(format!("{DATA_DIR}_{suffix}"));
+        self
     }
 
     /// state 的初始值，整个替换 `data/state.json`；顶层必须是对象，不是的话 `start()` 报错
@@ -223,7 +236,7 @@ impl Cassette {
     pub async fn start(self) -> Result<Mocked, HyErr> {
         let dir = self.dir;
         let (mut state, mut files, cassettes) = match &dir {
-            Some(dir) => load_dir(dir)?,
+            Some(dir) => load_dir(dir, self.data_dir.as_deref().unwrap_or(DATA_DIR))?,
             None => (
                 Value::Object(Default::default()),
                 HashMap::new(),
@@ -288,18 +301,18 @@ impl Cassette {
 
 type Loaded = (Value, HashMap<String, Vec<u8>>, Vec<(String, CassetteFile)>);
 
-/// 服务目录：state、文件表、所有 cassette
-fn load_dir(dir: &str) -> Result<Loaded, HyErr> {
+/// 服务目录：state、文件表（在数据目录 `data` 下）、所有 cassette
+fn load_dir(dir: &str, data_dir: &str) -> Result<Loaded, HyErr> {
     if !Path::new(dir).is_dir() {
         return Err(err!(HttpMockErr::CassetteNotFound, dir));
     }
-    let state_file = format!("{dir}/{STATE_FILE}");
+    let state_file = format!("{dir}/{data_dir}/{STATE_FILE}");
     let state = if Path::new(&state_file).is_file() {
         load_state(&state_file)?
     } else {
         Value::Object(Default::default())
     };
-    let static_dir = format!("{dir}/{STATIC_DIR}");
+    let static_dir = format!("{dir}/{data_dir}/{STATIC_DIR}");
     let files = if Path::new(&static_dir).is_dir() {
         load_files(&static_dir)?
     } else {
@@ -369,7 +382,7 @@ pub(crate) fn file_key(path: &str) -> Result<String, String> {
             "" | "." => {}
             ".." => {
                 if parts.pop().is_none() {
-                    return Err(format!("path escapes {STATIC_DIR}: {path}"));
+                    return Err(format!("path escapes {DATA_DIR}/{STATIC_DIR}: {path}"));
                 }
             }
             part => parts.push(part),

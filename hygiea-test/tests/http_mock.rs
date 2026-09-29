@@ -516,6 +516,35 @@ async fn datetime_in_state() {
     mock.assert_valid();
 }
 
+/// data_suffix：同一套路由和脚本，state 和 static 换成 data_alt 下的
+#[tokio::test]
+async fn data_suffix_uses_other_data_dir() {
+    let mock = Cassette::load(cassette_root!(), "shop")
+        .data_suffix("alt")
+        .route(
+            "GET",
+            "/probe",
+            Handler::script_str(
+                r#"#{ json: #{ marker: state.marker, file: read_text("marker.txt") } }"#,
+            ),
+        )
+        .start()
+        .await
+        .unwrap();
+    let probe: Value = Client::new()
+        .get(mock.url("/probe"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(probe, json!({ "marker": "alt", "file": "alt file" }));
+    // data/ 下的 state 没读进来
+    assert!(mock.state::<Value>().unwrap().get("users").is_none());
+    mock.assert_valid();
+}
+
 /// 目录 + 代码补充：state 整个替换、文件覆盖、多一条路由，和目录里的路由一起检查冲突
 #[tokio::test]
 async fn dir_with_code_overrides() {
