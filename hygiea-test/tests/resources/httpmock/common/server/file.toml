@@ -1,6 +1,0 @@
-# 下载文件 GET /api/files/{name}：文本响应体放在 bodies/，里面的 {{base}} 换成 mock server 的地址
-
-[[interactions]]
-name = "下载文件"
-request = { method = "GET", path = "/api/files/{name}" }
-response = { headers = { content-type = "text/plain; charset=utf-8" }, body_file = "bodies/hello.txt" }

@@ -17,30 +17,30 @@ use super::{Method, StatusCode};
 /// 原始错误挂在 source 上，要判断超时、连接失败之类决定重试时直接 downcast：
 /// `err.source().and_then(|e| e.downcast_ref::<reqwest::Error>())`
 #[derive(hy_err)]
-#[err_code_module_prefix = "01"]
+#[err_code_internal_module_prefix = "100"]
 pub enum BaseHttpErr {
     // ---- 建 client ----
     /// `ReqwestConfig::build` 失败，比如 TLS 后端初始化失败、代理配置不合法；原始错误挂在 source 上
-    #[error(err_code = "001", err_tpl = "Http client build failed")]
+    #[error(err_code = "01", err_tpl = "Http client build failed")]
     ClientBuildFailed,
 
     // ---- 发出之前 ----
     /// URL 不能用：解析不了，或者不是带 host 的 http / https 地址
-    #[error(err_code = "101", err_tpl = "Invalid url: {{ url }}")]
+    #[error(err_code = "11", err_tpl = "Invalid url: {{ url }}")]
     InvalidUrl,
     /// query params 编码不了，比如嵌套值（urlencoded 不支持）
     #[error(
-        err_code = "102",
+        err_code = "12",
         err_tpl = "Invalid query params: {{ method }} {{ url }}"
     )]
     InvalidParams,
     /// 请求头的名字或值不合法（比如认证值里有换行），或者用了保留字段
-    #[error(err_code = "103", err_tpl = "Invalid header: {{ cause }}")]
+    #[error(err_code = "13", err_tpl = "Invalid header: {{ cause }}")]
     InvalidHeader,
     /// 前面几项都验证通过了，reqwest 构建请求时仍然失败。能确定的只有「没构建出来」，具体原因看 source；
     /// 最常见的是 `Form` body 没法 urlencoded 编码（比如嵌套值），`Json` body 在日志预览那一步就已经验证过了
     #[error(
-        err_code = "104",
+        err_code = "14",
         err_tpl = "Http request build failed: {{ method }} {{ url }}"
     )]
     RequestBuildFailed,
@@ -48,27 +48,24 @@ pub enum BaseHttpErr {
     // ---- 发出之后 ----
     /// 请求发出去了但失败了：超时、连不上、TLS 握手失败、读 body 中断。读 body 中断时 `status` 有值
     #[error(
-        err_code = "201",
+        err_code = "21",
         err_tpl = "Http request failed: {{ method }} {{ url }}"
     )]
     RequestFailed,
     /// 收到了非 2xx 响应；`body` 在 err_args 里，打日志可见，不渲染进对外消息
-    #[error(
-        err_code = "202",
-        err_tpl = "Http {{ status }}: {{ method }} {{ url }}"
-    )]
+    #[error(err_code = "22", err_tpl = "Http {{ status }}: {{ method }} {{ url }}")]
     NonSuccessStatus,
     /// 2xx，body 也读完了，但解码成 `Resp` 失败（[`FromBytes::from_bytes`](super::FromBytes::from_bytes)
     /// 返回了 `Err`）。原来的错误挂在 source 上；`body` 在 err_args 里，不渲染进对外消息
     #[error(
-        err_code = "204",
+        err_code = "24",
         err_tpl = "Http response decode failed: {{ method }} {{ url }}"
     )]
     DecodeFailed,
 
     /// 把流式 body 写进调用方给的 writer 时失败（磁盘满、没权限……），本地问题，不是请求失败；
     /// 原始的 io 错误挂在 source 上
-    #[error(err_code = "203", err_tpl = "Write response body failed")]
+    #[error(err_code = "23", err_tpl = "Write response body failed")]
     WriteFailed,
 }
 

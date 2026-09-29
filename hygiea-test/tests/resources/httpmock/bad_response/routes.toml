@@ -1,0 +1,6 @@
+# 固定响应的 body / body_file / json 只能写一个：启动就报错
+
+[[interactions]]
+name = "两个 body"
+request = { method = "GET", path = "/x" }
+handler = { response = { body = "a", json = { b = 1 } } }

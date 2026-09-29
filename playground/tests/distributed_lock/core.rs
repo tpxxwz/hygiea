@@ -9,13 +9,13 @@ use hygiea::{HyErr, hy_err};
 /// 分布式锁的错误。和 `hygiea::BaseErr` 共用项目前缀 999（playground 的 Cargo.toml 里配成 999，保持原来的错误码），模块前缀是 04；
 /// 后端的原始错误挂在 source 上
 #[derive(hy_err)]
-#[err_code_module_prefix = "04"]
+#[err_code_internal_module_prefix = "997"]
 pub enum BaseLockErr {
     /// 加锁时后端出错（连不上、命令失败），不是"锁被别人占着"：占着的情况 `try_lock` 返回 `Ok(None)`
-    #[error(err_code = "001", err_tpl = "Acquire lock failed: {{ key }}")]
+    #[error(err_code = "01", err_tpl = "Acquire lock failed: {{ key }}")]
     AcquireFailed,
     /// 释放锁时后端出错。锁最终还是会因为 TTL 过期或连接断开而释放
-    #[error(err_code = "002", err_tpl = "Release lock failed: {{ key }}")]
+    #[error(err_code = "02", err_tpl = "Release lock failed: {{ key }}")]
     ReleaseFailed,
 }
 

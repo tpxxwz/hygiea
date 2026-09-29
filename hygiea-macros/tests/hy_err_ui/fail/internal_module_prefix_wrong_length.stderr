@@ -1,0 +1,5 @@
+error: `err_code_internal_module_prefix` must be exactly 3 digits, e.g. "001"
+ --> tests/hy_err_ui/fail/internal_module_prefix_wrong_length.rs:5:37
+  |
+5 | #[err_code_internal_module_prefix = "10"]
+  |                                     ^^^^

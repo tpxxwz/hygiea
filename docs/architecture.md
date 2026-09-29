@@ -86,10 +86,10 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 | `handler.rs` | 一条 interaction 的响应：固定序列或 Rhai 脚本，组装响应；脚本出错等问题记进 problems |
 | `script.rs` | Rhai 引擎：`request` 对象和 `read_json` / `read_text` |
 | `template.rs` | cassette `path` 里的路径模板 `/a/{id}` |
-| `error.rs` | `HttpMockErr`，模块前缀 10 |
+| `error.rs` | `HttpMockErr`（内部模块前缀 800）、`HttpMockRuntimeErr`（801） |
 
 测试在 `tests/http_mock.rs`，示例资源在 `tests/resources/httpmock/common/`（server 一个小商店服务，cases 单接口用例）。
-概念和流程见 [http-mock.md](http-mock.md)，待办见 [todo/http-mock.md](todo/http-mock.md)。
+概念、用法、定位见 `hygiea-test/src/http_mock/mod.rs` 的模块文档（`cargo doc -p hygiea-test --features http-mock`）。
 
 ### test-support
 

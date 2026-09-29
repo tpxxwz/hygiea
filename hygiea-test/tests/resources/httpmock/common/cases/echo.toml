@@ -1,6 +1,0 @@
-# 演示脚本里取请求数据的钩子：path 占位符、query、header、cookie、body（json / form / text）原样返回
-
-[[interactions]]
-name = "echo"
-request = { method = "POST", path = "/echo/{id}" }
-script = "echo.rhai"

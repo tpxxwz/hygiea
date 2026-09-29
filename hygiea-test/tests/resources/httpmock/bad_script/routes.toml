@@ -1,0 +1,6 @@
+# 脚本里用了没定义的变量（state 拼成 stat）：严格变量模式下编译就报错，启动失败
+
+[[interactions]]
+name = "变量拼错"
+request = { method = "GET", path = "/x" }
+handler = { script = "typo.rhai" }

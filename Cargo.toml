@@ -96,6 +96,7 @@ tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"]
 tokio-util = { version = "0.7.19", features = ["io"] }
 futures-util = "0.3.34"
 regex = "1.13.1"
+regex-automata = "0.4.18"
 
 # gRPC
 tonic = "0.14.6"

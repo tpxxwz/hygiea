@@ -1,0 +1,121 @@
+# 示例商店的全部路由：登录、商品列表 / 详情、下载 / 上传文件，外加演示用的接口（回显请求、慢响应、灰度、脚本出错）。
+# 逻辑在 rhai/ 下同名的脚本里，数据在 data/state.json，文件在 data/static/
+
+# ============================================================
+# 登录 POST /api/login {"name":..,"password":..} → {"token":..}，会话写进 state.sessions
+
+[[interactions]]
+name = "登录"
+request = { method = "POST", path = "/api/login" }
+handler = { script = "login.rhai" }
+
+# ============================================================
+# 商品列表 GET /api/items?q=&offset=&limit= → {"items":[..],"total":n}，q 按名字包含过滤
+
+[[interactions]]
+name = "商品列表"
+request = { method = "GET", path = "/api/items" }
+handler = { script = "items.rhai" }
+
+# ============================================================
+# 推荐商品 GET /api/items/featured：字面量路径，和 /api/items/{id} 都能匹配时它优先，和加载顺序无关
+
+[[interactions]]
+name = "推荐商品"
+request = { method = "GET", path = "/api/items/featured" }
+handler = { response = { json = { items = [{ id = "i3", name = "cherry", price = 9 }] } } }
+
+# ============================================================
+# 商品详情 GET /api/items/{id} → 商品，没有返回 404
+
+[[interactions]]
+name = "商品详情"
+request = { method = "GET", path = "/api/items/{id}" }
+handler = { script = "item.rhai" }
+
+# ============================================================
+# 下载文件 GET /api/files/{name}：响应体在 data/static/，里面的 {{base}} 换成 mock server 的地址
+
+[[interactions]]
+name = "下载文件"
+request = { method = "GET", path = "/api/files/{name}" }
+handler = { response = { headers = { content-type = "text/plain; charset=utf-8" }, body_file = "hello.txt" } }
+
+# ============================================================
+# 上传和下载：上传的文件用 write_file 存进内存文件表，下载用 body_file 从表里取
+
+[[interactions]]
+name = "上传"
+request = { method = "PUT", path = "/files/{name}" }
+handler = { script = "upload.rhai" }
+
+[[interactions]]
+name = "下载"
+request = { method = "GET", path = "/files/{name}" }
+handler = { script = "download.rhai" }
+
+# ============================================================
+# 演示脚本里取请求数据的钩子：path 占位符、query、header、cookie、body（json / form / text）原样返回
+
+[[interactions]]
+name = "echo"
+request = { method = "POST", path = "/echo/{id}" }
+handler = { script = "echo.rhai" }
+
+# ============================================================
+# 不稳定的接口：慢响应、灰度
+
+# 慢响应：测 client 的超时
+[[interactions]]
+name = "慢"
+request = { method = "GET", path = "/api/slow" }
+handler = { delay_ms = 300, response = { json = { ok = true } } }
+
+# 灰度：只有带 x-beta 头的请求接得住，其他请求没有路由
+[[interactions]]
+name = "灰度"
+request = { method = "GET", path = "/api/beta", match_script = "is_beta.rhai" }
+handler = { response = { json = { items = [], next_cursor = "c1" } } }
+
+# ============================================================
+# 脚本运行时出错：请求返回 500，问题记进 mock.problems()
+
+[[interactions]]
+name = "脚本出错"
+request = { method = "GET", path = "/broken" }
+handler = { script = "broken.rhai" }
+
+# ============================================================
+# handler 链：先校验 x-token（不对返回 401，对了返回 () 交给下一个），再等 100ms 返回固定内容
+
+[[interactions]]
+name = "管理后台"
+request = { method = "GET", path = "/api/admin" }
+handlers = [
+    { script = "require_admin.rhai" },
+    { delay_ms = 100, response = { json = { ok = true } } },
+]
+
+# ============================================================
+# 上游不稳定：同样的请求前 2 次 503，第 3 次正常，脚本里用 calls；第 4 次起没定义，报错
+
+[[interactions]]
+name = "不稳定"
+request = { method = "GET", path = "/api/unstable" }
+handler = { script = "unstable.rhai" }
+
+# ============================================================
+# 整条链都没给出响应：记一条问题，返回 500
+
+[[interactions]]
+name = "没有响应"
+request = { method = "GET", path = "/api/nothing" }
+handlers = [{ script = "pass.rhai" }]
+
+# ============================================================
+# 死循环的脚本：超过执行步数上限中断，记一条问题，返回 500，测试不会卡住
+
+[[interactions]]
+name = "死循环"
+request = { method = "GET", path = "/api/forever" }
+handler = { script = "forever.rhai" }

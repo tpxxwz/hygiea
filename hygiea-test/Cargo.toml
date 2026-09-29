@@ -26,6 +26,7 @@ http-mock = [
     "dep:rhai",
     "dep:toml",
     "dep:regex",
+    "dep:regex-automata",
     "dep:encoding_rs",
     "dep:form_urlencoded",
     "dep:serde",
@@ -42,6 +43,8 @@ httpmock = { workspace = true, optional = true }
 rhai = { workspace = true, optional = true }
 toml = { workspace = true, optional = true }
 regex = { workspace = true, optional = true }
+# 路由冲突检查：两个路径正则转成 DFA 求交集
+regex-automata = { workspace = true, optional = true }
 encoding_rs = { workspace = true, optional = true }
 form_urlencoded = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"], optional = true }

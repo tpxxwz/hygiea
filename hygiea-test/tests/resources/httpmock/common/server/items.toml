@@ -1,6 +1,0 @@
-# 商品列表 GET /api/items?q=&offset=&limit= → {"items":[..],"total":n}，q 按名字包含过滤
-
-[[interactions]]
-name = "商品列表"
-request = { method = "GET", path = "/api/items" }
-script = "items.rhai"

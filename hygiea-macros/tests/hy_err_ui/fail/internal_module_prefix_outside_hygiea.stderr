@@ -1,0 +1,5 @@
+error: `err_code_internal_module_prefix` is only for hygiea's own crates (project prefix 999); use `err_code_module_prefix` (2 digits)
+ --> tests/hy_err_ui/fail/internal_module_prefix_outside_hygiea.rs:5:1
+  |
+5 | #[err_code_internal_module_prefix = "100"]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -1,0 +1,5 @@
+error: use only one of `err_code_module_prefix` and `err_code_internal_module_prefix`
+ --> tests/hy_err_ui/fail/both_module_prefixes.rs:6:1
+  |
+6 | #[err_code_internal_module_prefix = "100"]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

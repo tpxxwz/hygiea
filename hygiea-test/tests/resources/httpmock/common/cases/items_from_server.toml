@@ -1,6 +1,0 @@
-# 商品详情的单接口用例：数据在 data/items_from_server.json（server 的 db 加一个已登录的 tk-pre）
-
-[[interactions]]
-name = "商品详情"
-request = { method = "GET", path = "/api/items/{id}" }
-script = "../server/item.rhai"

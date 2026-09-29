@@ -33,29 +33,29 @@ use crate::{HyErr, ResultExt, err, hy_err};
 /// 日志初始化的错误，按 `init` 里出错的先后排。和 [`BaseErr`](crate::BaseErr) 共用项目前缀 999，
 /// 模块前缀是 03；原始错误挂在 source 上
 #[derive(hy_err)]
-#[err_code_module_prefix = "03"]
+#[err_code_internal_module_prefix = "002"]
 pub enum BaseLogErr {
     /// 建不了日志文件，比如目录没有写权限
     #[error(
-        err_code = "002",
+        err_code = "02",
         err_tpl = "Create log file appender failed: {{ dir }}"
     )]
     AppenderFailed,
     /// 装全局 logger / subscriber 失败，一般是同一个进程里已经装过
-    #[error(err_code = "003", err_tpl = "Install global logger failed")]
+    #[error(err_code = "03", err_tpl = "Install global logger failed")]
     InstallFailed,
     /// 同一目录下两个 layer 的文件名重叠（一个的「前缀 + 后缀」能匹配到另一个的文件），清理旧文件时会互删
     #[error(
-        err_code = "004",
+        err_code = "04",
         err_tpl = "Log layers {{ a }} and {{ b }} have overlapping file names in the same dir"
     )]
     FileNameOverlap,
     /// filter 不符合 tracing 的语法，比如级别写错（`app_config=infoo`）
-    #[error(err_code = "005", err_tpl = "Invalid log filter: {{ filter }}")]
+    #[error(err_code = "05", err_tpl = "Invalid log filter: {{ filter }}")]
     InvalidFilter,
     /// 控制台关了（`console.disable = true`），又没有启用的文件 layer，日志没有任何输出
     #[error(
-        err_code = "006",
+        err_code = "06",
         err_tpl = "No log output: console is disabled and no file layer is enabled"
     )]
     NoOutput,

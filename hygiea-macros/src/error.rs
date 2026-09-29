@@ -23,7 +23,11 @@ where
 // ========== Traits ==========
 
 // derive 宏的流程：
-// 1. 从 Cargo.toml 读项目前缀，enum 上读可选的 #[err_code_module_prefix = "..."]。
+// 1. 从 Cargo.toml 读项目前缀，enum 上读可选的模块前缀：
+//    - #[err_code_module_prefix = ".."]：2 位，变体码 3 位，给使用 hygiea 的项目用（模块少、单个模块错误多）
+//    - #[err_code_internal_module_prefix = "..."]：3 位，变体码 2 位，只给 hygiea 自己的 crate 用
+//      （项目前缀 999，模块多、单个模块错误少）。两种布局在同一个项目前缀下会撞码（"10"+"001" 和
+//      "100"+"01" 都是 10001），所以 999 下只能用 3 位的，其他项目只能用 2 位的
 // 2. 每个 variant 上读 #[error(...)]。
 // 3. 校验错误码。
 // 4. 生成 impl 和注册信息。
@@ -129,6 +133,7 @@ impl<V: VariantBuilder> ErrContext<V> {
 /// 例如：
 /// - 项目前缀 `001`、没有模块前缀：`err_code = "00001"`（5 位） → `00100001`
 /// - 项目前缀 `001`、模块前缀 `02`：`err_code = "007"`（3 位） → `00102007`
+/// - 项目前缀 `999`、内部模块前缀 `100`：`err_code = "07"`（2 位） → `99910007`
 fn validate_err_code(
     raw_code: Option<String>,
     code_head: &str,
@@ -139,10 +144,14 @@ fn validate_err_code(
     match raw_code {
         Some(code) => {
             if !is_numeric_with_len(&code, code_len) {
-                let hint = if code_len == 5 {
-                    "err_code must be exactly 5 digits"
-                } else {
-                    "err_code must be exactly 3 digits when the enum has `err_code_module_prefix`"
+                let hint = match code_len {
+                    5 => "err_code must be exactly 5 digits",
+                    3 => {
+                        "err_code must be exactly 3 digits when the enum has `err_code_module_prefix`"
+                    }
+                    _ => {
+                        "err_code must be exactly 2 digits when the enum has `err_code_internal_module_prefix`"
+                    }
                 };
                 return Err(expand_err(
                     err_code_span.unwrap_or_else(|| var_name.span()),
@@ -422,6 +431,9 @@ fn build_template_registration(
     }
 }
 
+/// hygiea 自己的项目前缀，只有它能用 `err_code_internal_module_prefix`
+const INTERNAL_PROJECT_PREFIX: &str = "999";
+
 fn expand<V, F>(
     ast: syn::DeriveInput,
     derive_name: &str,
@@ -467,7 +479,8 @@ where
 
     // 解析 enum 上可选的 #[err_code_module_prefix = "..."]（模块级）。
     // 同时禁止把 #[error(...)] 写在 enum 上，因为 error 只允许写在 variant 上。
-    let mut module_prefix: Option<String> = None;
+    let mut module_prefix: Option<(String, &syn::Attribute)> = None;
+    let mut internal_prefix: Option<(String, &syn::Attribute)> = None;
     let mut explicit_crate: Option<syn::Path> = None;
     for attr in &ast.attrs {
         if attr.path().is_ident("error") {
@@ -488,10 +501,22 @@ where
         }
         if attr.path().is_ident("err_code_module_prefix") {
             match parse_digits_attr(attr, "err_code_module_prefix", 2) {
-                Ok(prefix) => module_prefix = Some(prefix),
+                Ok(prefix) => module_prefix = Some((prefix, attr)),
                 Err(e) => return e,
             }
         }
+        if attr.path().is_ident("err_code_internal_module_prefix") {
+            match parse_digits_attr(attr, "err_code_internal_module_prefix", 3) {
+                Ok(prefix) => internal_prefix = Some((prefix, attr)),
+                Err(e) => return e,
+            }
+        }
+    }
+    if let (Some(_), Some((_, attr))) = (&module_prefix, &internal_prefix) {
+        return expand_err_span(
+            attr,
+            "use only one of `err_code_module_prefix` and `err_code_internal_module_prefix`",
+        );
     }
 
     // 项目前缀只从 Cargo.toml 读：crate 的 [package.metadata.hygiea]，再往上找 workspace 的
@@ -503,8 +528,26 @@ where
     };
     ctx.krate = crate::krate::resolve(explicit_crate);
 
-    // 总位数固定 8：项目前缀 3 位 +（模块前缀 2 位）+ 变体错误码
-    let code_head = format!("{project_prefix}{}", module_prefix.as_deref().unwrap_or(""));
+    // 999 是 hygiea 自己的项目前缀：只能用 3 位的内部模块前缀；其他项目只能用 2 位的
+    match (&module_prefix, &internal_prefix) {
+        (Some((_, attr)), None) if project_prefix == INTERNAL_PROJECT_PREFIX => {
+            return expand_err_span(
+                attr,
+                "project prefix 999 is hygiea's own; use `err_code_internal_module_prefix` (3 digits) instead",
+            );
+        }
+        (None, Some((_, attr))) if project_prefix != INTERNAL_PROJECT_PREFIX => {
+            return expand_err_span(
+                attr,
+                "`err_code_internal_module_prefix` is only for hygiea's own crates (project prefix 999); use `err_code_module_prefix` (2 digits)",
+            );
+        }
+        _ => {}
+    }
+
+    // 总位数固定 8：项目前缀 3 位 +（模块前缀 2 位 / 内部模块前缀 3 位）+ 变体错误码
+    let prefix = module_prefix.or(internal_prefix).map(|(p, _)| p);
+    let code_head = format!("{project_prefix}{}", prefix.as_deref().unwrap_or(""));
     let code_len = 8 - code_head.len();
 
     let mut seen_err_codes: HashMap<String, syn::Ident> = HashMap::new();
@@ -521,11 +564,13 @@ where
         let mut v = variant_new(var_name.clone());
 
         for attr in &variant.attrs {
-            if attr.path().is_ident("err_code_module_prefix") {
-                return expand_err_span(
-                    attr,
-                    "`err_code_module_prefix` attribute is only allowed on the enum, not on variants",
-                );
+            for name in ["err_code_module_prefix", "err_code_internal_module_prefix"] {
+                if attr.path().is_ident(name) {
+                    return expand_err_span(
+                        attr,
+                        &format!("`{name}` attribute is only allowed on the enum, not on variants"),
+                    );
+                }
             }
             if attr.path().is_ident("error")
                 && let Err(e) = parse_error_attr(attr, &mut v)

@@ -7,7 +7,10 @@ mod krate;
 #[cfg(feature = "redact")]
 mod redact;
 
-#[proc_macro_derive(hy_err, attributes(err_code_module_prefix, error, hy_err))]
+#[proc_macro_derive(
+    hy_err,
+    attributes(err_code_module_prefix, err_code_internal_module_prefix, error, hy_err)
+)]
 pub fn derive_hy_err(input: TokenStream) -> TokenStream {
     error::derive::<error::HyVariant>(input, "hy_err")
 }

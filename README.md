@@ -352,7 +352,20 @@ pub enum LegacyErrors {
 ### 保留和内置错误码
 
 - `00000000` 保留给成功（`SUCCESS_CODE`），使用会编译报错。
-- 项目前缀 `999` 给框架内置错误用。`BaseErr`（不需要 feature 的模块）没有模块前缀，用 5 位编号，兜底的 `SysErr` 是 `99999`；`hygiea::http_client::reqwest_client::BaseHttpErr`（`http-client-reqwest` feature）的模块前缀是 `01`。同一模块内重复会编译报错；跨模块或跨 crate 的重复在启动时检查（进程打印重复的错误码后以状态码 1 退出）。
+- 项目前缀 `999` 给框架内置错误用，使用 hygiea 的项目不要用 `999`。
+- 框架自己的 crate 模块多、单个模块错误少，所以 `999` 下用 3 位的 `#[err_code_internal_module_prefix = "..."]`，错误编号 2 位（`999` + `100` + `01` = `99910001`）。
+  两种布局在同一个项目前缀下会撞码（`10`+`001` 和 `100`+`01` 都是 `10001`），所以宏强制：`999` 下只能用 3 位的，其他项目只能用 2 位的 `err_code_module_prefix`，写错编译报错。
+  内部模块前缀按依赖层次分区间：
+
+  | 区间 | 给谁 |
+  |---|---|
+  | `000`、`999` | `BaseErr`：不需要 feature 的模块，没有模块前缀，5 位编号。只用 `000xx`，兜底的 `SysErr` 是 `99999`；别的 5 位码会落进其他模块的区间 |
+  | `001`～`089` | core：app `001`、log `002` |
+  | `090`～`099` | core 的测试（`hygiea-core/tests/` 里自定义的错误 enum） |
+  | `100`～`799` | components：http-client（`BaseHttpErr`）`100` |
+  | `800`～`998` | hygiea-test：http_mock `800`（构建）、`801`（运行时） |
+
+- 同一模块内重复会编译报错；跨模块或跨 crate 的重复在启动时检查（进程打印重复的错误码后以状态码 1 退出）。
 - HTTP 组件（`hygiea::http`）的错误响应：状态码一律 200，错误放在 body 的 `code` / `msg`。业务错误原样返回模板渲染出的消息；`999` 开头的框架内置错误模板参数里可能有内部信息，对外统一换成 `SysErr`（"System Error"），原错误只记在服务端日志里。输入校验这类要给用户看的错误，用项目自己前缀的错误码定义。
 
 | 错误码 | 变体 | 模板 |
@@ -362,15 +375,15 @@ pub enum LegacyErrors {
 | `99900003` | `BaseErr::JsonError` | JSON error: {{ cause }} |
 | `99900004` | `BaseErr::TemplateError` | Template error: {{ cause }} |
 | `99900005` | `BaseErr::EnvError` | Environment variable not set: {{ name }} |
-| `99901001` | `BaseHttpErr::ClientBuildFailed` | Http client build failed |
-| `99901101` | `BaseHttpErr::InvalidUrl` | Invalid url: {{ url }} |
-| `99901102` | `BaseHttpErr::InvalidParams` | Invalid query params: {{ method }} {{ url }} |
-| `99901103` | `BaseHttpErr::InvalidHeader` | Invalid header: {{ cause }} |
-| `99901104` | `BaseHttpErr::RequestBuildFailed` | Http request build failed: {{ method }} {{ url }} |
-| `99901201` | `BaseHttpErr::RequestFailed` | Http request failed: {{ method }} {{ url }} |
-| `99901202` | `BaseHttpErr::NonSuccessStatus` | Http {{ status }}: {{ method }} {{ url }} |
-| `99901203` | `BaseHttpErr::WriteFailed` | Write response body failed |
-| `99901204` | `BaseHttpErr::DecodeFailed` | Http response decode failed: {{ method }} {{ url }} |
+| `99910001` | `BaseHttpErr::ClientBuildFailed` | Http client build failed |
+| `99910011` | `BaseHttpErr::InvalidUrl` | Invalid url: {{ url }} |
+| `99910012` | `BaseHttpErr::InvalidParams` | Invalid query params: {{ method }} {{ url }} |
+| `99910013` | `BaseHttpErr::InvalidHeader` | Invalid header: {{ cause }} |
+| `99910014` | `BaseHttpErr::RequestBuildFailed` | Http request build failed: {{ method }} {{ url }} |
+| `99910021` | `BaseHttpErr::RequestFailed` | Http request failed: {{ method }} {{ url }} |
+| `99910022` | `BaseHttpErr::NonSuccessStatus` | Http {{ status }}: {{ method }} {{ url }} |
+| `99910023` | `BaseHttpErr::WriteFailed` | Write response body failed |
+| `99910024` | `BaseHttpErr::DecodeFailed` | Http response decode failed: {{ method }} {{ url }} |
 | `99999999` | `BaseErr::SysErr` | System Error |
 
 ## 示例

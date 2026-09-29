@@ -1,0 +1,6 @@
+# handlers 不能是空的：启动就报错
+
+[[interactions]]
+name = "空链"
+request = { method = "GET", path = "/x" }
+handlers = []

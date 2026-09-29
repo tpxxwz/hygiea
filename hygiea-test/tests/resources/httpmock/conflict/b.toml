@@ -1,0 +1,4 @@
+[[interactions]]
+name = "数字"
+request = { method = "GET", path = "/a/{id:[0-9]+}" }
+handler = { response = { json = {} } }

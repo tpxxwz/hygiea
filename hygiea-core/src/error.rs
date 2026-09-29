@@ -180,7 +180,7 @@ impl fmt::Display for HyErr {
 /// 给人看的格式，参考 anyhow：
 ///
 /// ```text
-/// [99902002] app::Worker() background task panicked while running
+/// [99900102] app::Worker() background task panicked while running
 ///
 /// Caused by:
 ///     task 11 panicked with message "boom"

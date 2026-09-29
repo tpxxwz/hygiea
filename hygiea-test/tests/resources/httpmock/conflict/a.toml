@@ -1,0 +1,12 @@
+# 路由冲突：/a/{x} 和 /a/{id:[0-9]+} 都能匹配 /a/0
+
+[[interactions]]
+name = "任意"
+request = { method = "GET", path = "/a/{x}" }
+handler = { response = { json = {} } }
+
+# method 不同不冲突
+[[interactions]]
+name = "删除"
+request = { method = "DELETE", path = "/a/{id:[0-9]+}" }
+handler = { response = { json = {} } }
