@@ -77,7 +77,7 @@ tokio-tungstenite = { workspace = true, optional = true }
 
 [dev-dependencies]
 # 各测试共用的工具：日志捕获、本地 HTTP 服务等
-hygiea-test-support = { workspace = true }
+test-support = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["full", "test-util"] }
 tokio-util = { workspace = true }

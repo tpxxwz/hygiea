@@ -1,0 +1,9 @@
+# moji 登录的单接口用例：连续输错 3 次密码后锁定。单接口的 server 也能有自己的 state
+
+[state]
+failures = 0
+
+[[interactions]]
+name = "登录"
+request = { method = "POST", path = "/app/mojidict/api/v1/account/unifiedLogin" }
+script = "login_lock.rhai"

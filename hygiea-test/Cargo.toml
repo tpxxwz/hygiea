@@ -1,0 +1,65 @@
+[package]
+name = "hygiea-test"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Test helpers for projects built on hygiea, used as a dev-dependency"
+keywords = ["testing", "mock", "hygiea"]
+categories = ["development-tools::testing"]
+
+# 给使用方的测试用，作为 dev-dependency 引入。hygiea 自己的测试工具在 test-support，不发布
+
+# 错误码：框架内置错误用项目前缀 999，模块前缀见 src/http_mock/error.rs
+[package.metadata.hygiea]
+err_code_project_prefix = "999"
+
+[features]
+default = []
+# 测试里装一次默认日志
+log = ["hygiea/log"]
+# 本地 mock HTTP 服务：TOML cassette + Rhai 脚本 + 接口约定校验
+http-mock = [
+    "dep:httpmock",
+    "dep:rhai",
+    "dep:toml",
+    "dep:regex",
+    "dep:encoding_rs",
+    "dep:form_urlencoded",
+    "dep:serde",
+    "dep:serde_json",
+    "dep:parking_lot",
+    "dep:http",
+]
+# 测试用的 reqwest client
+http-client = ["hygiea/http-client-reqwest"]
+
+[dependencies]
+hygiea = { workspace = true }
+httpmock = { workspace = true, optional = true }
+rhai = { workspace = true, optional = true }
+toml = { workspace = true, optional = true }
+regex = { workspace = true, optional = true }
+encoding_rs = { workspace = true, optional = true }
+form_urlencoded = { workspace = true, optional = true }
+serde = { workspace = true, features = ["derive"], optional = true }
+serde_json = { workspace = true, optional = true }
+parking_lot = { workspace = true, optional = true }
+http = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+reqwest = { workspace = true }
+serde_json = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+# tests/http_mock：发 GBK 编码的 body，验证脚本里按 charset 解码
+encoding_rs = { workspace = true }
+
+[[test]]
+name = "http_mock"
+required-features = ["http-mock"]
+
+[package.metadata.docs.rs]
+all-features = true

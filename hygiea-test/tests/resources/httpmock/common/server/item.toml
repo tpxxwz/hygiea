@@ -1,0 +1,6 @@
+# 商品详情 GET /api/items/{id} → 商品，没有返回 404
+
+[[interactions]]
+name = "商品详情"
+request = { method = "GET", path = "/api/items/{id}" }
+script = "item.rhai"

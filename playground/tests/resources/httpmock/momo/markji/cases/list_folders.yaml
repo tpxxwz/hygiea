@@ -1,0 +1,15 @@
+# 墨墨记忆卡 获取文件夹列表 GET /decks/folders（数据是编的，格式照真实接口）
+# httpmock 原生 YAML 格式，原样回放；录制出来的文件就是这个格式
+when:
+  method: GET
+  path: /open/api/v1/markji/decks/folders
+  header:
+    - name: authorization
+      value: Bearer test-token
+then:
+  status: 200
+  header:
+    - name: content-type
+      value: application/json
+  body: |-
+    {"success":true,"data":{"folders":[{"id":"fd_1","name":"日语","items":[{"object_id":"d_1","object_class":"DECK","order":0},{"object_id":"fd_2","object_class":"FOLDER","order":1}]}]},"errors":[]}

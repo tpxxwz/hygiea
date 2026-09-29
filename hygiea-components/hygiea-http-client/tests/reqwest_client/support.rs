@@ -1,4 +1,4 @@
-//! 本组测试共用的东西：通用工具从 hygiea-test-support 再导出，这里只放和 hygiea 类型相关的测试数据
+//! 本组测试共用的东西：通用工具从 test-support 再导出，这里只放和 hygiea 类型相关的测试数据
 
 use std::error::Error as _;
 
@@ -6,9 +6,9 @@ use hygiea_core::redact::redact;
 use hygiea_http_client::reqwest_client::ReqwestConfig;
 use serde::{Deserialize, Serialize};
 
-pub use hygiea_test_support::headers::header_map;
-pub use hygiea_test_support::http_server::*;
-pub use hygiea_test_support::logs::capture;
+pub use test_support::headers::header_map;
+pub use test_support::http_server::*;
+pub use test_support::logs::capture;
 
 /// 错误的 source 是不是 reqwest 报的超时（`client_config.rs` / `send.rs` 共用）
 pub fn is_timeout(err: &hygiea_core::HyErr) -> bool {

@@ -1,0 +1,4 @@
+# 墨墨记忆卡模拟服务的数据库：只有 state，没有接口。整套 server/ 一起挂时放在最前面。
+# token 是合法的 Bearer token；folders / decks 相当于后端的表；root_decks 是派生牌组的上游
+
+state_file = "data/db.json"

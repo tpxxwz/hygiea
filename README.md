@@ -305,9 +305,10 @@ hygiea                         facade：重新导出全部内容，按 feature �
 | `hygiea-http` | 是 | HTTP 服务组件 |
 | `hygiea-http-client` | 是 | reqwest HTTP 客户端及组件 |
 | `hygiea-grpc` | 是 | gRPC 服务组件 |
-| `hygiea-test-support` | 否 | 测试共用工具，只作为 dev-dependency |
+| `hygiea-test` | 是 | 给使用方写测试用，作为 dev-dependency：测试日志、mock HTTP 服务（httpmock + TOML cassette + Rhai）、测试用 http client |
+| `test-support` | 否 | hygiea 自己各 crate 的测试共用工具，只作为 dev-dependency |
 | `hygiea-examples` | 否 | 可运行的使用示例 |
-| `hygiea-playground` | 否 | 临时调查和暂存代码 |
+| `playground` | 否 | 临时调查和暂存代码 |
 
 各 crate 的模块说明，以及测试和示例放在哪：[docs/architecture.md](docs/architecture.md)。
 

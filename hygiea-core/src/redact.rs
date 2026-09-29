@@ -104,9 +104,9 @@ pub fn scope<R>(f: impl FnOnce() -> R) -> R {
 mod tests {
     use std::collections::HashMap;
 
-    use hygiea_test_support::Unserializable;
     use serde::Deserialize;
     use serde_json::{Value, json};
+    use test_support::Unserializable;
 
     use super::*;
 

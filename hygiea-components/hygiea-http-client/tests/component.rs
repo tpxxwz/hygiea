@@ -9,7 +9,7 @@ use hygiea_core::app::{BaseAppErr, Registry, Resources};
 use hygiea_http_client::reqwest_client::{
     Client, Json, Method, RequestConfig, ReqwestComponent, ReqwestConfig,
 };
-use hygiea_test_support::http_server::{echo, serve};
+use test_support::http_server::{echo, serve};
 
 /// 不走系统代理的配置：开发机上配了系统代理时，请求本地服务也可能被代理截走
 fn local_config() -> ReqwestConfig {

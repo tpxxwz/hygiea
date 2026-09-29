@@ -533,11 +533,11 @@ mod tests {
     use crate::reqwest_client::{Form, Json};
     use hygiea_core::BaseErr;
     use hygiea_core::redact::redact;
-    use hygiea_test_support::Unserializable;
-    use hygiea_test_support::logs::capture;
     use serde::Serialize;
     use std::collections::BTreeMap;
     use std::error::Error as _;
+    use test_support::Unserializable;
+    use test_support::logs::capture;
 
     use super::*;
 

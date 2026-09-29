@@ -1,0 +1,8 @@
+{
+  "token_seq": 0,
+  "users": [
+    { "id": 1, "email": "neko@example.com", "password": "nyan123", "name": "猫好き" },
+    { "id": 2, "email": "inu@example.com", "password": "wan456", "name": "犬派" }
+  ],
+  "sessions": {}
+}

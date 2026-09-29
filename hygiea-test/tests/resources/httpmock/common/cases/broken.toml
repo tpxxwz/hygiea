@@ -1,0 +1,6 @@
+# 脚本运行时出错：请求返回 500，问题记进 mock.problems()
+
+[[interactions]]
+name = "脚本出错"
+request = { method = "GET", path = "/broken" }
+script = "broken.rhai"

@@ -1,0 +1,7 @@
+# moji 登录 POST /app/mojidict/api/v1/account/unifiedLogin
+# 脚本按 state.users 校验邮箱和密码，成功就发一个新 token 写进 state.sessions
+
+[[interactions]]
+name = "登录"
+request = { method = "POST", path = "/app/mojidict/api/v1/account/unifiedLogin" }
+script = "login.rhai"

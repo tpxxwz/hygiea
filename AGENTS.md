@@ -9,7 +9,8 @@
 - `hygiea`：facade，只有 `pub use hygiea_core::*;` 加上按 feature 导出的组件，不放逻辑
 - `hygiea-core`：全部核心实现；`hygiea-macros`：过程宏（`hy_err`、`redact`），经由 core 导出
 - `hygiea-components/*`：组件（db / redis / http / grpc），依赖 core 的 `app`，只能由 facade 导出
-- `hygiea-test-support`、`hygiea-examples`、`hygiea-playground`：不发布；`hygiea-playground` 不在 workspace 里，在它的目录里单独 `cargo test`
+- `hygiea-test`：发布，给使用方写测试用（dev-dependency）；hygiea 自己的测试工具不放这里
+- `test-support`（不带 hygiea 前缀，表示仓库内部用）、`hygiea-examples`、`playground`：不发布；`playground` 不在 workspace 里，在它的目录里单独 `cargo test`
 
 项目还在早期，公开 API 可以直接改，不用考虑兼容性。
 
@@ -37,7 +38,7 @@
 | crate 的集成测试（组件的也放这里） | `<crate>/tests/` |
 | 宏的测试：编译期报错（trybuild），fixture 经 facade 使用宏 | `hygiea-macros/tests/` |
 | 给使用方看的示例 | `hygiea-examples/examples/<主题>/`，每个在 `Cargo.toml` 里用 `[[example]]` 声明，名字 `<目录>_<文件>` |
-| 调查、速查、暂存代码 | `hygiea-playground/tests/` |
+| 调查、速查、暂存代码 | `playground/tests/` |
 
 - 需要真实服务（PostgreSQL、Redis）或联网的测试标 `#[ignore = "..."]`，文件头写明手动运行的命令。
 - 示例不连外部服务，数据库用 SQLite 内存库（`database = ":memory:"`）。

@@ -1,0 +1,7 @@
+# 墨墨记忆卡 获取文件夹列表 GET /decks/folders
+# 注意：get_deck 的 /decks/{deck} 也能匹配这个路径，一起挂时 list_folders 要排在 get_deck 前面
+
+[[interactions]]
+name = "获取文件夹列表"
+request = { method = "GET", path = "/open/api/v1/markji/decks/folders" }
+script = "list_folders.rhai"

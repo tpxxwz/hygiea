@@ -1,0 +1,7 @@
+# 墨墨记忆卡 获取我的自建牌组列表 GET /decks?offset=&limit=&folder_id=
+# 按 folder_id 过滤（文件夹里 object_class 为 DECK 的项），再按 offset / limit 分页，total 是过滤后的总数
+
+[[interactions]]
+name = "获取牌组列表"
+request = { method = "GET", path = "/open/api/v1/markji/decks" }
+script = "list_decks.rhai"

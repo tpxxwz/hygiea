@@ -1,0 +1,9 @@
+# moji 关键词搜索 GET /app/mojidict/api/v2/search/all
+# 只按方法和路径匹配，返回什么由脚本决定：挂了 db 时先按 state.sessions 校验 token，
+# 再按 query 的 text 在 data/words.json 里查，
+# 尽量接近真实服务的逻辑。数据是编的，响应格式照真实接口
+
+[[interactions]]
+name = "关键词搜索"
+request = { method = "GET", path = "/app/mojidict/api/v2/search/all" }
+script = "keyword_search.rhai"

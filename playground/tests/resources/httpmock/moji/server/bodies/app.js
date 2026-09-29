@@ -1,0 +1,1 @@
+(window.webpackJsonp=window.webpackJsonp||[]).push([[0],{1:function(e,t,n){var r={"version":"4.13.1","versionDate":"20260101","name":"mojidict"};o.headers["X-MOJI-OS"]="PCWeb";var c={appId:a||"E62VyFVLMiW7kvbtVq3p"}}}]);

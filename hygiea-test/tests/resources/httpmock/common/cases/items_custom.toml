@@ -1,0 +1,7 @@
+# 商品列表的单接口用例：数据在 data/items_custom.json（只有 items，和 server 的 db 对不上也没关系），
+# 脚本复用 server 的；没有 sessions，脚本不校验 token
+
+[[interactions]]
+name = "商品列表"
+request = { method = "GET", path = "/api/items" }
+script = "../server/items.rhai"

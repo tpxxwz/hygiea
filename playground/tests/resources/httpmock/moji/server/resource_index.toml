@@ -1,0 +1,13 @@
+# moji 首页和 js（文本资源，数据是编的，格式照真实页面）
+# client 从首页 head 里的 preload 取 js 地址，再从 js 里用正则取会话字段。
+# 真实页面里 js 是 CDN 的绝对地址，录制时改写成 {{base}}，回放时换成 mock server 的地址
+
+[[interactions]]
+name = "首页"
+request = { method = "GET", path = "/" }
+response = { headers = { content-type = "text/html; charset=utf-8" }, body_file = "bodies/index.html" }
+
+[[interactions]]
+name = "js"
+request = { method = "GET", path = "/_nuxt/app.js" }
+response = { headers = { content-type = "application/javascript" }, body_file = "bodies/app.js" }

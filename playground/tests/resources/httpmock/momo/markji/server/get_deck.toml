@@ -1,0 +1,8 @@
+# 墨墨记忆卡 获取自建牌组信息 GET /decks/{deck}?with_root=
+# with_root=true 且是派生牌组（有 parent_id）时带上 root_deck。
+# /decks/{deck} 也能匹配 /decks/folders，一起挂时排在 list_folders 后面
+
+[[interactions]]
+name = "获取牌组信息"
+request = { method = "GET", path = "/open/api/v1/markji/decks/{deck}" }
+script = "get_deck.rhai"

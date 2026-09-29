@@ -196,9 +196,9 @@ mod tests {
     use crate::reqwest_client::BaseHttpErr;
     use crate::reqwest_client::{HeaderValue, Json};
     use hygiea_core::redact::redact;
-    use hygiea_test_support::headers::header_map;
     use serde::Serialize;
     use serde_json::{Value, json};
+    use test_support::headers::header_map;
 
     use super::*;
 

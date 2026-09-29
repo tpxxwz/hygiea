@@ -4,7 +4,8 @@ members = [
     "hygiea",
     "hygiea-core",
     "hygiea-macros",
-    "hygiea-test-support",
+    "hygiea-test",
+    "test-support",
     "hygiea-examples",
     "hygiea-components/hygiea-db",
     "hygiea-components/hygiea-redis",
@@ -13,7 +14,7 @@ members = [
     "hygiea-components/hygiea-grpc",
 ]
 # 独立的 crate，不属于这个 workspace：有自己的 Cargo.lock 和 target
-exclude = ["hygiea-playground"]
+exclude = ["playground"]
 
 [workspace.package]
 version = "0.1.1-alpha.5"
@@ -34,8 +35,10 @@ hygiea-redis = { path = "hygiea-components/hygiea-redis", version = "0.1.1-alpha
 hygiea-http = { path = "hygiea-components/hygiea-http", version = "0.1.1-alpha.5" }
 hygiea-http-client = { path = "hygiea-components/hygiea-http-client", version = "0.1.1-alpha.5" }
 hygiea-grpc = { path = "hygiea-components/hygiea-grpc", version = "0.1.1-alpha.5" }
+# 使用方写测试用，作为 dev-dependency 引入，随其他 crate 一起发布
+hygiea-test = { path = "hygiea-test", version = "0.1.1-alpha.5" }
 # 只做 dev-dependency、不发布，所以不带版本号（cargo publish 时会自动去掉没有版本号的 dev-dependency）
-hygiea-test-support = { path = "hygiea-test-support" }
+test-support = { path = "test-support" }
 
 # 过程宏依赖
 quote = "1.0.47"
@@ -107,3 +110,8 @@ time-tz = { version = "2.0.0", features = ["system"] }
 serial_test = "4.0.1"
 # 测试里的临时文件和目录：drop 时自动删除，断言失败也不会留下文件
 tempfile = "3.27.0"
+# hygiea-test 的 http-mock：本地 mock HTTP 服务（再导出给使用方）、cassette 里的 Rhai 脚本、
+# 脚本里解析表单 body
+httpmock = "0.8"
+rhai = { version = "1.26", features = ["sync", "serde"] }
+form_urlencoded = "1"

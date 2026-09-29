@@ -1,0 +1,6 @@
+# 登录 POST /api/login {"name":..,"password":..} → {"token":..}，会话写进 state.sessions
+
+[[interactions]]
+name = "登录"
+request = { method = "POST", path = "/api/login" }
+script = "login.rhai"

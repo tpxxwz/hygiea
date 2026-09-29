@@ -1,0 +1,42 @@
+[package]
+name = "playground"
+version = "0.0.0"
+edition = "2024"
+description = "Scratch area for hygiea: investigations and parked code"
+publish = false
+
+# 错误码的项目前缀：tests/distributed_lock 里暂存的 BaseLockErr 原来是框架内置错误，保持 999
+[package.metadata.hygiea]
+err_code_project_prefix = "999"
+
+[dev-dependencies]
+# db / redis 组件：tests/distributed_lock 暂存的锁实现要用
+hygiea = { path = "../hygiea", features = ["full", "db-sqlx-postgres", "db-sqlx-sqlite", "db-seaorm-postgres", "redis-fred"] }
+fred = { version = "10.1.0", features = ["i-scripts"] }
+sqlx = { version = "0.9.0", features = ["runtime-tokio", "tls-rustls-ring-webpki", "macros", "postgres", "sqlite"] }
+sea-orm = { version = "2.0.3", features = ["sqlx-postgres", "runtime-tokio-rustls", "mock"] }
+tracing = "0.1.44"
+# test-util：tests/sim_clock.rs 要暂停 tokio 时间
+tokio = { version = "1.53.1", features = ["full", "test-util"] }
+parking_lot = "0.12.5"
+serial_test = "4.0.1"
+serde_json = "1.0.151"
+time = { version = "0.3.55", features = ["formatting", "parsing", "macros"] }
+reqwest = { version = "0.13.5", default-features = false, features = [
+    "json", "query", "form", "stream", "multipart", "charset",
+    "gzip", "brotli", "zstd", "deflate",
+    "cookies", "http2", "socks", "system-proxy", "rustls",
+] }
+tokio-util = { version = "0.7.19", features = ["io"] }
+futures-util = "0.3.34"
+# tests/mock_server：本地 mock HTTP 服务速查；record 带上 YAML 录制和回放
+httpmock = { version = "0.8", features = ["record"] }
+# tests/mock_server：TOML 格式的 cassette，动态响应用 Rhai 脚本（sync：脚本要在 mock server 的线程上跑）
+toml = "1"
+rhai = { version = "1.26", features = ["sync", "serde"] }
+serde = { version = "1", features = ["derive"] }
+# 脚本里 request.form() 解析 x-www-form-urlencoded，request.text() 按 charset 解码
+form_urlencoded = "1"
+encoding_rs = "0.8"
+# cassette 里 path 的 {名字} 占位符转成正则，取出匹配到的值
+regex = "1"

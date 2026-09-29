@@ -301,8 +301,8 @@ impl ImmediateComponent for ReqwestComponent {
 #[cfg(test)]
 mod tests {
     use crate::reqwest_client::error::BaseHttpErr;
-    use hygiea_test_support::headers::header_map;
     use std::error::Error as _;
+    use test_support::headers::header_map;
 
     use super::*;
 

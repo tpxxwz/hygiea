@@ -1,0 +1,8 @@
+# moji 取发音地址 GET /app/mojidict/api/v1/tts/fetch
+# 按 targetId / targetType 在 data/tts.json 里查，签发一个带 sign 的下载地址并记进
+# state.tts_links；tts_download 只认签发过的地址，两个接口靠 state 联动
+
+[[interactions]]
+name = "取发音地址"
+request = { method = "GET", path = "/app/mojidict/api/v1/tts/fetch" }
+script = "tts_fetch.rhai"

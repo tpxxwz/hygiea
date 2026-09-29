@@ -161,8 +161,8 @@ pub(super) fn decode_failed(
 
 #[cfg(test)]
 mod tests {
-    use hygiea_test_support::http_server::closed_port_url;
     use std::error::Error as _;
+    use test_support::http_server::closed_port_url;
 
     use super::*;
 

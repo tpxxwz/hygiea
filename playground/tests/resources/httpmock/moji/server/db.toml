@@ -1,0 +1,4 @@
+# moji 模拟服务的数据库：只有 state，没有接口。整套 server/ 一起挂时放在最前面。
+# 可变的数据（用户、会话）放 state，只读的词库由脚本用 read_json 读（data/words.json、data/tts.json）
+
+state_file = "data/db.json"

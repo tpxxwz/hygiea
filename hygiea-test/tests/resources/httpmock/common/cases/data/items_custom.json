@@ -1,0 +1,14 @@
+{
+  "items": [
+    {
+      "id": "x1",
+      "name": "xylophone",
+      "price": 100
+    },
+    {
+      "id": "x2",
+      "name": "yoyo",
+      "price": 1
+    }
+  ]
+}

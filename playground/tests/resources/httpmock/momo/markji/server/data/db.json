@@ -1,0 +1,112 @@
+{
+  "token": "test-token",
+  "folders": [
+    {
+      "id": "fd_1",
+      "name": "日语",
+      "items": [
+        {
+          "object_id": "d_1",
+          "object_class": "DECK",
+          "order": 0
+        },
+        {
+          "object_id": "d_2",
+          "object_class": "DECK",
+          "order": 1
+        },
+        {
+          "object_id": "fd_2",
+          "object_class": "FOLDER",
+          "order": 2
+        }
+      ]
+    },
+    {
+      "id": "fd_2",
+      "parent_id": "fd_1",
+      "name": "语法",
+      "items": [
+        {
+          "object_id": "d_3",
+          "object_class": "DECK",
+          "order": 0
+        }
+      ]
+    }
+  ],
+  "decks": [
+    {
+      "id": "d_1",
+      "source": "SELF",
+      "status": "NORMAL",
+      "name": "N2 单词",
+      "description": "",
+      "creator": "u_1",
+      "authors": [
+        "u_1"
+      ],
+      "revision": 3,
+      "is_private": true,
+      "card_count": 2,
+      "chapter_count": 1,
+      "created_time": "2026-01-01T00:00:00.000Z",
+      "updated_time": "2026-01-02T00:00:00.000Z"
+    },
+    {
+      "id": "d_2",
+      "source": "FORK",
+      "status": "NORMAL",
+      "name": "N1 单词",
+      "description": "派生自公开牌组",
+      "creator": "u_1",
+      "authors": [
+        "u_1",
+        "u_9"
+      ],
+      "revision": 8,
+      "is_private": false,
+      "card_count": 120,
+      "chapter_count": 6,
+      "created_time": "2026-01-05T00:00:00.000Z",
+      "updated_time": "2026-01-06T00:00:00.000Z",
+      "parent_id": "d_pub_1"
+    },
+    {
+      "id": "d_3",
+      "source": "SELF",
+      "status": "NORMAL",
+      "name": "N1 语法",
+      "description": "",
+      "creator": "u_1",
+      "authors": [
+        "u_1"
+      ],
+      "revision": 1,
+      "is_private": true,
+      "card_count": 40,
+      "chapter_count": 2,
+      "created_time": "2026-02-01T00:00:00.000Z",
+      "updated_time": "2026-02-01T00:00:00.000Z"
+    }
+  ],
+  "root_decks": {
+    "d_pub_1": {
+      "id": "d_pub_1",
+      "source": "SELF",
+      "status": "NORMAL",
+      "name": "JLPT N1 公开牌组",
+      "description": "官方整理",
+      "creator": "u_1",
+      "authors": [
+        "u_9"
+      ],
+      "revision": 21,
+      "is_private": false,
+      "card_count": 120,
+      "chapter_count": 6,
+      "created_time": "2025-06-01T00:00:00.000Z",
+      "updated_time": "2025-12-01T00:00:00.000Z"
+    }
+  }
+}

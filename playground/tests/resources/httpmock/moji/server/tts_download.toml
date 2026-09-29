@@ -1,0 +1,8 @@
+# moji 下载发音 mp3 GET /tts/<voice>/<targetId>.mp3?sign=..
+# path 里的 {voice}、{id} 是占位符，脚本用 request.param 取。
+# 只认 tts_fetch 签发过的地址：sign 不存在或和路径里的发音对不上返回 403（模拟对象存储的签名校验）
+
+[[interactions]]
+name = "下载 mp3"
+request = { method = "GET", path = "/tts/{voice}/{id}.mp3" }
+script = "tts_download.rhai"

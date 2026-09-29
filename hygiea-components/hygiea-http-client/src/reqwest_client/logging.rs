@@ -189,8 +189,8 @@ mod tests {
     use crate::reqwest_client::Url;
     use crate::reqwest_client::{Bytes, HeaderMap};
     use hygiea_core::{BaseErr, err};
-    use hygiea_test_support::logs::capture;
     use std::time::Duration;
+    use test_support::logs::capture;
 
     use super::*;
 

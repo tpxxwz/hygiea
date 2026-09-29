@@ -301,9 +301,9 @@ mod tests {
     use crate::reqwest_client::Client;
     use hygiea_core::BaseErr;
     use hygiea_core::redact::redact;
-    use hygiea_test_support::Unserializable;
     use serde::Serialize;
     use serde_json::{Value, json};
+    use test_support::Unserializable;
 
     use super::*;
 

@@ -1,0 +1,6 @@
+# 演示脚本里取请求数据的钩子：把 query、header、body（json / form / text）取出来原样返回
+
+[[interactions]]
+name = "echo"
+request = { method = "POST", path = "/echo" }
+script = "echo.rhai"

@@ -1,0 +1,12 @@
+# 登录的单接口用例（不依赖 db）：按请求体区分结果，同一个请求按调用次数返回不同 token。
+# 先注册的优先，更具体的写在前面
+
+[[interactions]]
+name = "密码错误"
+request = { method = "POST", path = "/api/login", json_body_includes = { password = "wrong" } }
+response = { status = 401, json = { code = "bad_credentials", message = "name or password error" } }
+
+[[interactions]]
+name = "登录成功"
+request = { method = "POST", path = "/api/login", header = { content-type = "application/json" } }
+responses = [{ json = { token = "t1" } }, { json = { token = "t2" } }]

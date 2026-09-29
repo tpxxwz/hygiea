@@ -162,7 +162,7 @@ pub(super) fn auth_value(raw: String) -> Result<HeaderValue, HyErr> {
 #[cfg(test)]
 mod tests {
     use crate::reqwest_client::BaseHttpErr;
-    use hygiea_test_support::headers::header_map;
+    use test_support::headers::header_map;
 
     use super::*;
 

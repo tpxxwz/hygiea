@@ -67,7 +67,33 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 | `hygiea-http-client/src/reqwest_client/send.rs` | 发送流程（开头有流程图）；`retry.rs` 重试；`logging.rs` 日志；`text.rs` 字节转文本；`error.rs` 错误 |
 | `hygiea-grpc/src/tonic_server.rs` | gRPC 服务组件 |
 
-### hygiea-test-support
+### hygiea-test
+
+给使用方写测试用，发布，作为 dev-dependency 引入。和使用方一样只经由 facade `hygiea` 使用 hygiea，功能按 feature 选：
+
+| feature | 模块 | 内容 |
+|---|---|---|
+| `log` | `log` | `init_once()`：进程里装一次默认日志，给手动跑的联网测试看日志 |
+| `http-mock` | `http_mock` | 本地 mock HTTP 服务：TOML cassette + Rhai 脚本 + 全局 state（从 JSON 初始化），底层 httpmock（再导出） |
+| `http-client` | 根 | `http_client()`：测试用的 reqwest client |
+
+`http_mock` 的文件：
+
+| 文件 | 内容 |
+|---|---|
+| `mod.rs` | `Cassette`（`load`、`db`、`start`）、`Mocked`（地址、读写 state、`assert_valid`）、`cassette_root!` |
+| `spec.rs` | cassette 的 TOML 格式；请求匹配字段和 httpmock 同名，翻译成 `When` |
+| `handler.rs` | 一条 interaction 的响应：固定序列或 Rhai 脚本，组装响应；脚本出错等问题记进 problems |
+| `script.rs` | Rhai 引擎：`request` 对象和 `read_json` / `read_text` |
+| `template.rs` | cassette `path` 里的路径模板 `/a/{id}` |
+| `error.rs` | `HttpMockErr`，模块前缀 10 |
+
+测试在 `tests/http_mock.rs`，示例资源在 `tests/resources/httpmock/common/`（server 一个小商店服务，cases 单接口用例）。
+概念和流程见 [http-mock.md](http-mock.md)，待办见 [todo/http-mock.md](todo/http-mock.md)。
+
+### test-support
+
+hygiea 自己各 crate 的测试工具，不发布。名字不带 `hygiea-` 前缀，表示只在仓库内部用。
 
 | 模块 | 内容 |
 |---|---|
@@ -97,12 +123,12 @@ Cargo 只自动发现 `examples/*.rs` 和 `examples/*/main.rs`，所以每个示
 | crate 的集成测试（只用本 crate 的 pub API） | `<crate>/tests/` |
 | 宏的测试：编译期报错（trybuild），fixture 经 facade 使用宏（和下游写法一样） | `hygiea-macros/tests/` |
 | 给使用方看的示例，`cargo run -p hygiea-examples --example xxx` | `hygiea-examples/examples/` |
-| 调查、速查、暂存代码 | `hygiea-playground/tests/` |
+| 调查、速查、暂存代码 | `playground/tests/` |
 
 补充约定：
 
 - 组件的测试放在组件 crate 自己的 `tests/` 里，不放进 examples 或 playground。需要真实服务（PostgreSQL、Redis）的测试标 `#[ignore = "requires running ..."]`，并在文件头写明手动运行的命令。
 - 需要联网的测试也标 `#[ignore]`。
 - 除 `hygiea-examples` 以外，其他 crate 不建 `examples/`。
-- `hygiea-playground` 是独立的 crate，不在 workspace 里（根 `Cargo.toml` 的 `exclude`），有自己的 `Cargo.lock` 和 `target/`，要在它的目录里执行 `cargo test`。只有 `tests/`。`src/lib.rs` 是空的，留着只是因为 Cargo 要求每个包至少有一个 lib 或 bin。playground 里的代码不保证一直能编译通过。
-- `hygiea-test-support` 不单独建 `tests/`。它会在各 crate 的测试里被用到，出问题那些测试就会失败。里面有独立逻辑时，在对应文件里写单元测试。
+- `playground` 是独立的 crate，不在 workspace 里（根 `Cargo.toml` 的 `exclude`），有自己的 `Cargo.lock` 和 `target/`，要在它的目录里执行 `cargo test`。只有 `tests/`。`src/lib.rs` 是空的，留着只是因为 Cargo 要求每个包至少有一个 lib 或 bin。playground 里的代码不保证一直能编译通过。
+- `test-support` 不单独建 `tests/`。它会在各 crate 的测试里被用到，出问题那些测试就会失败。里面有独立逻辑时，在对应文件里写单元测试。

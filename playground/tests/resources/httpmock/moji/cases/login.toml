@@ -1,0 +1,21 @@
+# moji 登录的单接口用例（手工构造，不依赖 db）：按请求体区分结果，同一个请求按次数返回不同 token。
+# httpmock 先注册的优先，所以更具体的规则写在前面
+
+[[interactions]]
+name = "密码错误"
+request = { method = "POST", path = "/app/mojidict/api/v1/account/unifiedLogin", json_body_includes = { authPayload = { code = "wrong" } } }
+response = { status = 400, json = { code = 100000003, message = "email or password error" } }
+
+[[interactions]]
+name = "不支持的登录方式"
+request = { method = "POST", path = "/app/mojidict/api/v1/account/unifiedLogin", json_body_includes = { authName = "SmsAuth" } }
+response = { status = 400, json = { code = 100000001, message = "unsupported auth" } }
+
+# 其他请求都算登录成功：第 1 次 t1，第 2 次及以后 t2
+[[interactions]]
+name = "登录成功"
+request = { method = "POST", path = "/app/mojidict/api/v1/account/unifiedLogin", json_body_includes = { authName = "PasswordAuth" } }
+responses = [
+    { json = { sessionToken = "t1" } },
+    { json = { sessionToken = "t2" } },
+]

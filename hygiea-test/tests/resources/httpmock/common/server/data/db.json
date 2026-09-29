@@ -1,0 +1,14 @@
+{
+  "token_seq": 0,
+  "users": [
+    { "id": 1, "name": "alice", "password": "pw-alice" },
+    { "id": 2, "name": "bob", "password": "pw-bob" }
+  ],
+  "sessions": {},
+  "items": [
+    { "id": "i1", "name": "apple", "price": 3 },
+    { "id": "i2", "name": "banana", "price": 2 },
+    { "id": "i3", "name": "cherry", "price": 9 },
+    { "id": "i4", "name": "apricot", "price": 5 }
+  ]
+}

@@ -1,0 +1,10 @@
+# 墨墨记忆卡 获取自建牌组信息 GET /decks/{deck}（数据是编的，格式照真实接口）
+
+[[interactions]]
+name = "获取牌组信息"
+request = { method = "GET", path = "/open/api/v1/markji/decks/d_1", query = { with_root = "false" } }
+
+[interactions.response.json]
+success = true
+errors = []
+data = { deck = { id = "d_1", source = "SELF", status = "NORMAL", name = "N2 单词", description = "", creator = "u_1", authors = ["u_1"], revision = 3, is_private = true, card_count = 2, chapter_count = 1, created_time = "2026-01-01T00:00:00.000Z", updated_time = "2026-01-02T00:00:00.000Z" } }
