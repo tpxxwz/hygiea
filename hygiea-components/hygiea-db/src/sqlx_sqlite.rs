@@ -355,4 +355,32 @@ mod tests {
         };
         assert_eq!(config.url(), "sqlite:///var/lib/app/data.db");
     }
+
+    /// `create_if_missing` 生效：开着时文件库不存在会被建出来
+    #[tokio::test]
+    async fn create_if_missing_creates_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("new.db");
+        let config = SqlxSqliteConfig {
+            database: path.to_string_lossy().to_string(),
+            create_if_missing: true,
+            ..Default::default()
+        };
+        SqlxSqlitePool::connect(config).await.unwrap();
+        assert!(path.exists());
+    }
+
+    /// `create_if_missing` 关掉时，文件库不存在就连不上，也不会建文件
+    #[tokio::test]
+    async fn without_create_if_missing_missing_file_fails() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("absent.db");
+        let config = SqlxSqliteConfig {
+            database: path.to_string_lossy().to_string(),
+            create_if_missing: false,
+            ..Default::default()
+        };
+        assert!(SqlxSqlitePool::connect(config).await.is_err());
+        assert!(!path.exists());
+    }
 }

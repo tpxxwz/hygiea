@@ -11,7 +11,10 @@ use hygiea_test::container;
 /// 用代码启动的官方 postgres 镜像
 #[container]
 mod postgres {
-    use hygiea_db::{SeaOrmPgConfig, SeaOrmPgPool, SqlxPgConfig, SqlxPgPool};
+    use hygiea_core::app::{Registry, Resources};
+    use hygiea_db::{
+        SeaOrmPgComponent, SeaOrmPgConfig, SeaOrmPgPool, SqlxPgComponent, SqlxPgConfig, SqlxPgPool,
+    };
     use hygiea_test::container::{ContainerSpec, RunningContainer};
     use sea_orm::{ConnectionTrait, DbBackend, Statement};
 
@@ -64,6 +67,27 @@ mod postgres {
             .await
             .unwrap();
         pool.inner.close().await;
+    }
+
+    /// 启动 registry，把 `Resources` 交给 `check`，拿回它的结果。
+    /// 启动成功后 `run` 会一直等退出信号，所以放到后台任务里，拿到结果就 abort
+    async fn with_resources<T: Send + 'static>(
+        registry: Registry,
+        check: impl FnOnce(Resources) -> T + Send + 'static,
+    ) -> T {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _ = registry
+                .on_ready(move |resources| async move {
+                    let _ = tx.send(check(resources));
+                    Ok(())
+                })
+                .run()
+                .await;
+        });
+        let result = rx.await.unwrap();
+        task.abort();
+        result
     }
 
     fn sql(s: &str) -> Statement {
@@ -164,5 +188,36 @@ mod postgres {
         // 关闭后再发查询应该失败
         let result = pool.query_one_raw(sql("SELECT 1")).await;
         assert!(result.is_err(), "{result:?}");
+    }
+
+    /// SqlxPgComponent 经 Registry 启动，按组件名取到能用的连接池
+    #[tokio::test]
+    async fn sqlx_component_startup_via_registry() {
+        let server = start().await;
+        let registry =
+            Registry::new().add_named::<SqlxPgComponent>("primary", sqlx_config(&server));
+        let pool = with_resources(registry, |res| res.get_named::<SqlxPgPool>("primary"))
+            .await
+            .unwrap();
+
+        let value: i32 = sqlx::query_scalar("SELECT 1")
+            .fetch_one(&*pool)
+            .await
+            .unwrap();
+        assert_eq!(value, 1);
+    }
+
+    /// SeaOrmPgComponent 经 Registry 启动，按组件名取到能用的连接
+    #[tokio::test]
+    async fn seaorm_component_startup_via_registry() {
+        let server = start().await;
+        let registry =
+            Registry::new().add_named::<SeaOrmPgComponent>("primary", seaorm_config(&server));
+        let pool = with_resources(registry, |res| res.get_named::<SeaOrmPgPool>("primary"))
+            .await
+            .unwrap();
+
+        let row = pool.query_one_raw(sql("SELECT 1")).await.unwrap().unwrap();
+        assert_eq!(row.try_get_by_index::<i32>(0).unwrap(), 1);
     }
 }

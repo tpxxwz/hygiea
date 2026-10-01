@@ -11,7 +11,8 @@ use hygiea_test::container;
 #[container]
 mod redis {
     use fred::interfaces::KeysInterface;
-    use hygiea_redis::{FredRedisPool, RedisConfig};
+    use hygiea_core::app::{Registry, Resources};
+    use hygiea_redis::{FredRedisPool, RedisComponent, RedisConfig};
     use hygiea_test::container::{ContainerSpec, RunningContainer};
 
     const PORT: u16 = 6379;
@@ -33,6 +34,44 @@ mod redis {
             db,
             ..Default::default()
         }
+    }
+
+    /// 启动 registry，把 `Resources` 交给 `check`，拿回它的结果。
+    /// 启动成功后 `run` 会一直等退出信号，所以放到后台任务里，拿到结果就 abort
+    async fn with_resources<T: Send + 'static>(
+        registry: Registry,
+        check: impl FnOnce(Resources) -> T + Send + 'static,
+    ) -> T {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _ = registry
+                .on_ready(move |resources| async move {
+                    let _ = tx.send(check(resources));
+                    Ok(())
+                })
+                .run()
+                .await;
+        });
+        let result = rx.await.unwrap();
+        task.abort();
+        result
+    }
+
+    /// 经 Registry 具名启动 RedisComponent：连接池放在组件名下，取出来能 SET/GET
+    #[tokio::test]
+    async fn component_starts_and_provides_named_pool() {
+        let redis = start().await;
+        let registry = Registry::new().add_named::<RedisComponent>("cache", config(&redis, 0));
+        let pool = with_resources(registry, |res| res.get_named::<FredRedisPool>("cache"))
+            .await
+            .expect("组件名下应该有连接池");
+
+        let () = pool
+            .set("component_key", "component_value", None, None, false)
+            .await
+            .unwrap();
+        let value: String = pool.get("component_key").await.unwrap();
+        assert_eq!(value, "component_value");
     }
 
     #[tokio::test]

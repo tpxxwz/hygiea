@@ -4,13 +4,26 @@
 
 use hygiea_aws::aws_sdk_s3::Client;
 use hygiea_aws::{AwsComponent, AwsConfig, SdkConfig};
-use hygiea_core::app::{Registry, Resources};
+use hygiea_core::app::{Component, Name, Registry, ResourceId, Resources};
 
 fn config(region: &str) -> AwsConfig {
     AwsConfig {
         region: Some(region.into()),
         ..AwsConfig::default()
     }
+}
+
+/// 按配置构造：按组件名声明 SdkConfig 和 S3 Client 两个资源
+#[test]
+fn build_declares_named_resources() {
+    let component = AwsComponent::build(Name::from("r2"), config("auto"));
+    assert_eq!(
+        component.provides(),
+        vec![
+            ResourceId::named::<SdkConfig>("r2"),
+            ResourceId::named::<Client>("r2"),
+        ]
+    );
 }
 
 /// 启动 registry，把 `Resources` 交给 `check`，拿回它的结果。

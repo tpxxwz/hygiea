@@ -507,17 +507,6 @@ mod tests {
     }
 
     #[test]
-    fn component_provides_correct_resource() {
-        let name = Name::from("cache");
-        use hygiea_core::app::Component;
-
-        let component = RedisComponent::build(name.clone(), RedisConfig::default());
-
-        let provides = component.provides();
-        assert_eq!(provides, vec![ResourceId::named::<FredRedisPool>(name)]);
-    }
-
-    #[test]
     fn redis_config_default_values() {
         let config = RedisConfig::default();
         assert_eq!(config.mode, "standalone");

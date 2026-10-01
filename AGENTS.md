@@ -76,7 +76,10 @@
   hygiea-components/hygiea-xxx/
   ├── src/…              #[cfg(test)] mod tests：纯逻辑的单元测试
   └── tests/
-      ├── component.rs   组件经 Registry 启动、按名字提供资源，不连外部服务
+      ├── component.rs   每个 crate 都要有，覆盖 crate 里的每个组件，只写基础的：
+      │                  按配置构造组件、检查 provides()；不依赖外部服务的再经 Registry 启动一次，
+      │                  匿名 / 具名各取一次资源。依赖外部服务的（PG、Redis）这里不启动，
+      │                  启动并连上的测试放进 <服务>.rs 的 container 模块
       └── <服务>.rs       连真实服务，比如 pg.rs / redis.rs / s3.rs：
                          #[container] mod <服务名> { .. }      用 ContainerSpec 起容器，镜像写固定 tag
                          #[live(env = [..])] mod <名字> { .. }  托管服务和自建容器行为有差别时才写（比如 R2）
