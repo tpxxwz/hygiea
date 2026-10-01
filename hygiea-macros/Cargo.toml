@@ -31,8 +31,10 @@ proc-macro-crate.workspace = true
 
 [dev-dependencies]
 # 宏的编译期检查（trybuild）：fixture 通过 facade 使用宏，和下游的实际写法一样（生成 ::hygiea:: 路径）。
-# facade 间接依赖本 crate，dev-dependency 形成的循环 Cargo 允许
-hygiea = { workspace = true, features = ["redact", "app"] }
+# facade 间接依赖本 crate，dev-dependency 形成的循环 Cargo 允许。
+# 只写 path 不写版本：facade 比本 crate 晚发布，带版本号的话 cargo publish 解析的是 crates.io 上的旧版 facade
+# （新 feature 不存在就直接失败）；没有版本号的 dev-dependency 打包时会被自动去掉
+hygiea = { path = "../hygiea", features = ["redact", "app"] }
 trybuild = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

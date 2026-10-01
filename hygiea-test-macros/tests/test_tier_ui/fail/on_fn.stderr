@@ -1,0 +1,5 @@
+error: #[live] goes on an inline module: `mod name { .. }`
+ --> tests/test_tier_ui/fail/on_fn.rs:4:1
+  |
+4 | fn put_get() {}
+  | ^^

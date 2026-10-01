@@ -12,10 +12,12 @@
     feature = "redis-fred",
     feature = "http-axum",
     feature = "http-client-reqwest",
-    feature = "grpc-tonic"
+    feature = "grpc-tonic",
+    feature = "aws-s3"
 ))]
 
 use hygiea::app::RegistryConfig;
+use hygiea::aws::AwsConfig;
 use hygiea::db::{SeaOrmPgConfig, SqlxPgConfig, SqlxSqliteConfig};
 use hygiea::grpc::TonicConfig;
 use hygiea::http::AxumConfig;
@@ -36,6 +38,7 @@ struct Template {
     http: AxumConfig,
     http_client: ReqwestConfig,
     grpc: TonicConfig,
+    aws: AwsConfig,
 }
 
 fn template() -> Template {
@@ -62,6 +65,7 @@ fn component_values_are_code_defaults() {
     assert!(same(&t.db_sqlite, &SqlxSqliteConfig::default()));
     assert!(same(&t.redis, &RedisConfig::default()));
     assert!(same(&t.http_client, &ReqwestConfig::default()));
+    assert!(same(&t.aws, &AwsConfig::default()));
     let grpc_default = TonicConfig::default();
     assert_eq!(t.grpc.addr, grpc_default.addr);
     assert_eq!(

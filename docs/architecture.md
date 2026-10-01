@@ -40,7 +40,7 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 | `src/redact.rs` | `#[redact]`：字段打码、跳过。`redact` feature 开了才编译 |
 | `src/component.rs` | `#[component]`：把 `impl ImmediateComponent` / `impl DeferredComponent` 块拆成 `impl Component` 和启动 trait 两个 impl，按 trait 填 `Kind`。`component` feature（core 的 `app` 会打开）开了才编译 |
 | `src/krate.rs` | 按调用方的依赖名决定生成代码里用 `::hygiea` 还是 `::hygiea_core`，`crate = "path"` 可以覆盖 |
-| `tests/` | trybuild 测试：`hy_err_ui`（`#[derive(hy_err)]`、`err!`）、`redact_ui`（`#[redact]`）、`component_ui`（`#[component]`，包括 Deferred 组件第一阶段读不到资源）。dev-dependency 依赖 facade，fixture 用 `hygiea::` 路径，和下游写法一样 |
+| `tests/` | trybuild 测试：`hy_err_ui`（`#[derive(hy_err)]`、`err!`）、`redact_ui`（`#[redact]`）、`component_ui`（`#[component]`，包括 Deferred 组件第一阶段读不到资源）。dev-dependency 依赖 facade（只写 path：facade 反过来依赖本 crate），fixture 用 `hygiea::` 路径，和下游写法一样 |
 
 ### 组件
 
@@ -53,6 +53,7 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 | `hygiea-http` | `axum` | | `http-axum` | `hygiea::http` |
 | `hygiea-http-client` | `reqwest` | | `http-client-reqwest` | `hygiea::http_client`（实现在 `reqwest_client` 子模块） |
 | `hygiea-grpc` | `tonic` | | `grpc-tonic` | `hygiea::grpc` |
+| `hygiea-aws` | 服务：`s3` | | `aws-s3` | `hygiea::aws` |
 
 | 文件 | 内容 |
 |---|---|
@@ -66,16 +67,21 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 | `hygiea-http-client/src/reqwest_client/request.rs` | `RequestConfig`（单次请求，纯数据）和 `HttpResponse`；`headers.rs` 请求头与认证，`body.rs` 请求体，`response.rs` 响应体 |
 | `hygiea-http-client/src/reqwest_client/send.rs` | 发送流程（开头有流程图）；`retry.rs` 重试；`logging.rs` 日志；`text.rs` 字节转文本；`error.rs` 错误 |
 | `hygiea-grpc/src/tonic_server.rs` | gRPC 服务组件 |
+| `hygiea-aws/src/config.rs` | `AwsConfig`：所有服务共用的配置（region、endpoint、profile、写死的凭证），加载成 `SdkConfig`；每个服务一个子配置 |
+| `hygiea-aws/src/s3.rs` | `S3Config`：S3 专属项，在 `SdkConfig` 上叠加后造出 `aws_sdk_s3::Client`（feature `s3`） |
+| `hygiea-aws/src/component.rs` | `AwsComponent`：按组件名把 `SdkConfig` 和开了 feature 的各服务客户端放进 Resources |
 
 ### hygiea-test
 
-给使用方写测试用，发布，作为 dev-dependency 引入。和使用方一样只经由 facade `hygiea` 使用 hygiea，功能按 feature 选：
+给使用方写测试用，发布，作为 dev-dependency 引入。只依赖 `hygiea-core`（不经过 facade，也不依赖任何组件），所以组件的测试也能用它；core 自己的测试不能用。功能按 feature 选：
 
 | feature | 模块 | 内容 |
 |---|---|---|
 | `log` | `log` | `init_once()`：进程里装一次默认日志，给手动跑的联网测试看日志 |
 | `http-mock` | `http_mock` | 本地 mock HTTP 服务：TOML cassette + Rhai 脚本 + 全局 state（从 JSON 初始化），底层 httpmock（再导出） |
-| `http-client` | 根 | `http_client()`：测试用的 reqwest client |
+| `tcp` | `tcp` | `silent()`：只接受 TCP、从不回话的本地服务，用 `https://` 连时 TLS 握手卡住，测建连超时（HTTP mock 管不到连接阶段） |
+| `container` | `container` | `ContainerSpec` / `RunningContainer`：在代码里启动任意容器（镜像、环境变量、端口、就绪条件由调用方传），底层 testcontainers |
+| （常开） | 根、`tier` | `#[container]` / `#[live]`：测试分层属性宏（来自 `hygiea-test-macros`），分层说明在 crate 文档；`tier` 是宏生成的代码调用的函数（`require_env`） |
 
 `http_mock` 的文件：
 
@@ -90,6 +96,15 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 
 测试在 `tests/http_mock.rs`，示例资源在 `tests/resources/httpmock/common/`（server 一个小商店服务，cases 单接口用例）。
 概念、用法、定位见 `hygiea-test/src/http_mock/mod.rs` 的模块文档（`cargo doc -p hygiea-test --features http-mock`）。
+
+### hygiea-test-macros
+
+`hygiea-test` 的过程宏，发布，只经由 `hygiea-test` 使用。宏只改写代码结构，运行时逻辑在 `hygiea_test::tier` 里，生成的代码去调用它。
+
+| 文件 | 内容 |
+|---|---|
+| `src/test_tier.rs` | `#[container]` / `#[live]`：标在模块上，给里面的测试加 `#[ignore]`、把内容挪进层名子模块；`live(env = ..)` 生成 `hygiea_test::tier::require_env` 调用 |
+| `tests/` | trybuild：`test_tier_ui`，fixture 经 `hygiea_test` 使用宏。`hygiea-test` 是只写 path 的 dev-dependency |
 
 ### test-support
 
@@ -127,8 +142,8 @@ Cargo 只自动发现 `examples/*.rs` 和 `examples/*/main.rs`，所以每个示
 
 补充约定：
 
-- 组件的测试放在组件 crate 自己的 `tests/` 里，不放进 examples 或 playground。需要真实服务（PostgreSQL、Redis）的测试标 `#[ignore = "requires running ..."]`，并在文件头写明手动运行的命令。
-- 需要联网的测试也标 `#[ignore]`。
+- 组件的测试放在组件 crate 自己的 `tests/` 里，不放进 examples 或 playground。
+- 测试分单元、mock、container、live 四层，container 和 live 在模块上标 `#[container]` / `#[live]`，分层和运行命令见 `AGENTS.md`。
 - 除 `hygiea-examples` 以外，其他 crate 不建 `examples/`。
 - `playground` 是独立的 crate，不在 workspace 里（根 `Cargo.toml` 的 `exclude`），有自己的 `Cargo.lock` 和 `target/`，要在它的目录里执行 `cargo test`。只有 `tests/`。`src/lib.rs` 是空的，留着只是因为 Cargo 要求每个包至少有一个 lib 或 bin。playground 里的代码不保证一直能编译通过。
 - `test-support` 不单独建 `tests/`。它会在各 crate 的测试里被用到，出问题那些测试就会失败。里面有独立逻辑时，在对应文件里写单元测试。

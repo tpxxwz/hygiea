@@ -7,7 +7,7 @@
 //!   由 [`Mocked::assert_valid`](super::Mocked::assert_valid) 统一报；同时作为这次请求的响应返回给 client：
 //!   body 是 `{"err_code":..,"message":..}`，响应头 `x-hygiea-mock-problem` 是错误码，没有路由 404，其他 500
 
-use hygiea::hy_err;
+use hygiea_core::hy_err;
 
 #[derive(hy_err)]
 #[err_code_internal_module_prefix = "800"]

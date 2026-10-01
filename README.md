@@ -2,7 +2,7 @@
 
 > 基于组件的 Rust 应用框架，附带错误、日志、日期、字符串等基础功能的封装和扩展
 
-[![Rust](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/rust-1.94.1%2B-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#许可证)
 
 ## 概述
@@ -26,7 +26,7 @@
 | 配置加载 | 环境配置文件 → 额外配置文件 → 环境变量 → 命令行，后面的覆盖前面的；环境用 `--env` 或 `HYGIEA_ENV` 选 |
 | 优雅关闭 | 收到 Ctrl+C / SIGTERM 后先关 Deferred 组件（停止接请求），再按启动的逆序关其余组件，每个组件单独计时，超时强制结束；支持关闭前延迟，方便 k8s 摘流量 |
 | 日志 | 启动时按配置初始化 tracing（控制台、按时间滚动的文件） |
-| 现成组件 | 数据库连接池（sqlx / SeaORM × PostgreSQL / SQLite）、Redis 连接池、HTTP 服务（axum）、gRPC 服务（tonic），见下文「组件」 |
+| 现成组件 | 数据库连接池（sqlx / SeaORM × PostgreSQL / SQLite）、Redis 连接池、HTTP 服务（axum）、gRPC 服务（tonic）、AWS S3 客户端，见下文「组件」 |
 
 ### 基础能力（常开）
 
@@ -65,6 +65,7 @@
 | `http-axum` | `hygiea-http`（`axum`） | `hygiea::http::AxumComponent` |
 | `http-client-reqwest` | `hygiea-http-client`（`reqwest`） | `hygiea::http_client::reqwest_client::ReqwestComponent` / `ReqwestConfig`，请求 API 也在这个模块；在 `Resources` 中提供 `Client` |
 | `grpc-tonic` | `hygiea-grpc`（`tonic`） | `hygiea::grpc::TonicComponent` |
+| `aws-s3` | `hygiea-aws`（`s3`） | `hygiea::aws::AwsComponent` / `AwsConfig`；在 `Resources` 中提供 `SdkConfig` 和 `aws_sdk_s3::Client` |
 
 ## 快速开始
 
@@ -305,7 +306,9 @@ hygiea                         facade：重新导出全部内容，按 feature �
 | `hygiea-http` | 是 | HTTP 服务组件 |
 | `hygiea-http-client` | 是 | reqwest HTTP 客户端及组件 |
 | `hygiea-grpc` | 是 | gRPC 服务组件 |
-| `hygiea-test` | 是 | 给使用方写测试用，作为 dev-dependency：测试日志、mock HTTP 服务（httpmock + TOML cassette + Rhai）、测试用 http client |
+| `hygiea-aws` | 是 | AWS SDK 组件（公共配置 + S3 客户端） |
+| `hygiea-test` | 是 | 给使用方写测试用，作为 dev-dependency：测试日志、mock HTTP 服务（httpmock + TOML cassette + Rhai）、测试分层宏（`#[container]` / `#[live]`）、启动容器 |
+| `hygiea-test-macros` | 是 | `hygiea-test` 的过程宏（`#[container]` / `#[live]`），经 `hygiea-test` 使用 |
 | `test-support` | 否 | hygiea 自己各 crate 的测试共用工具，只作为 dev-dependency |
 | `hygiea-examples` | 否 | 可运行的使用示例 |
 | `playground` | 否 | 临时调查和暂存代码 |

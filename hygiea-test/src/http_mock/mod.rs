@@ -138,7 +138,7 @@ use std::sync::atomic::AtomicUsize;
 
 use httpmock::MockServer;
 use httpmock::prelude::HttpMockRequest;
-use hygiea::{HyErr, ResultExt, err};
+use hygiea_core::{HyErr, ResultExt, err};
 use parking_lot::Mutex;
 use rhai::Engine;
 use serde::Serialize;
@@ -706,7 +706,7 @@ impl Mocked {
     }
 
     /// 有没有某种问题：`mock.has_problem(HttpMockRuntimeErr::NoRoute)`
-    pub fn has_problem(&self, kind: impl hygiea::ErrKind) -> bool {
+    pub fn has_problem(&self, kind: impl hygiea_core::ErrKind) -> bool {
         let code = kind.err_code();
         self.shared
             .problems

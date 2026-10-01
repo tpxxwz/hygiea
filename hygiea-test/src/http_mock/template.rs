@@ -6,7 +6,7 @@
 
 use std::sync::LazyLock;
 
-use hygiea::{HyErr, err};
+use hygiea_core::{HyErr, err};
 use regex::Regex;
 
 use super::error::HttpMockErr;

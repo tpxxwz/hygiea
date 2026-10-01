@@ -1,0 +1,5 @@
+error: #[container] takes no arguments
+ --> tests/test_tier_ui/fail/container_with_args.rs:2:26
+  |
+2 | #[hygiea_test::container(env = ["A"])]
+  |                          ^^^

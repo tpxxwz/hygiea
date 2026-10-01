@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 
 use httpmock::When;
-use hygiea::{HyErr, err};
+use hygiea_core::{HyErr, err};
 use serde::Deserialize;
 use serde_json::Value;
 

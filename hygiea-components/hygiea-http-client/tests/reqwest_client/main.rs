@@ -1,7 +1,6 @@
 //! http 模块的端到端测试：起本地服务，只用公开 API 发请求。
 //!
 //! - `client_config`：ReqwestConfig 各选项在真实请求上的效果
-//! - `config_file`：从 TOML 反序列化 ReqwestConfig
 //! - `send`：请求内容、响应返回方式、各类失败报什么错
 //! - `logs`：日志什么时候打、打在什么级别
 //! - `masking`：日志里的字段打码
@@ -30,7 +29,6 @@ mod support;
 
 mod api_envelope;
 mod client_config;
-mod config_file;
 mod logs;
 mod masking;
 mod retry;

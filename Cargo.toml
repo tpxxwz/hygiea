@@ -5,6 +5,7 @@ members = [
     "hygiea-core",
     "hygiea-macros",
     "hygiea-test",
+    "hygiea-test-macros",
     "test-support",
     "hygiea-examples",
     "hygiea-components/hygiea-db",
@@ -12,6 +13,7 @@ members = [
     "hygiea-components/hygiea-http",
     "hygiea-components/hygiea-http-client",
     "hygiea-components/hygiea-grpc",
+    "hygiea-components/hygiea-aws",
 ]
 # 独立的 crate，不属于这个 workspace：有自己的 Cargo.lock 和 target
 exclude = ["playground"]
@@ -22,10 +24,10 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 authors = ["wjj"]
 repository = "https://github.com/tpxxwz/hygiea"
-rust-version = "1.88"
+rust-version = "1.94.1"
 
 [workspace.dependencies]
-# 内部依赖，版本由 cargo-release 发布时自动对齐，无需手动修改
+# 内部依赖，版本由 release/release.sh（cargo set-version）发版时自动对齐，无需手动修改
 hygiea = { path = "hygiea", version = "0.1.1-alpha.5" }
 hygiea-core = { path = "hygiea-core", version = "0.1.1-alpha.5", default-features = false }
 hygiea-macros = { path = "hygiea-macros", version = "0.1.1-alpha.5" }
@@ -35,82 +37,91 @@ hygiea-redis = { path = "hygiea-components/hygiea-redis", version = "0.1.1-alpha
 hygiea-http = { path = "hygiea-components/hygiea-http", version = "0.1.1-alpha.5" }
 hygiea-http-client = { path = "hygiea-components/hygiea-http-client", version = "0.1.1-alpha.5" }
 hygiea-grpc = { path = "hygiea-components/hygiea-grpc", version = "0.1.1-alpha.5" }
+hygiea-aws = { path = "hygiea-components/hygiea-aws", version = "0.1.1-alpha.5" }
 # 使用方写测试用，作为 dev-dependency 引入，随其他 crate 一起发布
 hygiea-test = { path = "hygiea-test", version = "0.1.1-alpha.5" }
+hygiea-test-macros = { path = "hygiea-test-macros", version = "0.1.1-alpha.5" }
 # 只做 dev-dependency、不发布，所以不带版本号（cargo publish 时会自动去掉没有版本号的 dev-dependency）
 test-support = { path = "test-support" }
 
 # 过程宏依赖
-quote = "1.0.47"
-syn = { version = "3.0.5", features = ["full"] }
-proc-macro2 = "1.0.107"
+quote = "1.0"
+syn = { version = "3.0", features = ["full"] }
+proc-macro2 = "1.0"
 
 # 编译期报错的回归测试（只做 dev-dependency）
 trybuild = "1"
 
 # 核心依赖
-serde = "1.0.229"
-serde_json = "1.0.151"
-linkme = "0.3.37"
-ctor = "1.0.13"
-minijinja = "2.24.0"
-parking_lot = "0.12.5"
-dashmap = "6.2.1"
-lru = "0.18.4"
+serde = "1.0"
+serde_json = "1.0"
+linkme = "0.3"
+ctor = "1.0"
+minijinja = "2.24"
+parking_lot = "0.12"
+dashmap = "6.2"
+lru = "0.18"
 
 # CLI & 配置文件加载
-clap   = { version = "4.6.7", features = ["derive"] }
-config = "0.15.25"
+clap   = { version = "4.6", features = ["derive"] }
+config = "0.15"
 
 # 可选功能依赖
 # 不在这里开 features：workspace 继承只能加不能减，各 crate 按实际用到的自己声明
-tokio = { version = "1.53.1", default-features = false }
-async-trait = "0.1.92"
-anyhow = "1.0.104"
+tokio = { version = "1.53", default-features = false }
+async-trait = "0.1"
+anyhow = "1.0"
 
 # Observability
-tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", features = ["env-filter", "time"] }
-tracing-appender = "0.2.5"
-tracing-log = "0.2.0"
-log = "0.4.34"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
+tracing-appender = "0.2"
+tracing-log = "0.2"
+log = "0.4"
 
 # Database
-sea-orm = { version = "2.0.3", features = ["sqlx-postgres", "runtime-tokio-rustls", "mock"] }
-sqlx = { version = "0.9.0", features = ["runtime-tokio", "tls-rustls-ring-webpki", "macros"] }
+sea-orm = { version = "2.0", features = ["sqlx-postgres", "runtime-tokio-rustls", "mock"] }
+sqlx = { version = "0.9", features = ["runtime-tokio", "tls-rustls-ring-webpki", "macros"] }
 
 # HTTP
-axum = "0.8.9"
-tower-http = { version = "0.7.1", features = ["timeout", "limit"] }
-http = "1.5.0"
+axum = "0.8"
+tower-http = { version = "0.7", features = ["timeout", "limit"] }
+http = "1.5"
 proc-macro-crate = "3"
 toml = "1"
 encoding_rs = "0.8"
 bytes = "1"
-reqwest = { version = "0.13.5", features = [
+reqwest = { version = "0.13", features = [
     "json", "query", "form", "stream", "multipart", "charset",
     "gzip", "brotli", "zstd", "deflate",
     "cookies", "http2", "socks", "system-proxy", "rustls",
 ], default-features = false }
-tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
-tokio-util = { version = "0.7.19", features = ["io"] }
-futures-util = "0.3.34"
-regex = "1.13.1"
-regex-automata = "0.4.18"
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
+tokio-util = { version = "0.7", features = ["io"] }
+futures-util = "0.3"
+regex = "1.13"
+regex-automata = "0.4"
 
 # gRPC
-tonic = "0.14.6"
-tokio-stream = { version = "0.1.19", features = ["sync", "net"] }
+tonic = "0.14"
+tokio-stream = { version = "0.1", features = ["sync", "net"] }
+
+# AWS：公共配置和凭证链，各服务的 SDK 各是一个 crate
+aws-config = "1.12"
+aws-credential-types = "1"
+aws-sdk-s3 = "1.151"
 
 # Time
-chrono = { version = "0.4.45", features = ["serde"] }
-time = { version = "0.3.55", features = ["formatting", "parsing", "macros"] }
-time-tz = { version = "2.0.0", features = ["system"] }
+chrono = { version = "0.4", features = ["serde"] }
+time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
+time-tz = { version = "2.0", features = ["system"] }
 
 # 测试依赖
-serial_test = "4.0.1"
+serial_test = "4.0"
+# 测试里用代码启动容器（Docker；Podman 把 DOCKER_HOST 指向它的兼容 socket），hygiea-test 的 container 模块用
+testcontainers = { version = "0.28", features = ["http_wait_plain"] }
 # 测试里的临时文件和目录：drop 时自动删除，断言失败也不会留下文件
-tempfile = "3.27.0"
+tempfile = "3.27"
 # hygiea-test 的 http-mock：本地 mock HTTP 服务（再导出给使用方）、cassette 里的 Rhai 脚本、
 # 脚本里解析表单 body
 httpmock = "0.8"

@@ -285,3 +285,30 @@ base_path = ""
 addr = "0.0.0.0:50051"
 # 关闭时最多等多久（秒）让手上的请求处理完，不写用 registry.shutdown_timeout_secs
 # shutdown_timeout_secs = 30
+
+# =====================================================================================
+# 组件：AwsConfig（hygiea::aws，feature aws-s3）
+# =====================================================================================
+# 所有服务共用的配置，对应 aws_config::SdkConfig。都不写时走 AWS 官方的默认链：
+# 环境变量（AWS_REGION、AWS_ACCESS_KEY_ID、AWS_ENDPOINT_URL 等）、~/.aws/config 和 ~/.aws/credentials、
+# 容器和 EC2 的实例凭证。写了的项优先于默认链
+[aws]
+# 区域，比如 "us-east-1"；Cloudflare R2 填 "auto"
+# region = "auto"
+# 连兼容 S3 的第三方服务（R2、MinIO、七牛）时填
+# endpoint_url = "https://<ACCOUNT_ID>.r2.cloudflarestorage.com"
+# ~/.aws/config 里的 profile 名，不写用 AWS_PROFILE 或 default
+# profile = "default"
+# 写死的凭证，写了就不走默认的凭证链；session_token 只有临时凭证（STS）才有
+# credentials = { access_key_id = "...", secret_access_key = "...", session_token = "..." }
+
+# S3 专属项，叠加在上面的公共配置之上
+[aws.s3]
+# 只给 S3 用的 endpoint，覆盖上面的 endpoint_url
+# endpoint_url = "http://localhost:9000"
+# 用路径形式寻址（https://host/bucket/key）。MinIO、RustFS 这类自建服务一般要开，AWS 和 R2 不用
+force_path_style = false
+# 什么时候给请求算校验和 / 校验响应的校验和：when_supported / when_required。
+# 不写用 SDK 默认的 when_supported；不认新校验和头的第三方服务报错时改成 when_required
+# request_checksum_calculation = "when_required"
+# response_checksum_validation = "when_required"

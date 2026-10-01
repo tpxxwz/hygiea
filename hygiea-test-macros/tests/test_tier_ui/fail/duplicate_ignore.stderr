@@ -1,0 +1,5 @@
+error: #[container] already adds #[ignore], remove this one
+ --> tests/test_tier_ui/fail/duplicate_ignore.rs:6:9
+  |
+6 |         #[ignore]
+  |         ^^^^^^^^^

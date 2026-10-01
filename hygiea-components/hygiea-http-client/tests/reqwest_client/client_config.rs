@@ -285,22 +285,24 @@ mod timeouts {
         assert!(is_timeout(&err));
     }
 
-    /// connect_timeout：连一个不可路由的地址，TCP 握手本身会一直挂起，到点后报错。
-    /// 需要真实的网络路由行为（丢包而不是本机立刻拒绝），本地/CI 环境不一定有，标记手动执行
+    /// connect_timeout：连一个只接受 TCP、从不回话的本地服务，用 https:// 让 TLS 握手卡住，建连阶段到点后报错。
+    /// connect_timeout 覆盖 DNS、TCP 握手、TLS 握手三段；本机让 TCP 握手本身卡住做不到跨平台，所以卡在 TLS 这段，
+    /// 见 `hygiea_test::tcp`
     #[tokio::test]
-    #[ignore = "needs network"]
-    async fn connect_timeout_fires_on_unroutable_address() {
+    async fn connect_timeout_fires_when_tls_handshake_stalls() {
+        let target = hygiea_test::tcp::silent();
         let client = ReqwestConfig {
             connect_timeout: Some(Duration::from_millis(200)),
             ..local_config()
         }
         .build()
         .unwrap();
-        let err = RequestConfig::plain(Method::GET, "http://10.255.255.1/x")
+        let err = RequestConfig::plain(Method::GET, format!("{}/x", target.https_url()))
             .send::<Bytes>(&client)
             .await
             .unwrap_err();
         assert!(err.is(BaseHttpErr::RequestFailed));
+        assert!(reqwest_source(&err).is_connect(), "{err:?}");
         assert!(is_timeout(&err));
     }
 }

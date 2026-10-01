@@ -42,13 +42,46 @@
 
 | 内容 | 位置 |
 |---|---|
-| 单元测试 | 源文件里的 `#[cfg(test)] mod tests` |
-| crate 的集成测试（组件的也放这里） | `<crate>/tests/` |
-| 宏的测试：编译期报错（trybuild），fixture 经 facade 使用宏 | `hygiea-macros/tests/` |
+| 单元测试：纯逻辑（配置默认值、解析、builder、`provides()` 这类），可以测私有函数 | 源文件里的 `#[cfg(test)] mod tests` |
+| crate 的集成测试：要把组件跑起来、起本地服务或容器的；给使用方看的示范写法（只用公开 API） | `<crate>/tests/` |
+| 宏的测试：编译期报错（trybuild），fixture 经宏所在的 facade 使用宏 | `hygiea-macros/tests/`、`hygiea-test-macros/tests/` |
 | 给使用方看的示例 | `hygiea-examples/examples/<主题>/`，每个在 `Cargo.toml` 里用 `[[example]]` 声明，名字 `<目录>_<文件>` |
 | 调查、速查、暂存代码 | `playground/tests/` |
 
-- 需要真实服务（PostgreSQL、Redis）或联网的测试标 `#[ignore = "..."]`，文件头写明手动运行的命令。
+- 测试按依赖分四层，后两层用 `hygiea_test::{container, live}` 标注（内部和使用方用同一套）：
+
+  | 层 | 内容 | 默认 `cargo test` | agent / CI 跑不跑 | 写法 |
+  |---|---|---|---|---|
+  | 单元 | 纯逻辑：参数、默认值、配置解析 | 跑 | 跑 | `#[test]` |
+  | mock | 进程内的本地服务（`test_support::http_server`、`hygiea-test` 的 http_mock；测建连超时用 `hygiea_test::tcp::silent()`） | 跑 | 跑 | `#[test]` / `#[tokio::test]` |
+  | container | 用 `hygiea_test::container::ContainerSpec` 在代码里启动容器（需要 Docker） | 不跑 | 跑（本机要有 Docker） | 模块上标 `#[container]` |
+  | live | 连使用者自己控制的真实服务（R2、AWS 等），凭证从环境变量读 | 不跑 | **不跑**，只由用户手动跑 | 模块上标 `#[live(env = ["A", ..])]` |
+
+  模块里照常用 `#[test]` / `#[tokio::test]` 标测试，宏给它们加 `#[ignore]`，并把模块内容挪进层名子模块（测试名 `<模块名>::container::<函数名>`）。
+  container 层：`cargo test -p <crate> --features .. -- --ignored ::container::`；live 层：`-- --ignored ::live::`。
+  有这两层的测试文件，文件头写明运行命令和需要的环境变量。
+  组件用 `hygiea-test = { workspace = true }` 作为 dev-dependency 引入。`hygiea-test` 只依赖 core，
+  core 自己的测试不能用它（会出现两份 core）。
+- 内部 crate 之间的 dev-dependency：被依赖的 crate 反过来（直接或间接）依赖自己时，形成循环，只能写 path、不写版本
+  （`cargo publish` 打包时会去掉没有版本号的 dev-dependency），目前是 `hygiea-macros` → `hygiea`、
+  `hygiea-test-macros` → `hygiea-test`。没有循环的用 `workspace = true`，`cargo publish --workspace` 会按依赖关系
+  （包括 dev-dependency）排发布顺序。
+- 组件测的是我们自己写的部分：对第三方框架的封装和增强，比如自己加的配置项和它怎么转成第三方的配置、
+  默认值、错误转换、生命周期（启动、按名字放进 Resources、关闭）、日志打码这类附加行为。
+  第三方框架自己的功能（连接池怎么复用、协议细节、它自己的配置项各自的效果）由它自己保证，不逐项测；
+  只用一两个测试确认接上了、能用就行（比如连上后执行一条查询）。不为了凑覆盖率去测第三方的行为。
+- 组件的测试照这个结构写（新加组件直接参考，`hygiea-aws` 是完整的例子）：
+
+  ```
+  hygiea-components/hygiea-xxx/
+  ├── src/…              #[cfg(test)] mod tests：纯逻辑的单元测试
+  └── tests/
+      ├── component.rs   组件经 Registry 启动、按名字提供资源，不连外部服务
+      └── <服务>.rs       连真实服务，比如 pg.rs / redis.rs / s3.rs：
+                         #[container] mod <服务名> { .. }      用 ContainerSpec 起容器，镜像写固定 tag
+                         #[live(env = [..])] mod <名字> { .. }  托管服务和自建容器行为有差别时才写（比如 R2）
+                         两个模块共用同一份测试逻辑，文件头写明运行命令和环境变量
+  ```
 - 示例不连外部服务，数据库用 SQLite 内存库（`database = ":memory:"`）。
 - 除 `hygiea-examples` 外不建 `examples/` 目录。
 
@@ -57,11 +90,19 @@
 - 改代码过程中只跑改动对应的测试，带上相关 feature，比如 `cargo test -p hygiea-http-client --features reqwest --test reqwest_client`。不要默认跑 `--workspace --all-features` 全量测试，同一条命令不要重复跑。
 - 准备提交时，先分析这次改动需要新增或修改哪些测试，确认后再按范围测。
 - 改了 feature 或 `cfg`，用几种 feature 组合 `cargo check`（不开、只开相关的、`--all-features`）。
+- 改了有 container 层测试的代码，本机有 Docker 时顺带跑对应 crate 的 container 层（`-- --ignored ::container::`）；
+  没有 Docker 就说明没跑。live 层不要跑，需要用户的凭证，改了相关代码时告诉用户要手动跑哪条命令。
+- 仓库目前没有 CI。以后加 CI 时：普通测试 `cargo test --workspace --all-features`；有 Docker 的 runner 上再跑
+  `cargo test --workspace --all-features -- --ignored ::container::`；live 层不放进 CI。
 - 改了宏的报错信息，重新生成 trybuild 快照并检查 diff：
   `TRYBUILD=overwrite cargo test -p hygiea-macros --test hy_err_ui --test redact_ui`
+  （`#[container]` / `#[live]` 的快照：`TRYBUILD=overwrite cargo test -p hygiea-test-macros --test test_tier_ui`）
 
 ## 发版
 
+- 用 `release/release.sh` 发版：升版本号（`cargo set-version`）、改 README 里的版本号、提交、`cargo publish --workspace`、
+  打 tag、push。先 `release/release.sh --dry-run --bump alpha` 检查，再去掉 `--dry-run` 执行。
+  被 crates.io 限流时脚本自己等待重试；其他原因中断的，修好后用 `release/release.sh --resume` 接着发。用法见脚本开头。
 - 平时改代码不要求同步 `docs/architecture.md`，但每次发新版本前必须核对一遍，让它和实际结构一致：crate 列表、各 crate 的模块和文件、feature 与 facade 的转发关系、测试和示例放在哪。以 `Cargo.toml` 和源码为准，文档跟着改。
 - 发版前同样核对 README 的 feature 表、组件表、示例表是否和 `Cargo.toml`、`hygiea-examples` 一致。
 - 改了框架或组件的配置结构体，同步改 `docs/config-template.toml`；`cargo test -p hygiea --all-features --test config_template` 会检查两者是否一致。

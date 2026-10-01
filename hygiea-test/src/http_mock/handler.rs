@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use httpmock::prelude::{HttpMockRequest, HttpMockResponse};
-use hygiea::{HyErr, err};
+use hygiea_core::{HyErr, err};
 use parking_lot::Mutex;
 use rhai::{AST, Dynamic, Engine, Scope};
 

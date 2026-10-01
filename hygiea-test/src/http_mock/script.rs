@@ -51,8 +51,8 @@
 use std::sync::Arc;
 
 use httpmock::prelude::HttpMockRequest;
-use hygiea::HyErr;
-use hygiea::datetime::{HygieaDateTimeExt, now_utc};
+use hygiea_core::HyErr;
+use hygiea_core::datetime::{HygieaDateTimeExt, now_utc};
 use rhai::{Blob, Dynamic, Engine, EvalAltResult, Scope};
 use serde_json::Value;
 use time::{Duration, UtcDateTime};

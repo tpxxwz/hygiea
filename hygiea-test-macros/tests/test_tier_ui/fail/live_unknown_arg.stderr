@@ -1,0 +1,5 @@
+error: expected `env = ["NAME", ..]`
+ --> tests/test_tier_ui/fail/live_unknown_arg.rs:2:21
+  |
+2 | #[hygiea_test::live(envs = ["A"])]
+  |                     ^^^^

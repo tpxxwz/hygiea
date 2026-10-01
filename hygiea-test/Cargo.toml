@@ -19,7 +19,7 @@ err_code_project_prefix = "999"
 [features]
 default = []
 # 测试里装一次默认日志
-log = ["hygiea/log"]
+log = ["hygiea-core/log"]
 # 本地 mock HTTP 服务：TOML cassette + Rhai 脚本 + 接口约定校验
 http-mock = [
     "dep:httpmock",
@@ -35,11 +35,15 @@ http-mock = [
     "dep:http",
     "dep:time",
 ]
-# 测试用的 reqwest client
-http-client = ["hygiea/http-client-reqwest"]
+# 在代码里启动容器（Docker；Podman 把 DOCKER_HOST 指向它的兼容 socket），给 container 层的测试用
+container = ["dep:testcontainers"]
+# socket 层的工具：建连卡住的本地地址，测 connect_timeout
+tcp = []
 
 [dependencies]
-hygiea = { workspace = true }
+hygiea-core = { workspace = true }
+# #[container] / #[live] 测试分层属性宏
+hygiea-test-macros = { workspace = true }
 httpmock = { workspace = true, optional = true }
 rhai = { workspace = true, optional = true }
 toml = { workspace = true, optional = true }
@@ -54,6 +58,7 @@ parking_lot = { workspace = true, optional = true }
 http = { workspace = true, optional = true }
 # 脚本里的 DateTime 类型
 time = { workspace = true, optional = true }
+testcontainers = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

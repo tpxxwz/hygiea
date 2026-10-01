@@ -1,3 +1,0 @@
-push = true
-pre-release-commit-message = "chore: release {{version}}"
-tag-name = "{{version}}"

@@ -6,7 +6,7 @@
 
 use std::sync::OnceLock;
 
-use hygiea::log::{LogGuard, init_default};
+use hygiea_core::log::{LogGuard, init_default};
 
 /// 装一次 hygiea 的默认日志，一个进程里多次调用只有第一次生效。装失败（比如别处已经装了
 /// subscriber）时忽略，测试照常跑，只是看不到日志

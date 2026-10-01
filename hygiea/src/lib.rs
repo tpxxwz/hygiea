@@ -1,6 +1,6 @@
 //! hygiea：基于组件的 Rust 应用框架（`hygiea::app`），附带错误、日志、日期、字符串等基础功能的封装和扩展。
 //!
-//! 这是 facade crate，使用方只依赖它：core 的内容全部在根上重新导出，组件（db / redis / http / grpc）
+//! 这是 facade crate，使用方只依赖它：core 的内容全部在根上重新导出，组件（db / redis / http / grpc / aws）
 //! 按 feature 导出到对应的子模块。用法、feature 列表、错误码规则见
 //! [README](https://github.com/tpxxwz/hygiea#readme)。
 
@@ -33,3 +33,7 @@ pub use hygiea_http_client as http_client;
 /// gRPC 服务组件：`grpc-tonic`
 #[cfg(feature = "grpc-tonic")]
 pub use hygiea_grpc as grpc;
+
+/// AWS 组件（公共配置 + S3 客户端）：`aws-s3`
+#[cfg(feature = "aws-s3")]
+pub use hygiea_aws as aws;

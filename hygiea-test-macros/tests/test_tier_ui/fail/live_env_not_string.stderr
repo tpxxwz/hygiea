@@ -1,0 +1,5 @@
+error: expected string literal
+ --> tests/test_tier_ui/fail/live_env_not_string.rs:2:28
+  |
+2 | #[hygiea_test::live(env = [A])]
+  |                            ^

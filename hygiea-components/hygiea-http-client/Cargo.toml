@@ -37,6 +37,8 @@ tracing = { workspace = true, optional = true }
 
 [dev-dependencies]
 test-support = { workspace = true }
+# tcp::silent：建连卡住的本地地址，测 connect_timeout
+hygiea-test = { workspace = true, features = ["tcp"] }
 toml = { workspace = true }
 tokio = { workspace = true, features = ["full", "test-util"] }
 

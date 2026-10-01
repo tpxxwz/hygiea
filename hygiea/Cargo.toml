@@ -12,14 +12,6 @@ categories = ["development-tools"]
 # crates.io 页面显示的 README：用仓库根目录那份，打包时 cargo 会把它复制进包里
 readme = "../README.md"
 
-# 发版时 cargo-release 自动把 README 里的版本号改成新版本（路径相对本包目录）
-[package.metadata.release]
-pre-release-replacements = [
-    { file = "../README.md", search = 'hygiea = \{ version = "[^"]+"', replace = 'hygiea = { version = "{{version}}"', min = 0 },
-    { file = "../README.md", search = 'hygiea = "[0-9][^"]*"', replace = 'hygiea = "{{version}}"', min = 0 },
-    { file = "../README.md", search = 'hygiea@[0-9][^ ]*', replace = 'hygiea@{{version}}', min = 0 },
-]
-
 [dependencies]
 hygiea-core = { workspace = true }
 # 组件 crate，按下面的 feature 引入
@@ -28,6 +20,7 @@ hygiea-redis = { workspace = true, optional = true }
 hygiea-http = { workspace = true, optional = true }
 hygiea-http-client = { workspace = true, optional = true }
 hygiea-grpc = { workspace = true, optional = true }
+hygiea-aws = { workspace = true, optional = true }
 
 
 [dev-dependencies]
@@ -48,7 +41,7 @@ datetime-iana = ["hygiea-core/datetime-iana"]
 datetime-chrono = ["hygiea-core/datetime-chrono"]
 full = ["hygiea-core/full"]
 
-# ---- 组件：hygiea::db / redis / http / grpc。组件 crate 自己依赖 core 的 app ----
+# ---- 组件：hygiea::db / redis / http / grpc / aws。组件 crate 自己依赖 core 的 app ----
 db-sqlx-postgres = ["dep:hygiea-db", "hygiea-db/sqlx", "hygiea-db/postgres"]
 db-sqlx-sqlite = ["dep:hygiea-db", "hygiea-db/sqlx", "hygiea-db/sqlite"]
 db-seaorm-postgres = ["dep:hygiea-db", "hygiea-db/seaorm", "hygiea-db/postgres"]
@@ -56,3 +49,4 @@ redis-fred = ["dep:hygiea-redis", "hygiea-redis/fred"]
 http-axum = ["dep:hygiea-http", "hygiea-http/axum"]
 http-client-reqwest = ["dep:hygiea-http-client", "hygiea-http-client/reqwest"]
 grpc-tonic = ["dep:hygiea-grpc", "hygiea-grpc/tonic"]
+aws-s3 = ["dep:hygiea-aws", "hygiea-aws/s3"]

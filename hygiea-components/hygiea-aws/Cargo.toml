@@ -1,0 +1,43 @@
+[package]
+name = "hygiea-aws"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "AWS SDK component for hygiea: shared config and service clients (S3)"
+
+# 选服务：每个服务一个 feature，只引入对应的 aws-sdk-* crate。默认什么都不开
+[features]
+default = []
+s3 = ["dep:aws-sdk-s3"]
+
+[dependencies]
+hygiea-core = { workspace = true, features = ["app"] }
+aws-config = { workspace = true }
+aws-credential-types = { workspace = true }
+aws-sdk-s3 = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["rt"] }
+tracing = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+toml = { workspace = true }
+# #[container] / #[live] 和启动容器。hygiea-test 只依赖 core，cargo publish --workspace 会把它排在组件前面发布，
+# 所以可以带版本号
+hygiea-test = { workspace = true, features = ["container"] }
+
+[[test]]
+name = "component"
+path = "tests/component.rs"
+required-features = ["s3"]
+
+[[test]]
+name = "s3"
+path = "tests/s3.rs"
+required-features = ["s3"]
+
+[package.metadata.docs.rs]
+all-features = true
