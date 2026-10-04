@@ -12,7 +12,7 @@ pub mod string;
 #[doc(hidden)]
 pub use error::__private;
 // err! / bail! 由 #[macro_export] 导出在 crate 根
-pub use error::{BaseErr, ErrKind, HyErr, ResultExt, SUCCESS_CODE, hy_err};
+pub use error::{BaseErr, ErrKind, HyErr, Result, ResultExt, SUCCESS_CODE, hy_err};
 
 #[ctor::ctor(unsafe)]
 fn init_hygiea() {

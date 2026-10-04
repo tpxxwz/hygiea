@@ -114,17 +114,18 @@ pub(super) fn checked_headers(headers: impl IntoHeaders) -> Result<HeaderMap, Hy
 /// 跨域重定向时 reqwest 会自动剥掉这个头。`Debug` 输出里凭据显示成 `***`
 #[derive(Clone)]
 pub enum Auth {
+    /// 拼成 `Authorization: Basic <base64(username:password)>`，没有密码时是 `base64(username:)`
     Basic {
         username: String,
         password: Option<String>,
     },
+    /// 拼成 `Authorization: Bearer <token>`
     Bearer(String),
     /// 自定义 scheme，拼成 `Authorization: <scheme> <credentials>`。
     /// 交易所的 HMAC 签名、AWS 的 `AWS4-HMAC-SHA256` 这类都走这里
-    Custom {
-        scheme: String,
-        credentials: String,
-    },
+    Custom { scheme: String, credentials: String },
+    /// 现成的整段值，原样写成 `Authorization: <value>`，不加任何 scheme
+    Plain(String),
 }
 
 /// 手写而不是 derive：derive 出来的 `Debug` 会把 token、密码原样打出来
@@ -143,6 +144,7 @@ impl fmt::Debug for Auth {
                 .field("scheme", scheme)
                 .field("credentials", &masked)
                 .finish(),
+            Self::Plain(_) => f.debug_tuple("Plain").field(&masked).finish(),
         }
     }
 }

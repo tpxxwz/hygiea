@@ -145,6 +145,7 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
                     AUTHORIZATION,
                     auth_value(format!("{scheme} {credentials}"))?,
                 ),
+                Auth::Plain(value) => req.header(AUTHORIZATION, auth_value(value)?),
             };
         }
         req = self.body.apply(req)?;
@@ -416,6 +417,15 @@ mod tests {
             let req = with_auth(Auth::Bearer("tok".into()));
             let value = auth_header(&req);
             assert_eq!(value, "Bearer tok");
+            assert!(value.is_sensitive());
+        }
+
+        /// Plain：值原样写进去，不加 scheme，sensitive
+        #[test]
+        fn plain() {
+            let req = with_auth(Auth::Plain("tok".into()));
+            let value = auth_header(&req);
+            assert_eq!(value, "tok");
             assert!(value.is_sensitive());
         }
 

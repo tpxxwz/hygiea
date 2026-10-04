@@ -78,6 +78,9 @@ fn templates() -> &'static Environment<'static> {
 /// 被包裹的外部错误。`Send + Sync + 'static` 是 `anyhow` / tokio 任务边界的通行约束
 type Source = Box<dyn Error + Send + Sync + 'static>;
 
+/// 错误类型默认是 [`HyErr`] 的 `Result`，要别的错误类型时写 `Result<T, E>`
+pub type Result<T, E = HyErr> = std::result::Result<T, E>;
+
 /// 错误本体，由 `#[derive(hy_err)]` 的 enum 生成：没有模板变量的用 `err!(X)`，
 /// 有变量的用 `err!(X, { .. })`，用错了编译期报错。没有变量的模板渲染出来就是原样字符串，固定文案也走这里。
 ///
