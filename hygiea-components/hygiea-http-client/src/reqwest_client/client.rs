@@ -1,10 +1,6 @@
 //! reqwest 的客户端配置 [`ReqwestConfig`] 和应用组件 [`ReqwestComponent`]。
 
 use std::net::SocketAddr;
-#[cfg(feature = "debug-log")]
-use std::sync::Arc;
-#[cfg(feature = "debug-log")]
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use reqwest::redirect::Policy;
@@ -218,16 +214,10 @@ impl ReqwestConfig {
         self
     }
 
-    /// 打开或关闭 debug 日志，见 [`ReqwestConfig::debug`](#structfield.debug)
-    #[cfg(feature = "debug-log")]
-    pub fn debug(mut self, on: bool) -> Self {
-        self.debug = on;
-        self
-    }
-
     /// 造出 [`ReqwestClient`]。请求头无效时返回 `InvalidConfig`；代理 URL 或 reqwest 构建失败时返回
     /// [`ClientBuildFailed`](super::BaseHttpErr::ClientBuildFailed)，reqwest 错误保留在 source 上
     pub fn build(self) -> Result<ReqwestClient> {
+        // debug 状态要用的配置先取出来；reqwest 先校验（UA 不合法时报 ClientBuildFailed），再算 debug 状态
         #[cfg(feature = "debug-log")]
         let (debug, user_agent, default_headers) = (
             self.debug,
@@ -238,40 +228,9 @@ impl ReqwestConfig {
         Ok(ReqwestClient {
             inner,
             #[cfg(feature = "debug-log")]
-            default_headers: Arc::new(client_default_headers(user_agent, default_headers)?),
-            #[cfg(feature = "debug-log")]
-            switches: Arc::new(DebugSwitches {
-                debug: AtomicBool::new(debug),
-                pretty: AtomicBool::new(false),
-            }),
+            debug: super::debug::DebugState::new(debug, user_agent, default_headers)?,
         })
     }
-}
-
-/// 照 reqwest（0.13）`ClientBuilder` 的规则算出 client 级默认头，和交给 reqwest 的是同一份配置：
-/// `ClientBuilder::new` 先放 `Accept: */*`，`user_agent` 再 insert `User-Agent`，
-/// `default_headers` 最后逐个 insert——同名的覆盖前面的，同名多值只剩最后一个。
-/// reqwest 没有读回默认头的接口，只能照抄；它的规则变了由集成测试里的对照（日志里的请求头 vs 服务端收到的）发现
-#[cfg(feature = "debug-log")]
-fn client_default_headers(
-    user_agent: Option<String>,
-    default_headers: HeaderMapConfig,
-) -> Result<HeaderMap> {
-    use reqwest::header::{ACCEPT, HeaderValue, USER_AGENT};
-
-    let mut headers = HeaderMap::new();
-    headers.insert(ACCEPT, HeaderValue::from_static("*/*"));
-    if let Some(ua) = user_agent {
-        let ua = HeaderValue::try_from(ua)
-            .map_err(|e| err!(BaseAppErr::InvalidConfig, format!("user agent: {e}")))?;
-        headers.insert(USER_AGENT, ua);
-    }
-    let configured = HeaderMap::try_from(default_headers)
-        .map_err(|e| err!(BaseAppErr::InvalidConfig, format!("default headers: {e}")))?;
-    for (name, value) in &configured {
-        headers.insert(name.clone(), value.clone());
-    }
-    Ok(headers)
 }
 
 // ---------------------------- 客户端 ----------------------------
@@ -281,56 +240,9 @@ fn client_default_headers(
 #[derive(Debug, Clone)]
 pub struct ReqwestClient {
     pub(super) inner: Client,
-    /// 建立时交给 reqwest 的 client 级默认头（`Accept: */*` → user_agent → default_headers 合并后），之后不会变。
-    /// 目前只在 debug 日志里用来补全请求头
+    /// debug 日志的状态（client 级默认头、两个开关），所有 clone 共享，见 debug.rs
     #[cfg(feature = "debug-log")]
-    pub(super) default_headers: Arc<HeaderMap>,
-    /// debug 日志的开关，所有 clone 共享
-    #[cfg(feature = "debug-log")]
-    switches: Arc<DebugSwitches>,
-}
-
-/// debug 日志的两个开关。每次请求在发出前读一次，这次请求的两条日志按那时的值打
-#[cfg(feature = "debug-log")]
-#[derive(Debug)]
-struct DebugSwitches {
-    /// 初始值来自 `ReqwestConfig` 的 `debug` 字段
-    debug: AtomicBool,
-    /// JSON 缩进成多行，默认关（一行紧凑的 JSON）
-    pretty: AtomicBool,
-}
-
-impl ReqwestClient {
-    /// 默认配置、打开 debug 日志的 client，就是 `ReqwestConfig::default().debug(true).build()`。
-    /// 只在 `debug-log` feature 下存在，给测试用；要改别的配置就用 [`ReqwestConfig::debug`](ReqwestConfig::debug) 那条写法
-    #[cfg(feature = "debug-log")]
-    pub fn debug() -> Result<Self> {
-        ReqwestConfig::default().debug(true).build()
-    }
-
-    /// 打开或关闭 debug 日志，初始值是 [`ReqwestConfig::debug`](ReqwestConfig::debug)。
-    /// 原地改，这个 client 的所有 clone（包括组件放进 Resources 的那份）一起变；已经发出的请求不受影响。
-    /// 只在 `debug-log` feature 下存在
-    #[cfg(feature = "debug-log")]
-    pub fn set_debug(&self, on: bool) {
-        self.switches.debug.store(on, Ordering::Relaxed);
-    }
-
-    /// debug 日志的 JSON 要不要缩进成多行，默认关：一行紧凑的 JSON，消息和 JSON 之间是空格。
-    /// 和 [`ReqwestClient::set_debug`] 一样原地改、所有 clone 一起变。只在 `debug-log` feature 下存在
-    #[cfg(feature = "debug-log")]
-    pub fn set_pretty(&self, on: bool) {
-        self.switches.pretty.store(on, Ordering::Relaxed);
-    }
-
-    /// 这次请求的 debug 设置：`None` 表示 debug 关，`Some(pretty)` 表示开
-    #[cfg(feature = "debug-log")]
-    pub(super) fn debug_mode(&self) -> Option<bool> {
-        self.switches
-            .debug
-            .load(Ordering::Relaxed)
-            .then(|| self.switches.pretty.load(Ordering::Relaxed))
-    }
+    pub(super) debug: std::sync::Arc<super::debug::DebugState>,
 }
 
 /// 把配置铺到 reqwest 原生的 `ClientBuilder` 上。不对外：原生的 `Client` 用不了本模块的 `send`
@@ -575,84 +487,6 @@ mod tests {
             .unwrap_err();
             assert!(err.is(BaseHttpErr::ClientBuildFailed));
             assert!(err.source().is_some());
-        }
-    }
-
-    /// `debug`：开关和 client 级默认头（debug 日志补全请求头用）
-    #[cfg(feature = "debug-log")]
-    mod debug {
-        use super::*;
-
-        /// 默认关，`.debug(true)` 打开，build 后带到 ReqwestClient 上
-        #[test]
-        fn switch_reaches_client() {
-            assert_eq!(ReqwestConfig::default().build().unwrap().debug_mode(), None);
-            let client = ReqwestConfig::default().debug(true).build().unwrap();
-            assert_eq!(client.debug_mode(), Some(false));
-        }
-
-        /// `ReqwestClient::debug()`：默认配置加上 debug
-        #[test]
-        fn shortcut_is_default_with_debug() {
-            let client = ReqwestClient::debug().unwrap();
-            assert_eq!(client.debug_mode(), Some(false));
-            assert_eq!(*client.default_headers, header_map(&[("accept", "*/*")]));
-        }
-
-        /// set_debug / set_pretty 原地改，所有 clone 一起变；pretty 默认关，debug 关时不起作用
-        #[test]
-        fn switches_are_shared_by_clones() {
-            let client = ReqwestConfig::default().build().unwrap();
-            let clone = client.clone();
-            client.set_pretty(true);
-            assert_eq!(clone.debug_mode(), None);
-            client.set_debug(true);
-            assert_eq!(clone.debug_mode(), Some(true));
-            clone.set_pretty(false);
-            assert_eq!(client.debug_mode(), Some(false));
-            clone.set_debug(false);
-            assert_eq!(client.debug_mode(), None);
-        }
-
-        /// 配置文件里写 `debug = true`
-        #[test]
-        fn parsed_from_config_file() {
-            let config: ReqwestConfig = toml::from_str("debug = true").unwrap();
-            assert!(config.debug);
-        }
-
-        /// 什么都不配时只有 reqwest 默认的 `Accept: */*`
-        #[test]
-        fn default_headers_start_with_accept() {
-            let client = ReqwestConfig::default().build().unwrap();
-            assert_eq!(*client.default_headers, header_map(&[("accept", "*/*")]));
-        }
-
-        /// UA 和 default_headers 都算进来；default_headers 里的同名头覆盖 Accept 和 UA，同名多值只剩最后一个
-        #[test]
-        fn default_headers_follow_reqwest_rules() {
-            let mut configured = header_map(&[("accept", "text/plain"), ("x-a", "1")]);
-            configured.append("x-a", "2".parse().unwrap());
-            let client = ReqwestConfig {
-                user_agent: Some("ua".into()),
-                default_headers: configured.into(),
-                ..ReqwestConfig::default()
-            }
-            .build()
-            .unwrap();
-            assert_eq!(
-                *client.default_headers,
-                header_map(&[("accept", "text/plain"), ("user-agent", "ua"), ("x-a", "2")])
-            );
-
-            let client = ReqwestConfig {
-                user_agent: Some("ua".into()),
-                default_headers: header_map(&[("user-agent", "override")]).into(),
-                ..ReqwestConfig::default()
-            }
-            .build()
-            .unwrap();
-            assert_eq!(client.default_headers["user-agent"], "override");
         }
     }
 

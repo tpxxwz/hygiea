@@ -9,7 +9,6 @@
 //! | `body_text(headers, body)` | 响应 body 转文本：文本类解码，二进制只给 `<N bytes ..>`；**不转义** | 本模块 |
 //! | `to_one_line(text)` | 让日志保持一行：`\n` `\r` `\t` 换成空格，其他控制字符转义 | 本模块，单字符转义用 `char::escape_default` |
 //! | `body_preview(headers, body)` | 响应的日志摘要，就是 `to_one_line(body_text(..))` | 本模块 |
-//! | `headers_json(headers)` / `text_json(text)` | debug 日志里的 JSON 值：头转成对象，文本能解析成 JSON 就嵌套、否则是字符串 | 本模块 |
 //!
 //! 标准库的 `str::escape_default` 会转义所有非 ASCII（中文变成 `\u{..}`），`str::escape_debug` 会转义
 //! 引号和反斜杠（JSON 里全是 `\"`），都不适合日志，所以 `to_one_line` 自己实现。
@@ -43,7 +42,7 @@ use std::borrow::Cow;
 
 use reqwest::header::CONTENT_TYPE;
 
-use super::{Bytes, HeaderMap, HeaderValue};
+use super::{Bytes, HeaderMap};
 
 //
 // 调用方在前、被调用的在后：body_preview → body_text → is_text_content_type / decode_charset，
@@ -136,34 +135,6 @@ pub(super) fn to_one_line(text: Cow<'_, str>) -> Cow<'_, str> {
         }
     }
     escaped.into()
-}
-
-/// debug 日志里的头：转成 JSON 对象，同名多值是数组，按 `HeaderMap` 的顺序。
-/// 不是 UTF-8 的值写成 `"<N bytes>"`。不打码，sensitive 的头也是原值
-#[cfg_attr(not(feature = "debug-log"), allow(dead_code))]
-pub(super) fn headers_json(headers: &HeaderMap) -> serde_json::Value {
-    let value_json = |v: &HeaderValue| match std::str::from_utf8(v.as_bytes()) {
-        Ok(s) => serde_json::Value::from(s),
-        Err(_) => serde_json::Value::from(format!("<{} bytes>", v.len())),
-    };
-    let map = headers
-        .keys()
-        .map(|name| {
-            let mut values: Vec<_> = headers.get_all(name).iter().map(value_json).collect();
-            let value = match values.len() {
-                1 => values.remove(0),
-                _ => serde_json::Value::Array(values),
-            };
-            (name.to_string(), value)
-        })
-        .collect();
-    serde_json::Value::Object(map)
-}
-
-/// debug 日志里的文本：能解析成 JSON 就作为嵌套的 JSON 值，否则原样作为字符串
-#[cfg_attr(not(feature = "debug-log"), allow(dead_code))]
-pub(super) fn text_json(text: &str) -> serde_json::Value {
-    serde_json::from_str(text).unwrap_or_else(|_| serde_json::Value::from(text))
 }
 
 #[cfg(test)]
@@ -378,52 +349,6 @@ mod tests {
                 preview(Some("application/octet-stream"), b""),
                 "<0 bytes application/octet-stream>"
             );
-        }
-    }
-
-    /// `headers_json()` / `text_json()`：debug 日志里的 JSON 值
-    mod debug_json {
-        use super::*;
-        use serde_json::json;
-
-        fn value(bytes: &[u8]) -> HeaderValue {
-            HeaderValue::from_bytes(bytes).unwrap()
-        }
-
-        /// 单值是字符串，同名多值是数组；sensitive 的也是原值；值里的逗号不影响
-        #[test]
-        fn headers_single_and_multiple_values() {
-            let mut h = HeaderMap::new();
-            let mut auth = value(b"Bearer t");
-            auth.set_sensitive(true);
-            h.insert("authorization", auth);
-            h.insert("accept", value(b"application/json, */*"));
-            h.append("x-a", value(b"1"));
-            h.append("x-a", value(b"2"));
-            assert_eq!(
-                headers_json(&h),
-                json!({"authorization": "Bearer t", "accept": "application/json, */*", "x-a": ["1", "2"]})
-            );
-        }
-
-        /// UTF-8 的值原样，不是 UTF-8 的只给字节数；空的是 `{}`
-        #[test]
-        fn headers_non_ascii_and_empty() {
-            let mut h = HeaderMap::new();
-            h.insert("x-zh", value("中文".as_bytes()));
-            h.insert("x-bin", value(&[0xff, 0xfe]));
-            assert_eq!(
-                headers_json(&h),
-                json!({"x-zh": "中文", "x-bin": "<2 bytes>"})
-            );
-            assert_eq!(headers_json(&HeaderMap::new()), json!({}));
-        }
-
-        /// 能解析成 JSON 的嵌套进去，否则是字符串（换行原样保留，输出时由 JSON 转义）
-        #[test]
-        fn text_is_nested_or_string() {
-            assert_eq!(text_json(r#"{"a": [1, 2]}"#), json!({"a": [1, 2]}));
-            assert_eq!(text_json("<html>\nerr</html>"), json!("<html>\nerr</html>"));
         }
     }
 }

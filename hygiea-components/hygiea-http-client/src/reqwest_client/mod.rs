@@ -12,6 +12,7 @@
 //! | retry.rs | 重试：[`RetryCtx`]、[`Retry`]、[`RetryDecision`]，以及什么请求可以重试 |
 //! | logging.rs | 日志：[`FailedLogLevel`]，start / success / failed 三种日志 |
 //! | text.rs | 字节转成日志 / 错误里的文本（charset、控制字符），调用链在它开头 |
+//! | debug.rs | debug 日志（`debug-log` feature，整个模块在这个 feature 下）：开关、两条 JSON 日志的结构和拼法 |
 //! | error.rs | [`BaseHttpErr`]：各阶段的错误 |
 //!
 //! 依赖方向：`retry → send → request / headers / body / response / logging / text / error`，`client → config`。
@@ -23,6 +24,8 @@
 mod body;
 mod client;
 mod config;
+#[cfg(feature = "debug-log")]
+mod debug;
 mod error;
 mod headers;
 mod logging;

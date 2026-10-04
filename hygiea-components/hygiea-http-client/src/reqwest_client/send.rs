@@ -76,8 +76,6 @@ use std::time::Instant;
 
 use futures_util::StreamExt;
 
-#[cfg(feature = "debug-log")]
-use hygiea_core::{BaseErr, ResultExt, err};
 use hygiea_core::{HyErr, Result, redact};
 
 use super::body::IntoBody;
@@ -85,8 +83,6 @@ use super::error::{
     decode_failed, invalid_params, invalid_url, non_success_status, request_build_failed,
     request_failed,
 };
-#[cfg(feature = "debug-log")]
-use super::logging::{DebugEnd, DebugRequest, DebugResponse, DebugStart, log_debug};
 use super::logging::{
     FailedLogLevel, Failure, ReqFields, Start, log_decode_failed, log_failed, log_resp_success,
     log_start, log_status_failed,
@@ -94,8 +90,6 @@ use super::logging::{
 use super::request::{HttpResponse, RequestConfig};
 use super::response::{BodyStream, FromBody, FromBytes};
 use super::text::{body_preview, body_text, to_one_line};
-#[cfg(feature = "debug-log")]
-use super::text::{headers_json, text_json};
 use super::{Bytes, HeaderMap, Method, ReqwestClient, StatusCode, Url};
 
 impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
@@ -215,9 +209,10 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
         };
         // debug 日志里的 params / body 原文，into_request 会消费 self，先算好
         #[cfg(feature = "debug-log")]
-        let debug_req = client
-            .debug_mode()
-            .map(|pretty| self.debug_req_json().map(|req| (pretty, req)))
+        let debug_draft = client
+            .debug
+            .mode()
+            .map(|pretty| super::debug::DebugDraft::new(pretty, &self.params, &self.body))
             .transpose()?;
 
         // 日志、错误和 HttpResponse.url 用的地址：和真实请求一样由 reqwest 拼 query，只是在 redact 的
@@ -246,9 +241,7 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
             enable_logging,
             failed_log_level,
             #[cfg(feature = "debug-log")]
-            debug: debug_req.map(|(pretty, (params, body))| {
-                DebugCtx::new(pretty, params, body, &request, &client.default_headers)
-            }),
+            debug: debug_draft.map(|draft| draft.finish(&request, &client.debug)),
             sent_at: Instant::now(),
         };
         if !ctx.debug_start()? && enable_logging {
@@ -261,21 +254,6 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
             Ok(resp) => Ok((ctx, resp)),
             Err(e) => Err(ctx.transport_failed(e, None)?),
         })
-    }
-}
-
-#[cfg(feature = "debug-log")]
-impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
-    /// debug 日志里的 params 和 body，不打码，返回 `(params, body)`。没有的是 null。
-    /// 序列化失败返回 `JsonError`，请求不发出
-    fn debug_req_json(&self) -> Result<(serde_json::Value, serde_json::Value)> {
-        let params = serde_json::to_value(&self.params)
-            .wrap_err(|| err!(BaseErr::JsonError, "serialize params for debug log failed"))?;
-        let body = match self.body.debug_preview()? {
-            None => serde_json::Value::Null,
-            Some(body) => text_json(&body),
-        };
-        Ok((params, body))
     }
 }
 
@@ -395,51 +373,9 @@ pub(super) struct SendCtx {
     pub(super) failed_log_level: FailedLogLevel,
     /// debug 日志要用的原文，debug 没开时是 `None`
     #[cfg(feature = "debug-log")]
-    debug: Option<DebugCtx>,
+    debug: Option<super::debug::DebugCtx>,
     /// 请求发出的时刻，从这里算耗时
     pub(super) sent_at: Instant,
-}
-
-/// debug 日志要用的、一次请求的原文
-#[cfg(feature = "debug-log")]
-struct DebugCtx {
-    /// JSON 缩进成多行，发出前从 client 读的
-    pretty: bool,
-    /// 真正发出去的地址，params 不打码
-    url: String,
-    /// start 和结束两条共用
-    request: DebugRequest,
-    /// RespBody 读完 body 后存一份，成功日志打原文用
-    resp_body: std::sync::OnceLock<Bytes>,
-}
-
-#[cfg(feature = "debug-log")]
-impl DebugCtx {
-    fn new(
-        pretty: bool,
-        params: serde_json::Value,
-        body: serde_json::Value,
-        request: &reqwest::Request,
-        default_headers: &HeaderMap,
-    ) -> Self {
-        // 请求自己的头补上 client 默认头：只补请求里没有的名字，和 reqwest 发送时一样
-        let mut headers = request.headers().clone();
-        for (name, value) in default_headers {
-            if let reqwest::header::Entry::Vacant(entry) = headers.entry(name) {
-                entry.insert(value.clone());
-            }
-        }
-        Self {
-            pretty,
-            url: request.url().to_string(),
-            request: DebugRequest {
-                headers: headers_json(&headers),
-                params,
-                body,
-            },
-            resp_body: std::sync::OnceLock::new(),
-        }
-    }
 }
 
 impl SendCtx {
@@ -458,52 +394,30 @@ impl SendCtx {
     fn debug_start(&self) -> Result<bool> {
         #[cfg(feature = "debug-log")]
         if let Some(debug) = &self.debug {
-            let start = DebugStart {
-                method: self.method.as_str(),
-                url: &debug.url,
-                request: &debug.request,
-            };
-            log_debug(None, "http call start", debug.pretty, &start)?;
+            debug.log_start()?;
             return Ok(true);
         }
         Ok(false)
     }
 
     /// debug 时打结束那条：请求加响应。`level` 为 `None` 是成功（INFO）。
-    /// `resp_headers` 为 `None` 表示没拿到响应；`resp_body` 不给时用 read_all 存下的那份，都没有就是 null
+    /// `response` 为 `None` 表示没拿到响应；body 不给时用 read_all 存下的那份
     fn debug_end(
         &self,
         level: Option<FailedLogLevel>,
         message: &str,
         status: Option<StatusCode>,
-        resp_headers: Option<&HeaderMap>,
-        resp_body: Option<&Bytes>,
+        response: Option<(&HeaderMap, Option<&Bytes>)>,
         error: Option<&HyErr>,
     ) -> Result<bool> {
         #[cfg(feature = "debug-log")]
         if let Some(debug) = &self.debug {
-            let response = resp_headers.map(|headers| DebugResponse {
-                headers: headers_json(headers),
-                body: resp_body
-                    .or_else(|| debug.resp_body.get())
-                    .map_or(serde_json::Value::Null, |b| {
-                        text_json(&body_text(headers, b))
-                    }),
-            });
-            let end = DebugEnd {
-                method: self.method.as_str(),
-                url: &debug.url,
-                status: status.map(|s| s.as_u16()),
-                elapsed_ms: self.sent_at.elapsed().as_millis(),
-                request: &debug.request,
-                response,
-                error: error.map(|e| format!("{e:#}")),
-            };
-            log_debug(level, message, debug.pretty, &end)?;
+            let elapsed_ms = self.sent_at.elapsed().as_millis();
+            debug.log_end(level, message, status, response, error, elapsed_ms)?;
             return Ok(true);
         }
         #[cfg(not(feature = "debug-log"))]
-        let _ = (level, message, status, resp_headers, resp_body, error);
+        let _ = (level, message, status, response, error);
         Ok(false)
     }
 
@@ -511,7 +425,7 @@ impl SendCtx {
     fn keep_resp_body(&self, body: &Bytes) {
         #[cfg(feature = "debug-log")]
         if let Some(debug) = &self.debug {
-            let _ = debug.resp_body.set(body.clone());
+            debug.keep_resp_body(body);
         }
         #[cfg(not(feature = "debug-log"))]
         let _ = body;
@@ -548,14 +462,7 @@ impl SendCtx {
         };
         let err = request_failed(&self.method, self.url.as_str(), status, e);
         let level = self.failed_log_level;
-        if !self.debug_end(
-            Some(level),
-            "http call failed",
-            status,
-            None,
-            None,
-            Some(&err),
-        )? {
+        if !self.debug_end(Some(level), "http call failed", status, None, Some(&err))? {
             let failure = Failure {
                 status,
                 elapsed_ms: Some(self.sent_at.elapsed().as_millis()),
@@ -576,13 +483,12 @@ impl SendCtx {
     ) -> Result<SendFailure> {
         let resp = self.response(status, headers, body);
         let level = self.failed_log_level;
-        let (headers, body) = (Some(&resp.headers), Some(&resp.body));
+        let response = Some((&resp.headers, Some(&resp.body)));
         if !self.debug_end(
             Some(level),
             "http call non-2xx",
             Some(status),
-            headers,
-            body,
+            response,
             None,
         )? {
             log_status_failed(
@@ -616,9 +522,9 @@ impl SendCtx {
     ) -> Result<SendFailure> {
         let resp = self.response(status, headers, body);
         let level = self.failed_log_level;
-        let (headers, body) = (Some(&resp.headers), Some(&resp.body));
+        let response = Some((&resp.headers, Some(&resp.body)));
         let message = "http call decode failed";
-        if !self.debug_end(Some(level), message, Some(status), headers, body, Some(&e))? {
+        if !self.debug_end(Some(level), message, Some(status), response, Some(&e))? {
             log_decode_failed(
                 level,
                 &resp,
@@ -651,14 +557,8 @@ impl SendCtx {
         preview: impl FnOnce(&Resp) -> Result<Option<String>>,
     ) -> Result<HttpResponse<Resp>> {
         let resp = self.response(status, headers, body);
-        let logged = self.debug_end(
-            None,
-            "http call success",
-            Some(status),
-            Some(&resp.headers),
-            None,
-            None,
-        )?;
+        let response = Some((&resp.headers, None));
+        let logged = self.debug_end(None, "http call success", Some(status), response, None)?;
         if !logged && self.enable_logging {
             let resp_preview = preview(&resp.body)?.map(|p| to_one_line(p.into()).into_owned());
             log_resp_success(&resp, self.req_fields(), resp_preview.as_deref());

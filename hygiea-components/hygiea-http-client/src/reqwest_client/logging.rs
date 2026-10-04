@@ -2,12 +2,9 @@
 //! 字节怎么转成日志里的文本、在哪一步打码见 text.rs 开头。
 //!
 //! debug（`debug-log` feature 下 [`ReqwestConfig::debug`](super::ReqwestConfig) 打开）时不走这三种，
-//! 改走 [`log_debug`]：消息后面接一段 JSON（默认一行，`set_pretty` 打开后缩进成多行）。JSON 的结构是 [`DebugStart`] / [`DebugEnd`]，
-//! 和上面三种各自定义、互不影响
+//! 改打 debug.rs 里的两条 JSON 日志，和这里各自定义、互不影响
 
 use hygiea_core::HyErr;
-#[cfg(feature = "debug-log")]
-use hygiea_core::{BaseErr, Result, ResultExt, err};
 
 use super::request::HttpResponse;
 use super::{Level, Method, StatusCode};
@@ -193,83 +190,6 @@ pub(super) fn log_failed(level: FailedLogLevel, message: &str, f: &Failure<'_>) 
         FailedLogLevel::Warn => emit!(warn),
         FailedLogLevel::Error => emit!(error),
     }
-}
-
-// ---------------- debug 日志 ----------------
-//
-// 每次请求两条：start（DebugStart）和结束（DebugEnd，请求加响应，单独一条就能看懂）。
-// 序列化成 pretty JSON，接在消息后面。headers / params / body 的结构运行时才知道，是 `serde_json::Value`
-
-/// 请求那一侧，start 和结束两条共用。不打码
-#[cfg(feature = "debug-log")]
-#[derive(serde::Serialize)]
-pub(super) struct DebugRequest {
-    /// 请求自己的头补上 client 默认头，同名多值是数组
-    pub(super) headers: serde_json::Value,
-    /// 没有是 null
-    pub(super) params: serde_json::Value,
-    /// JSON 的嵌套成对象，别的是字符串，没有是 null
-    pub(super) body: serde_json::Value,
-}
-
-/// 响应
-#[cfg(feature = "debug-log")]
-#[derive(serde::Serialize)]
-pub(super) struct DebugResponse {
-    pub(super) headers: serde_json::Value,
-    /// JSON 的嵌套成对象，别的是字符串；没读 body（`BodyStream`）是 null
-    pub(super) body: serde_json::Value,
-}
-
-/// `http call start`
-#[cfg(feature = "debug-log")]
-#[derive(serde::Serialize)]
-pub(super) struct DebugStart<'a> {
-    pub(super) method: &'a str,
-    /// 真正发出去的地址，params 不打码
-    pub(super) url: &'a str,
-    pub(super) request: &'a DebugRequest,
-}
-
-/// 结束那条：success / non-2xx / decode failed / failed 共用这一个形状
-#[cfg(feature = "debug-log")]
-#[derive(serde::Serialize)]
-pub(super) struct DebugEnd<'a> {
-    pub(super) method: &'a str,
-    pub(super) url: &'a str,
-    /// 传输失败（没拿到响应头）时是 null
-    pub(super) status: Option<u16>,
-    pub(super) elapsed_ms: u128,
-    pub(super) request: &'a DebugRequest,
-    /// 传输失败时是 null
-    pub(super) response: Option<DebugResponse>,
-    /// 按 `{:#}` 带 source 链；成功、非 2xx 时是 null
-    pub(super) error: Option<String>,
-}
-
-/// debug 时的日志：消息后面接 JSON。`pretty` 时 JSON 另起一行、缩进成多行，否则整条一行。
-/// `level` 为 `None` 时是 INFO（start / success），失败时按配置的级别。序列化失败返回 `JsonError`，不打日志
-#[cfg(feature = "debug-log")]
-pub(super) fn log_debug(
-    level: Option<FailedLogLevel>,
-    message: &str,
-    pretty: bool,
-    fields: &impl serde::Serialize,
-) -> Result<()> {
-    let json = if pretty {
-        serde_json::to_string_pretty(fields)
-    } else {
-        serde_json::to_string(fields)
-    }
-    .wrap_err(|| err!(BaseErr::JsonError, "serialize debug log failed"))?;
-    // pretty 时 JSON 另起一行；紧凑时整条一行（JSON 字符串里的换行已经转义成 \n）
-    let sep = if pretty { "\n" } else { " " };
-    match level {
-        None => tracing::info!("{message}{sep}{json}"),
-        Some(FailedLogLevel::Warn) => tracing::warn!("{message}{sep}{json}"),
-        Some(FailedLogLevel::Error) => tracing::error!("{message}{sep}{json}"),
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -489,125 +409,6 @@ mod tests {
                     "error=JSON error: decode boom",
                 ],
             );
-        }
-    }
-
-    /// `log_debug`：消息后面换行接 pretty JSON，字段按结构体的顺序，级别按参数
-    #[cfg(feature = "debug-log")]
-    mod debug {
-        use serde_json::json;
-
-        use super::*;
-
-        fn request() -> DebugRequest {
-            DebugRequest {
-                headers: json!({"accept": "*/*"}),
-                params: serde_json::Value::Null,
-                body: json!({"a": 1}),
-            }
-        }
-
-        #[test]
-        fn start_is_pretty_json() {
-            let request = request();
-            let (out, _guard) = capture();
-            log_debug(
-                None,
-                "http call start",
-                true,
-                &DebugStart {
-                    method: "GET",
-                    url: "http://h/x",
-                    request: &request,
-                },
-            )
-            .unwrap();
-            let log = out.text();
-            assert!(log.contains(" INFO "), "{log}");
-            let expected = r#"http call start
-{
-  "method": "GET",
-  "url": "http://h/x",
-  "request": {
-    "headers": {
-      "accept": "*/*"
-    },
-    "params": null,
-    "body": {
-      "a": 1
-    }
-  }
-}"#;
-            assert!(log.contains(expected), "{log}");
-        }
-
-        /// 结束那条：失败按级别打，没拿到响应时 status / response 是 null
-        #[test]
-        fn end_without_response() {
-            let request = request();
-            let (out, _guard) = capture();
-            log_debug(
-                Some(FailedLogLevel::Error),
-                "http call failed",
-                true,
-                &DebugEnd {
-                    method: "GET",
-                    url: "http://h/x",
-                    status: None,
-                    elapsed_ms: 3,
-                    request: &request,
-                    response: None,
-                    error: Some("boom".into()),
-                },
-            )
-            .unwrap();
-            let log = out.text();
-            assert!(log.contains("ERROR "), "{log}");
-            assert!(
-                log.contains("\"status\": null,\n  \"elapsed_ms\": 3,"),
-                "{log}"
-            );
-            assert!(
-                log.contains("\"response\": null,\n  \"error\": \"boom\"\n}"),
-                "{log}"
-            );
-        }
-
-        /// 默认（不 pretty）：消息和 JSON 在同一行，空格隔开
-        #[test]
-        fn compact_is_one_line() {
-            let request = request();
-            let (out, _guard) = capture();
-            log_debug(
-                None,
-                "http call start",
-                false,
-                &DebugStart {
-                    method: "GET",
-                    url: "http://h/x",
-                    request: &request,
-                },
-            )
-            .unwrap();
-            let log = out.text();
-            assert_eq!(log.lines().count(), 1, "{log}");
-            let expected = r#"http call start {"method":"GET","url":"http://h/x","request":{"headers":{"accept":"*/*"},"params":null,"body":{"a":1}}}"#;
-            assert!(log.contains(expected), "{log}");
-        }
-
-        /// 序列化失败：返回 JsonError，不打日志
-        #[test]
-        fn serialize_failure_is_err() {
-            let (out, _guard) = capture();
-            let err = log_debug(
-                None,
-                "http call start",
-                false,
-                &test_support::Unserializable,
-            )
-            .unwrap_err();
-            assert!(err.is(hygiea_core::BaseErr::JsonError), "{err:#}");
-            assert_eq!(out.text(), "");
         }
     }
 }
