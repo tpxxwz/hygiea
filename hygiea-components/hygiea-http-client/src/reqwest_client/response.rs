@@ -39,11 +39,12 @@ pub trait FromBytes {
     /// 从读完的 body 解码。`headers` 是响应头
     fn from_bytes(headers: &HeaderMap, body: Bytes) -> Result<Self::Output, HyErr>;
 
-    /// 解码成功后日志里怎么打这个响应。默认 `None`，成功日志里不输出 `resp`：
+    /// 解码成功后日志里怎么打这个响应。默认 `Ok(None)`，成功日志里不输出 `resp`：
     /// 没有类型信息就没法打码，body 也可能很大。
-    /// `Json<T>` 按 [`redact::to_redacted_json`] 重新序列化，`T` 里标了 `#[redact(..)]` 的字段会打码
-    fn decoded_preview(_output: &Self::Output) -> Option<String> {
-        None
+    /// `Json<T>` 按 [`redact::to_redacted_json`] 重新序列化，`T` 里标了 `#[redact(..)]` 的字段会打码。
+    /// 返回 `Err` 时 `send` 返回这个错误（请求已经成功了，只是日志打不出来）
+    fn decoded_preview(_output: &Self::Output) -> Result<Option<String>, HyErr> {
+        Ok(None)
     }
 }
 
@@ -58,9 +59,10 @@ pub trait FromBody {
     /// 从还没读的响应体得到结果
     fn from_body(body: RespBody<'_>) -> impl Future<Output = Result<Self::Output, HyErr>> + Send;
 
-    /// 成功日志里的响应摘要，`None` 表示不输出 `resp`。[`FromBytes`] 类型用它的 `decoded_preview`
-    fn resp_preview(_output: &Self::Output) -> Option<String> {
-        None
+    /// 成功日志里的响应摘要，`Ok(None)` 表示不输出 `resp`，`Err` 时 `send` 返回这个错误。
+    /// [`FromBytes`] 类型用它的 `decoded_preview`
+    fn resp_preview(_output: &Self::Output) -> Result<Option<String>, HyErr> {
+        Ok(None)
     }
 }
 
@@ -71,10 +73,10 @@ where
     type Output = T::Output;
 
     async fn from_body(body: RespBody<'_>) -> Result<Self::Output, HyErr> {
-        body.decode::<T>().await.map_err(|f| f.err)
+        body.decode::<T>().await?.map_err(|f| f.err)
     }
 
-    fn resp_preview(output: &Self::Output) -> Option<String> {
+    fn resp_preview(output: &Self::Output) -> Result<Option<String>, HyErr> {
         T::decoded_preview(output)
     }
 }
@@ -101,8 +103,8 @@ impl FromBytes for String {
 
     /// 调用方要的就是文本，原样打（没法打码；有敏感内容就用 `Json<T>` 标 `#[redact]`，
     /// 或者 `enable_logging(false)`）。`Bytes` 可能是二进制、`()` 不关心内容，这两个不打
-    fn decoded_preview(output: &String) -> Option<String> {
-        Some(output.clone())
+    fn decoded_preview(output: &String) -> Result<Option<String>, HyErr> {
+        Ok(Some(output.clone()))
     }
 }
 
@@ -129,12 +131,9 @@ impl<T: serde::de::DeserializeOwned + serde::Serialize> FromBytes for Json<T> {
             .wrap_err(|| err!(BaseErr::JsonError, "deserialize response body failed"))
     }
 
-    /// 重新序列化失败时也不退回原文，否则打码就白做了
-    fn decoded_preview(output: &T) -> Option<String> {
-        Some(
-            redact::to_redacted_json(output)
-                .unwrap_or_else(|e| format!("<log preview failed: {e}>")),
-        )
+    /// 重新序列化失败时返回错误，不退回原文，否则打码就白做了
+    fn decoded_preview(output: &T) -> Result<Option<String>, HyErr> {
+        redact::to_redacted_json(output).map(Some)
     }
 }
 
@@ -365,10 +364,15 @@ mod tests {
         /// `String` 调用方要的就是文本，原样返回
         #[test]
         fn raw_types() {
-            assert_eq!(Bytes::decoded_preview(&Bytes::from_static(b"x")), None);
-            assert_eq!(<()>::decoded_preview(&()), None);
             assert_eq!(
-                String::decoded_preview(&String::from("x")).as_deref(),
+                Bytes::decoded_preview(&Bytes::from_static(b"x")).unwrap(),
+                None
+            );
+            assert_eq!(<()>::decoded_preview(&()).unwrap(), None);
+            assert_eq!(
+                String::decoded_preview(&String::from("x"))
+                    .unwrap()
+                    .as_deref(),
                 Some("x")
             );
         }
@@ -380,7 +384,7 @@ mod tests {
                 user: "a".into(),
                 token: "secret".into(),
             };
-            let preview = Json::<Token>::decoded_preview(&t).unwrap();
+            let preview = Json::<Token>::decoded_preview(&t).unwrap().unwrap();
             assert_eq!(
                 serde_json::from_str::<Value>(&preview).unwrap(),
                 json!({"user":"a","token":"***"})
@@ -397,11 +401,11 @@ mod tests {
             }
         }
 
-        /// 重新序列化失败时给一个标记，不退回原文，否则打码就白做了
+        /// 重新序列化失败时返回 JsonError，不退回原文，否则打码就白做了
         #[test]
-        fn json_reserialize_failure_is_marked() {
-            let preview = Json::<DecodeOnly>::decoded_preview(&DecodeOnly).unwrap();
-            assert!(preview.starts_with("<log preview failed:"), "{preview}");
+        fn json_reserialize_failure_is_err() {
+            let err = Json::<DecodeOnly>::decoded_preview(&DecodeOnly).unwrap_err();
+            assert!(err.is(BaseErr::JsonError), "{err:#}");
         }
     }
 }

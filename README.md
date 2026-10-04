@@ -294,9 +294,13 @@ let resp = RequestConfig::plain(Method::GET, url)
 let client = ReqwestClient::debug()?; // 默认配置加 debug，等于 ReqwestConfig::default().debug(true).build()
 let client = ReqwestConfig { timeout: Some(t), ..Default::default() }.debug(true).build()?; // 要改别的配置时
 // 配置文件里是 debug = true
+
+// 建好之后也能改，原地生效，这个 client 的所有 clone（包括 Resources 里那份）一起变，下一次请求起按新值打
+client.set_debug(false);
+client.set_pretty(true); // JSON 缩进成多行，默认关（一行）
 ```
 
-打开后不再打平时的单行日志，每次请求打两条，消息后面换行接一段 pretty JSON（多行），无视 `enable_logging`，不打码：
+打开后不再打平时的单行日志，每次请求打两条，消息后面接一段 JSON（默认一行，`set_pretty(true)` 后另起一行缩进），无视 `enable_logging`，不打码：
 
 - `http call start`：`{method, url, request: {headers, params, body}}`
 - 结束（`http call success` / `non-2xx` / `decode failed` / `failed`）：`{method, url, status, elapsed_ms, request, response: {headers, body}, error}`，带上完整的请求，单独一条就能看懂

@@ -1,4 +1,4 @@
-//! debug 日志（`debug-log` feature）：打开后每次请求打两条 pretty JSON——start 是请求，结束是请求加响应，
+//! debug 日志（`debug-log` feature）：打开后每次请求打两条 JSON——start 是请求，结束是请求加响应，
 //! url、params、body、resp 是原文，带请求头和响应头，无视 enable_logging；日志里的请求头和服务端实际收到的一致。
 //!
 //! 运行：`cargo test -p hygiea-http-client --features reqwest,debug-log --test reqwest_client debug::`
@@ -43,10 +43,11 @@ impl<Params: Send, Req: Send> Retry<Params, Req> for NoRetry {
     }
 }
 
-/// 日志里 `message` 后面换行接的那段 pretty JSON
+/// 日志里 `message` 后面的那段 JSON（紧凑时隔一个空格，pretty 时隔一个换行）
 fn debug_json(log: &str, message: &str) -> Value {
-    let at = log
-        .find(&format!("{message}\n"))
+    let at = [" {", "\n{"]
+        .iter()
+        .find_map(|sep| log.find(&format!("{message}{sep}")))
         .unwrap_or_else(|| panic!("no `{message}` in:\n{log}"));
     serde_json::Deserializer::from_str(&log[at + message.len()..])
         .into_iter::<Value>()
@@ -177,6 +178,37 @@ async fn body_stream_has_headers_but_no_body() {
     let success = debug_json(&out.text(), "http call success");
     assert!(success["response"]["headers"].is_object(), "{success:#}");
     assert_eq!(success["response"]["body"], Value::Null);
+}
+
+/// 默认每条一行；set_pretty 后缩进成多行，内容一样。从 Resources 拿到的 clone 也一起变
+#[tokio::test]
+async fn pretty_switch() {
+    let base = serve(echo).await;
+    let client = debug_client();
+    let send = |client: ReqwestClient| {
+        let url = format!("{base}/echo");
+        async move {
+            let (out, _guard) = capture();
+            RequestConfig::plain(Method::GET, url)
+                .send::<Bytes>(&client)
+                .await
+                .unwrap();
+            out.text()
+        }
+    };
+    let compact = send(client.clone()).await;
+    assert_eq!(compact.lines().count(), 2, "{compact}");
+    client.set_pretty(true);
+    let pretty = send(client.clone()).await;
+    assert!(pretty.lines().count() > 10, "{pretty}");
+    let mut a = debug_json(&compact, "http call success");
+    let mut b = debug_json(&pretty, "http call success");
+    for v in [&mut a, &mut b] {
+        // 耗时和响应日期每次不同
+        v["elapsed_ms"] = Value::Null;
+        v["response"]["headers"]["date"] = Value::Null;
+    }
+    assert_eq!(a, b);
 }
 
 /// debug 关时还是原来的单行日志，打码照旧

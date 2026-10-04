@@ -116,3 +116,53 @@ mod failures {
         assert!(log.contains("elapsed_ms="), "{log}");
     }
 }
+
+/// 打日志本身失败（成功日志的响应预览序列化不了）：错误传给调用方，不吞掉
+mod log_errors {
+    use hygiea_core::BaseErr;
+    use serde::{Deserialize, Serialize};
+    use test_support::Unserializable;
+
+    use super::*;
+
+    /// 能解码、但重新序列化（成功日志的预览）必定失败的类型
+    #[derive(Debug, Deserialize)]
+    struct DecodeOnly {}
+
+    impl Serialize for DecodeOnly {
+        fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+            Unserializable.serialize(s)
+        }
+    }
+
+    /// 请求成功了，但成功日志的预览序列化失败：send 返回 JsonError，带重试时也一样（不重试）
+    #[tokio::test]
+    async fn preview_failure_is_returned() {
+        let base = serve_routes(ROUTES).await;
+        let client = local_config().build().unwrap();
+        let err = RequestConfig::plain(Method::GET, format!("{base}/ok"))
+            .send::<Json<DecodeOnly>>(&client)
+            .await
+            .unwrap_err();
+        assert!(err.is(BaseErr::JsonError), "{err:#}");
+        let retry = |_: usize, _: RequestConfig, f: SendFailure| async move {
+            RetryDecision::<(), ()>::Stop(f.err)
+        };
+        let err = RequestConfig::plain(Method::GET, format!("{base}/ok"))
+            .send::<Json<DecodeOnly>>((&client, RetryCtx::new(3, retry)))
+            .await
+            .unwrap_err();
+        assert!(err.is(BaseErr::JsonError), "{err:#}");
+    }
+
+    /// 关了日志就不算预览，也就不会因为它失败
+    #[tokio::test]
+    async fn no_preview_when_logging_disabled() {
+        let base = serve_routes(ROUTES).await;
+        RequestConfig::plain(Method::GET, format!("{base}/ok"))
+            .enable_logging(false)
+            .send::<Json<DecodeOnly>>(&local_config().build().unwrap())
+            .await
+            .unwrap();
+    }
+}

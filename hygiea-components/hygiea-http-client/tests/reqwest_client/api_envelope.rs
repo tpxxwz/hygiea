@@ -68,15 +68,12 @@ impl<T: DeserializeOwned + Serialize> FromBytes for ApiResult<T> {
     /// 业务成功时按 `T` 的规则打码；业务失败时 `data` 没解析、没法打码，把 code、msg 和原始 data
     /// 原样打出来，和非 2xx 一样，排查为什么失败要看对方到底回了什么。
     /// 返回 `None` 的话成功日志里没有 resp，所以这里自己拼
-    fn decoded_preview(output: &Self) -> Option<String> {
+    fn decoded_preview(output: &Self) -> Result<Option<String>, HyErr> {
         if !output.is_ok() {
             let raw = serde_json::json!({ "code": output.code, "msg": output.msg, "data": output.raw_data });
-            return Some(raw.to_string());
+            return Ok(Some(raw.to_string()));
         }
-        Some(
-            redact::to_redacted_json(output)
-                .unwrap_or_else(|e| format!("<log preview failed: {e}>")),
-        )
+        redact::to_redacted_json(output).map(Some)
     }
 }
 

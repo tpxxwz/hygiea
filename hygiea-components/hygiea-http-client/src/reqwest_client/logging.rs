@@ -2,10 +2,12 @@
 //! 字节怎么转成日志里的文本、在哪一步打码见 text.rs 开头。
 //!
 //! debug（`debug-log` feature 下 [`ReqwestConfig::debug`](super::ReqwestConfig) 打开）时不走这三种，
-//! 改走 [`log_debug`]：消息后面换行接一段 pretty JSON，多行。JSON 的结构是 [`DebugStart`] / [`DebugEnd`]，
+//! 改走 [`log_debug`]：消息后面接一段 JSON（默认一行，`set_pretty` 打开后缩进成多行）。JSON 的结构是 [`DebugStart`] / [`DebugEnd`]，
 //! 和上面三种各自定义、互不影响
 
 use hygiea_core::HyErr;
+#[cfg(feature = "debug-log")]
+use hygiea_core::{BaseErr, ResultExt, err};
 
 use super::request::HttpResponse;
 use super::{Level, Method, StatusCode};
@@ -245,22 +247,29 @@ pub(super) struct DebugEnd<'a> {
     pub(super) error: Option<String>,
 }
 
-/// debug 时的日志：消息后面换行接 pretty JSON。`level` 为 `None` 时是 INFO（start / success），
-/// 失败时按配置的级别。不是一行：debug 只在测试里开，好读优先
+/// debug 时的日志：消息后面接 JSON。`pretty` 时 JSON 另起一行、缩进成多行，否则整条一行。
+/// `level` 为 `None` 时是 INFO（start / success），失败时按配置的级别。序列化失败返回 `JsonError`，不打日志
 #[cfg(feature = "debug-log")]
 pub(super) fn log_debug(
     level: Option<FailedLogLevel>,
     message: &str,
+    pretty: bool,
     fields: &impl serde::Serialize,
-) {
-    // 字段都是字符串、数字和 Value，序列化不会失败；签名上会失败，就退成一句说明
-    let json = serde_json::to_string_pretty(fields)
-        .unwrap_or_else(|e| format!("<debug log serialize failed: {e}>"));
-    match level {
-        None => tracing::info!("{message}\n{json}"),
-        Some(FailedLogLevel::Warn) => tracing::warn!("{message}\n{json}"),
-        Some(FailedLogLevel::Error) => tracing::error!("{message}\n{json}"),
+) -> Result<(), HyErr> {
+    let json = if pretty {
+        serde_json::to_string_pretty(fields)
+    } else {
+        serde_json::to_string(fields)
     }
+    .wrap_err(|| err!(BaseErr::JsonError, "serialize debug log failed"))?;
+    // pretty 时 JSON 另起一行；紧凑时整条一行（JSON 字符串里的换行已经转义成 \n）
+    let sep = if pretty { "\n" } else { " " };
+    match level {
+        None => tracing::info!("{message}{sep}{json}"),
+        Some(FailedLogLevel::Warn) => tracing::warn!("{message}{sep}{json}"),
+        Some(FailedLogLevel::Error) => tracing::error!("{message}{sep}{json}"),
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -505,12 +514,14 @@ mod tests {
             log_debug(
                 None,
                 "http call start",
+                true,
                 &DebugStart {
                     method: "GET",
                     url: "http://h/x",
                     request: &request,
                 },
-            );
+            )
+            .unwrap();
             let log = out.text();
             assert!(log.contains(" INFO "), "{log}");
             let expected = r#"http call start
@@ -538,6 +549,7 @@ mod tests {
             log_debug(
                 Some(FailedLogLevel::Error),
                 "http call failed",
+                true,
                 &DebugEnd {
                     method: "GET",
                     url: "http://h/x",
@@ -547,7 +559,8 @@ mod tests {
                     response: None,
                     error: Some("boom".into()),
                 },
-            );
+            )
+            .unwrap();
             let log = out.text();
             assert!(log.contains("ERROR "), "{log}");
             assert!(
@@ -558,6 +571,43 @@ mod tests {
                 log.contains("\"response\": null,\n  \"error\": \"boom\"\n}"),
                 "{log}"
             );
+        }
+
+        /// 默认（不 pretty）：消息和 JSON 在同一行，空格隔开
+        #[test]
+        fn compact_is_one_line() {
+            let request = request();
+            let (out, _guard) = capture();
+            log_debug(
+                None,
+                "http call start",
+                false,
+                &DebugStart {
+                    method: "GET",
+                    url: "http://h/x",
+                    request: &request,
+                },
+            )
+            .unwrap();
+            let log = out.text();
+            assert_eq!(log.lines().count(), 1, "{log}");
+            let expected = r#"http call start {"method":"GET","url":"http://h/x","request":{"headers":{"accept":"*/*"},"params":null,"body":{"a":1}}}"#;
+            assert!(log.contains(expected), "{log}");
+        }
+
+        /// 序列化失败：返回 JsonError，不打日志
+        #[test]
+        fn serialize_failure_is_err() {
+            let (out, _guard) = capture();
+            let err = log_debug(
+                None,
+                "http call start",
+                false,
+                &test_support::Unserializable,
+            )
+            .unwrap_err();
+            assert!(err.is(hygiea_core::BaseErr::JsonError), "{err:#}");
+            assert_eq!(out.text(), "");
         }
     }
 }

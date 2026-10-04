@@ -3,6 +3,8 @@
 use std::net::SocketAddr;
 #[cfg(feature = "debug-log")]
 use std::sync::Arc;
+#[cfg(feature = "debug-log")]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use reqwest::redirect::Policy;
@@ -164,9 +166,10 @@ pub struct ReqwestConfig {
     pub resolve: Vec<(String, Vec<SocketAddr>)>,
 
     // ---- 以下是 reqwest 没有、本模块自己加的 ----
-    /// 打开 debug 日志：每次请求打 start（请求）和结束（请求加响应）两条 pretty JSON，url、params、body、
+    /// 打开 debug 日志：每次请求打 start（请求）和结束（请求加响应）两条 JSON，url、params、body、
     /// 响应原文，带请求头和响应头，不打码，无视 [`RequestConfig::enable_logging`](super::RequestConfig::enable_logging)。
-    /// 只在 `debug-log` feature 下存在，用于测试排查。在 build 时定下，之后不能改
+    /// 只在 `debug-log` feature 下存在，用于测试排查。这是初始值，build 之后用
+    /// [`ReqwestClient::set_debug`] 改；JSON 默认一行，[`ReqwestClient::set_pretty`] 打开缩进
     #[cfg(feature = "debug-log")]
     pub debug: bool,
 }
@@ -237,7 +240,10 @@ impl ReqwestConfig {
             #[cfg(feature = "debug-log")]
             default_headers: Arc::new(client_default_headers(user_agent, default_headers)?),
             #[cfg(feature = "debug-log")]
-            debug,
+            switches: Arc::new(DebugSwitches {
+                debug: AtomicBool::new(debug),
+                pretty: AtomicBool::new(false),
+            }),
         })
     }
 }
@@ -279,9 +285,19 @@ pub struct ReqwestClient {
     /// 目前只在 debug 日志里用来补全请求头
     #[cfg(feature = "debug-log")]
     pub(super) default_headers: Arc<HeaderMap>,
-    /// 来自 `ReqwestConfig` 的 `debug` 字段
+    /// debug 日志的开关，所有 clone 共享
     #[cfg(feature = "debug-log")]
-    pub(super) debug: bool,
+    switches: Arc<DebugSwitches>,
+}
+
+/// debug 日志的两个开关。每次请求在发出前读一次，这次请求的两条日志按那时的值打
+#[cfg(feature = "debug-log")]
+#[derive(Debug)]
+struct DebugSwitches {
+    /// 初始值来自 `ReqwestConfig` 的 `debug` 字段
+    debug: AtomicBool,
+    /// JSON 缩进成多行，默认关（一行紧凑的 JSON）
+    pretty: AtomicBool,
 }
 
 impl ReqwestClient {
@@ -290,6 +306,30 @@ impl ReqwestClient {
     #[cfg(feature = "debug-log")]
     pub fn debug() -> Result<Self, HyErr> {
         ReqwestConfig::default().debug(true).build()
+    }
+
+    /// 打开或关闭 debug 日志，初始值是 [`ReqwestConfig::debug`](ReqwestConfig::debug)。
+    /// 原地改，这个 client 的所有 clone（包括组件放进 Resources 的那份）一起变；已经发出的请求不受影响。
+    /// 只在 `debug-log` feature 下存在
+    #[cfg(feature = "debug-log")]
+    pub fn set_debug(&self, on: bool) {
+        self.switches.debug.store(on, Ordering::Relaxed);
+    }
+
+    /// debug 日志的 JSON 要不要缩进成多行，默认关：一行紧凑的 JSON，消息和 JSON 之间是空格。
+    /// 和 [`ReqwestClient::set_debug`] 一样原地改、所有 clone 一起变。只在 `debug-log` feature 下存在
+    #[cfg(feature = "debug-log")]
+    pub fn set_pretty(&self, on: bool) {
+        self.switches.pretty.store(on, Ordering::Relaxed);
+    }
+
+    /// 这次请求的 debug 设置：`None` 表示 debug 关，`Some(pretty)` 表示开
+    #[cfg(feature = "debug-log")]
+    pub(super) fn debug_mode(&self) -> Option<bool> {
+        self.switches
+            .debug
+            .load(Ordering::Relaxed)
+            .then(|| self.switches.pretty.load(Ordering::Relaxed))
     }
 }
 
@@ -546,16 +586,32 @@ mod tests {
         /// 默认关，`.debug(true)` 打开，build 后带到 ReqwestClient 上
         #[test]
         fn switch_reaches_client() {
-            assert!(!ReqwestConfig::default().build().unwrap().debug);
-            assert!(ReqwestConfig::default().debug(true).build().unwrap().debug);
+            assert_eq!(ReqwestConfig::default().build().unwrap().debug_mode(), None);
+            let client = ReqwestConfig::default().debug(true).build().unwrap();
+            assert_eq!(client.debug_mode(), Some(false));
         }
 
         /// `ReqwestClient::debug()`：默认配置加上 debug
         #[test]
         fn shortcut_is_default_with_debug() {
             let client = ReqwestClient::debug().unwrap();
-            assert!(client.debug);
+            assert_eq!(client.debug_mode(), Some(false));
             assert_eq!(*client.default_headers, header_map(&[("accept", "*/*")]));
+        }
+
+        /// set_debug / set_pretty 原地改，所有 clone 一起变；pretty 默认关，debug 关时不起作用
+        #[test]
+        fn switches_are_shared_by_clones() {
+            let client = ReqwestConfig::default().build().unwrap();
+            let clone = client.clone();
+            client.set_pretty(true);
+            assert_eq!(clone.debug_mode(), None);
+            client.set_debug(true);
+            assert_eq!(clone.debug_mode(), Some(true));
+            clone.set_pretty(false);
+            assert_eq!(client.debug_mode(), Some(false));
+            clone.set_debug(false);
+            assert_eq!(client.debug_mode(), None);
         }
 
         /// 配置文件里写 `debug = true`
