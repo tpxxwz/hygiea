@@ -1,5 +1,9 @@
 //! 日志：失败日志级别 [`FailedLogLevel`]，以及 send 用的 start / success / failed 三种日志。
-//! 字节怎么转成日志里的文本、在哪一步打码见 text.rs 开头
+//! 字节怎么转成日志里的文本、在哪一步打码见 text.rs 开头。
+//!
+//! debug（`debug-log` feature 下 [`ReqwestConfig::debug`](super::ReqwestConfig) 打开）时不走这三种，
+//! 改走 [`log_debug`]：消息后面换行接一段 pretty JSON，多行。JSON 的结构是 [`DebugStart`] / [`DebugEnd`]，
+//! 和上面三种各自定义、互不影响
 
 use hygiea_core::HyErr;
 
@@ -29,23 +33,20 @@ impl From<FailedLogLevel> for Level {
 
 // ---------------- 拿到响应之后的日志（send 用）----------------
 //
-// `req` 是请求那一侧的字段，`resp_preview` 是响应摘要，`resp_headers` 只在 debug 时有
+// `req` 是请求那一侧的字段，`resp_preview` 是响应摘要
 
-/// 每条日志里请求那一侧的字段。平时是打码后的地址、请求摘要，没有请求头；
-/// debug（`debug-log` feature 下 [`ReqwestConfig::debug`](super::ReqwestConfig) 打开）时是原文，带请求头
+/// 每条日志里请求那一侧的字段：打码后的地址和请求摘要（`req=` 那一段）
 #[derive(Clone, Copy)]
 pub(super) struct ReqFields<'a> {
     pub(super) url: &'a str,
     pub(super) req: &'a str,
-    pub(super) headers: Option<&'a str>,
 }
 
-/// 成功。调用前自己判断要不要打，省得关了日志还去算预览
+/// 成功。调用前自己判断 enable_logging，省得关了日志还去算预览
 pub(super) fn log_resp_success<Resp>(
     resp: &HttpResponse<Resp>,
     req: ReqFields<'_>,
     resp_preview: Option<&str>,
-    resp_headers: Option<&str>,
 ) {
     log_success(&Success {
         method: &resp.method,
@@ -53,9 +54,7 @@ pub(super) fn log_resp_success<Resp>(
         status: resp.status,
         elapsed_ms: resp.elapsed.as_millis(),
         req: req.req,
-        req_headers: req.headers,
         resp: resp_preview,
-        resp_headers,
     });
 }
 
@@ -65,11 +64,9 @@ pub(super) fn log_status_failed<Resp>(
     resp: &HttpResponse<Resp>,
     req: ReqFields<'_>,
     resp_preview: &str,
-    resp_headers: Option<&str>,
 ) {
     let failure = Failure {
         resp: Some(resp_preview),
-        resp_headers,
         ..failure_of(resp, req)
     };
     // 和传输失败的 "http call failed" 区分开，按消息就能筛出非 2xx
@@ -83,11 +80,9 @@ pub(super) fn log_decode_failed<Resp>(
     req: ReqFields<'_>,
     err: &HyErr,
     resp_preview: &str,
-    resp_headers: Option<&str>,
 ) {
     let failure = Failure {
         resp: Some(resp_preview),
-        resp_headers,
         error: Some(err),
         ..failure_of(resp, req)
     };
@@ -105,9 +100,8 @@ fn failure_of<'a, Resp>(resp: &'a HttpResponse<Resp>, req: ReqFields<'a>) -> Fai
 
 // ---------------- 三种日志：start / success / failed ----------------
 //
-// 每种一个字段结构体加一个入口函数，字段同名同序（method、url、status、elapsed_ms、req、req_headers、
-// resp、resp_headers），日志平台上可以按同一套字段检索。打日志只走这三个入口。
-// req_headers / resp_headers 只在 debug 时有值，平时是 None，整个字段不输出
+// 每种一个字段结构体加一个入口函数，字段同名同序（method、url、status、elapsed_ms、req、resp），
+// 日志平台上可以按同一套字段检索。打日志只走这三个入口
 
 /// 请求发出之前的那条日志（INFO）
 pub(super) struct Start<'a> {
@@ -117,13 +111,7 @@ pub(super) struct Start<'a> {
 
 /// 打 `http call start`
 pub(super) fn log_start(s: &Start<'_>) {
-    tracing::info!(
-        method = %s.method,
-        url = %s.req.url,
-        req = %s.req.req,
-        req_headers = s.req.headers.map(tracing::field::display),
-        "http call start"
-    );
+    tracing::info!(method = %s.method, url = %s.req.url, req = %s.req.req, "http call start");
 }
 
 /// 成功的那条日志（INFO）。`resp` 是 `None` 时不输出：类型没提供（打码后的）预览
@@ -134,9 +122,7 @@ struct Success<'a> {
     /// 发出请求到 body 交给调用方的耗时
     elapsed_ms: u128,
     req: &'a str,
-    req_headers: Option<&'a str>,
     resp: Option<&'a str>,
-    resp_headers: Option<&'a str>,
 }
 
 /// 打 `http call success`
@@ -147,15 +133,13 @@ fn log_success(s: &Success<'_>) {
         status = %s.status,
         elapsed_ms = s.elapsed_ms,
         req = %s.req,
-        req_headers = s.req_headers.map(tracing::field::display),
         resp = s.resp.map(tracing::field::display),
-        resp_headers = s.resp_headers.map(tracing::field::display),
         "http call success"
     );
 }
 
-/// 一条失败日志的字段。和成功日志同名同序，多一个 error；是 `None` 的字段不输出，
-/// 比如传输失败时没有 status 和 resp，构建失败时没有耗时
+/// 一条失败日志的字段。和成功日志同名同序（method、url、status、elapsed_ms、req、resp），
+/// 多一个 error；是 `None` 的字段不输出，比如传输失败时没有 status 和 resp，构建失败时没有耗时
 pub(super) struct Failure<'a> {
     pub(super) method: &'a Method,
     pub(super) url: &'a str,
@@ -163,15 +147,13 @@ pub(super) struct Failure<'a> {
     /// 请求发出后到失败为止的耗时
     pub(super) elapsed_ms: Option<u128>,
     pub(super) req: &'a str,
-    pub(super) req_headers: Option<&'a str>,
     pub(super) resp: Option<&'a str>,
-    pub(super) resp_headers: Option<&'a str>,
     /// 按 `{:#}` 打，带上 source 链
     pub(super) error: Option<&'a HyErr>,
 }
 
 impl<'a> Failure<'a> {
-    /// 只有每条失败日志都有的几项（method 和请求那一侧的字段），其余为 `None`
+    /// 只有每条失败日志都有的三项，其余为 `None`
     pub(super) fn new(method: &'a Method, req: ReqFields<'a>) -> Self {
         Self {
             method,
@@ -179,9 +161,7 @@ impl<'a> Failure<'a> {
             status: None,
             elapsed_ms: None,
             req: req.req,
-            req_headers: req.headers,
             resp: None,
-            resp_headers: None,
             error: None,
         }
     }
@@ -201,9 +181,7 @@ pub(super) fn log_failed(level: FailedLogLevel, message: &str, f: &Failure<'_>) 
                 status = f.status.map(tracing::field::display),
                 elapsed_ms = f.elapsed_ms,
                 req = %f.req,
-                req_headers = f.req_headers.map(tracing::field::display),
                 resp = f.resp.map(tracing::field::display),
-                resp_headers = f.resp_headers.map(tracing::field::display),
                 error = error.as_deref().map(tracing::field::display),
                 "{message}"
             )
@@ -212,6 +190,76 @@ pub(super) fn log_failed(level: FailedLogLevel, message: &str, f: &Failure<'_>) 
     match level {
         FailedLogLevel::Warn => emit!(warn),
         FailedLogLevel::Error => emit!(error),
+    }
+}
+
+// ---------------- debug 日志 ----------------
+//
+// 每次请求两条：start（DebugStart）和结束（DebugEnd，请求加响应，单独一条就能看懂）。
+// 序列化成 pretty JSON，接在消息后面。headers / params / body 的结构运行时才知道，是 `serde_json::Value`
+
+/// 请求那一侧，start 和结束两条共用。不打码
+#[cfg(feature = "debug-log")]
+#[derive(serde::Serialize)]
+pub(super) struct DebugRequest {
+    /// 请求自己的头补上 client 默认头，同名多值是数组
+    pub(super) headers: serde_json::Value,
+    /// 没有是 null
+    pub(super) params: serde_json::Value,
+    /// JSON 的嵌套成对象，别的是字符串，没有是 null
+    pub(super) body: serde_json::Value,
+}
+
+/// 响应
+#[cfg(feature = "debug-log")]
+#[derive(serde::Serialize)]
+pub(super) struct DebugResponse {
+    pub(super) headers: serde_json::Value,
+    /// JSON 的嵌套成对象，别的是字符串；没读 body（`BodyStream`）是 null
+    pub(super) body: serde_json::Value,
+}
+
+/// `http call start`
+#[cfg(feature = "debug-log")]
+#[derive(serde::Serialize)]
+pub(super) struct DebugStart<'a> {
+    pub(super) method: &'a str,
+    /// 真正发出去的地址，params 不打码
+    pub(super) url: &'a str,
+    pub(super) request: &'a DebugRequest,
+}
+
+/// 结束那条：success / non-2xx / decode failed / failed 共用这一个形状
+#[cfg(feature = "debug-log")]
+#[derive(serde::Serialize)]
+pub(super) struct DebugEnd<'a> {
+    pub(super) method: &'a str,
+    pub(super) url: &'a str,
+    /// 传输失败（没拿到响应头）时是 null
+    pub(super) status: Option<u16>,
+    pub(super) elapsed_ms: u128,
+    pub(super) request: &'a DebugRequest,
+    /// 传输失败时是 null
+    pub(super) response: Option<DebugResponse>,
+    /// 按 `{:#}` 带 source 链；成功、非 2xx 时是 null
+    pub(super) error: Option<String>,
+}
+
+/// debug 时的日志：消息后面换行接 pretty JSON。`level` 为 `None` 时是 INFO（start / success），
+/// 失败时按配置的级别。不是一行：debug 只在测试里开，好读优先
+#[cfg(feature = "debug-log")]
+pub(super) fn log_debug(
+    level: Option<FailedLogLevel>,
+    message: &str,
+    fields: &impl serde::Serialize,
+) {
+    // 字段都是字符串、数字和 Value，序列化不会失败；签名上会失败，就退成一句说明
+    let json = serde_json::to_string_pretty(fields)
+        .unwrap_or_else(|e| format!("<debug log serialize failed: {e}>"));
+    match level {
+        None => tracing::info!("{message}\n{json}"),
+        Some(FailedLogLevel::Warn) => tracing::warn!("{message}\n{json}"),
+        Some(FailedLogLevel::Error) => tracing::error!("{message}\n{json}"),
     }
 }
 
@@ -258,13 +306,9 @@ mod tests {
             }
         }
 
-        /// 请求那一侧的字段，平时的样子：没有请求头
+        /// 请求那一侧的字段
         fn req(url: &'static str, req: &'static str) -> ReqFields<'static> {
-            ReqFields {
-                url,
-                req,
-                headers: None,
-            }
+            ReqFields { url, req }
         }
 
         /// 和 resp() 对应的请求字段
@@ -321,14 +365,7 @@ mod tests {
                 &line,
                 &["http call failed", "method=GET", "url=http://h/", "req=[]"],
             );
-            for absent in [
-                "status=",
-                "elapsed_ms=",
-                "req_headers=",
-                "resp=",
-                "resp_headers=",
-                "error=",
-            ] {
+            for absent in ["status=", "elapsed_ms=", "resp=", "error="] {
                 assert!(!line.contains(absent), "{absent} should be absent: {line}");
             }
         }
@@ -381,7 +418,7 @@ mod tests {
                     "req=[params:1]",
                 ],
             );
-            for absent in ["status=", "elapsed_ms=", "req_headers=", "resp="] {
+            for absent in ["status=", "elapsed_ms=", "resp="] {
                 assert!(!line.contains(absent), "{absent} should be absent: {line}");
             }
         }
@@ -389,7 +426,7 @@ mod tests {
         /// 成功日志是 INFO，字段和失败日志同名同序
         #[test]
         fn success_log_fields() {
-            let line = one_line(|| log_resp_success(&resp(), sent(), Some("resp-body"), None));
+            let line = one_line(|| log_resp_success(&resp(), sent(), Some("resp-body")));
             assert!(line.contains(" INFO "), "{line}");
             assert_in_order(
                 &line,
@@ -403,18 +440,13 @@ mod tests {
                     "resp=resp-body",
                 ],
             );
-            // 不是 debug 时没有请求头、响应头字段
-            for absent in ["req_headers=", "resp_headers="] {
-                assert!(!line.contains(absent), "{absent} should be absent: {line}");
-            }
         }
 
         /// 非 2xx：按配置的失败级别打，带状态、耗时、请求和响应预览，没有 error
         #[test]
         fn status_failed_log() {
-            let line = one_line(|| {
-                log_status_failed(FailedLogLevel::Error, &resp(), sent(), "resp-body", None)
-            });
+            let line =
+                one_line(|| log_status_failed(FailedLogLevel::Error, &resp(), sent(), "resp-body"));
             assert!(line.contains("ERROR "), "{line}");
             assert_in_order(
                 &line,
@@ -436,14 +468,7 @@ mod tests {
         fn decode_failed_log() {
             let err = err!(BaseErr::JsonError, "decode boom");
             let line = one_line(|| {
-                log_decode_failed(
-                    FailedLogLevel::Warn,
-                    &resp(),
-                    sent(),
-                    &err,
-                    "resp-body",
-                    None,
-                )
+                log_decode_failed(FailedLogLevel::Warn, &resp(), sent(), &err, "resp-body")
             });
             assert!(line.contains(" WARN "), "{line}");
             assert_in_order(
@@ -456,43 +481,83 @@ mod tests {
                 ],
             );
         }
+    }
 
-        /// debug 时的请求头、响应头：有值时按 req → req_headers → resp → resp_headers 的顺序输出
-        #[test]
-        fn headers_follow_req_and_resp() {
-            let fields = ReqFields {
-                headers: Some("{x-a: 1}"),
-                ..sent()
-            };
-            let success =
-                one_line(|| log_resp_success(&resp(), fields, Some("body"), Some("{x-b: 2}")));
-            let failed = one_line(|| {
-                log_status_failed(
-                    FailedLogLevel::Warn,
-                    &resp(),
-                    fields,
-                    "body",
-                    Some("{x-b: 2}"),
-                )
-            });
-            for line in [success, failed] {
-                assert_in_order(
-                    &line,
-                    &[
-                        "req=[params:1]",
-                        "req_headers={x-a: 1}",
-                        "resp=body",
-                        "resp_headers={x-b: 2}",
-                    ],
-                );
+    /// `log_debug`：消息后面换行接 pretty JSON，字段按结构体的顺序，级别按参数
+    #[cfg(feature = "debug-log")]
+    mod debug {
+        use serde_json::json;
+
+        use super::*;
+
+        fn request() -> DebugRequest {
+            DebugRequest {
+                headers: json!({"accept": "*/*"}),
+                params: serde_json::Value::Null,
+                body: json!({"a": 1}),
             }
-            let start = one_line(|| {
-                log_start(&Start {
-                    method: &Method::GET,
-                    req: fields,
-                })
-            });
-            assert_in_order(&start, &["req=[params:1]", "req_headers={x-a: 1}"]);
+        }
+
+        #[test]
+        fn start_is_pretty_json() {
+            let request = request();
+            let (out, _guard) = capture();
+            log_debug(
+                None,
+                "http call start",
+                &DebugStart {
+                    method: "GET",
+                    url: "http://h/x",
+                    request: &request,
+                },
+            );
+            let log = out.text();
+            assert!(log.contains(" INFO "), "{log}");
+            let expected = r#"http call start
+{
+  "method": "GET",
+  "url": "http://h/x",
+  "request": {
+    "headers": {
+      "accept": "*/*"
+    },
+    "params": null,
+    "body": {
+      "a": 1
+    }
+  }
+}"#;
+            assert!(log.contains(expected), "{log}");
+        }
+
+        /// 结束那条：失败按级别打，没拿到响应时 status / response 是 null
+        #[test]
+        fn end_without_response() {
+            let request = request();
+            let (out, _guard) = capture();
+            log_debug(
+                Some(FailedLogLevel::Error),
+                "http call failed",
+                &DebugEnd {
+                    method: "GET",
+                    url: "http://h/x",
+                    status: None,
+                    elapsed_ms: 3,
+                    request: &request,
+                    response: None,
+                    error: Some("boom".into()),
+                },
+            );
+            let log = out.text();
+            assert!(log.contains("ERROR "), "{log}");
+            assert!(
+                log.contains("\"status\": null,\n  \"elapsed_ms\": 3,"),
+                "{log}"
+            );
+            assert!(
+                log.contains("\"response\": null,\n  \"error\": \"boom\"\n}"),
+                "{log}"
+            );
         }
     }
 }

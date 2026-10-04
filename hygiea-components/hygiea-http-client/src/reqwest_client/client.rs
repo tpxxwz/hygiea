@@ -164,8 +164,8 @@ pub struct ReqwestConfig {
     pub resolve: Vec<(String, Vec<SocketAddr>)>,
 
     // ---- 以下是 reqwest 没有、本模块自己加的 ----
-    /// 强制打开完整日志：url、params、body 原文，请求头和响应头，无视
-    /// [`RequestConfig::enable_logging`](super::RequestConfig::enable_logging)。
+    /// 打开 debug 日志：每次请求打 start（请求）和结束（请求加响应）两条 pretty JSON，url、params、body、
+    /// 响应原文，带请求头和响应头，不打码，无视 [`RequestConfig::enable_logging`](super::RequestConfig::enable_logging)。
     /// 只在 `debug-log` feature 下存在，用于测试排查。在 build 时定下，之后不能改
     #[cfg(feature = "debug-log")]
     pub debug: bool,

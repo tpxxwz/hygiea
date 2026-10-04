@@ -296,7 +296,12 @@ let client = ReqwestConfig { timeout: Some(t), ..Default::default() }.debug(true
 // 配置文件里是 debug = true
 ```
 
-打开后日志条数、消息、级别不变，只是 start / success 无视 `enable_logging` 强制打；`url`、`req`（params 和 body）、`resp` 换成原文，不再打码；多 `req_headers`（请求自己的头补上 client 默认头）和 `resp_headers` 两个字段，敏感头也是原值。返回给调用方的错误和 `HttpResponse.url` 仍是打码的。请求头是照 reqwest 的规则算的，发送时才加的 `Host`、`Content-Length`、`Accept-Encoding`、cookie、代理认证头不在里面；`BodyStream` 成功时没有 `resp`。
+打开后不再打平时的单行日志，每次请求打两条，消息后面换行接一段 pretty JSON（多行），无视 `enable_logging`，不打码：
+
+- `http call start`：`{method, url, request: {headers, params, body}}`
+- 结束（`http call success` / `non-2xx` / `decode failed` / `failed`）：`{method, url, status, elapsed_ms, request, response: {headers, body}, error}`，带上完整的请求，单独一条就能看懂
+
+`url` 是真正发出去的地址；请求头是请求自己的头补上 client 默认头，敏感头也是原值；JSON 的 params、body、响应 body 嵌套成对象，别的是字符串。级别和平时一样（成功 INFO，失败按 `failed_log_level`）。返回给调用方的错误和 `HttpResponse.url` 仍是打码的。请求头是照 reqwest 的规则算的，发送时才加的 `Host`、`Content-Length`、`Accept-Encoding`、cookie、代理认证头不在里面；传输失败没有 `response`；`BodyStream` 成功时 `response.body` 为 null。
 
 ## 架构
 

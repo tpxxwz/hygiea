@@ -58,11 +58,17 @@
 //!
 //! ## debug 日志（`debug-log` feature）
 //!
-//! [`ReqwestConfig::debug`](super::ReqwestConfig) 打开时，日志条数、消息、级别都不变，只是：
-//! start / success 无视 `enable_logging` 强制打；url、req 换成原文（params 和 body 不打码）；
-//! 多 `req_headers`（请求自己的头补上 client 默认头）和 `resp_headers`；成功时 resp 打 body 原文
-//! （`BodyStream` 不读 body，没有）。这些值在 `dispatch` 里算好放进 `SendCtx::debug`，
-//! 打日志时经 `SendCtx` 的几个取值方法拿，不是 debug 时取值方法给的就是原来的打码值和 `None`
+//! [`ReqwestConfig::debug`](super::ReqwestConfig) 打开时，上面那套日志换成 debug 日志（`log_debug`）：
+//! 消息后面换行接一段 pretty JSON，无视 `enable_logging`，不打码。每次请求两条，每条都能单独看懂：
+//!
+//! - `http call start`：`{method, url, request: {headers, params, body}}`
+//! - 结束（success / non-2xx / decode failed / failed，五种出口之一）：
+//!   `{method, url, status, elapsed_ms, request, response: {headers, body}, error}`
+//!
+//! url 是真正发出去的地址；请求头是请求自己的头补上 client 默认头；JSON 的 params / body 嵌套成对象，
+//! 别的是字符串。传输失败没有 response；`BodyStream` 不读 body，response.body 为 null。
+//! 要用的东西在 `dispatch` 里算好放进 `SendCtx::debug`，各出口先调 `debug_start` / `debug_end`，
+//! 返回 false（不是 debug）才打原来的日志
 
 use std::future::Future;
 use std::time::Instant;
@@ -76,15 +82,17 @@ use super::error::{
     decode_failed, invalid_params, invalid_url, non_success_status, request_build_failed,
     request_failed,
 };
+#[cfg(feature = "debug-log")]
+use super::logging::{DebugEnd, DebugRequest, DebugResponse, DebugStart, log_debug};
 use super::logging::{
     FailedLogLevel, Failure, ReqFields, Start, log_decode_failed, log_failed, log_resp_success,
     log_start, log_status_failed,
 };
 use super::request::{HttpResponse, RequestConfig};
 use super::response::{BodyStream, FromBody, FromBytes};
-#[cfg(feature = "debug-log")]
-use super::text::headers_text;
 use super::text::{body_preview, body_text, to_one_line};
+#[cfg(feature = "debug-log")]
+use super::text::{headers_json, text_json};
 use super::{Bytes, HeaderMap, Method, ReqwestClient, StatusCode, Url};
 
 impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
@@ -199,9 +207,9 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
             }
             format!("[{}]", parts.join(", "))
         };
-        // debug 时同样格式的原文，into_request 会消费 self，先算好
+        // debug 日志里的 params / body 原文，into_request 会消费 self，先算好
         #[cfg(feature = "debug-log")]
-        let debug_req = client.debug.then(|| self.debug_req_preview());
+        let debug_req = client.debug.then(|| self.debug_req_json());
 
         // 日志、错误和 HttpResponse.url 用的地址：和真实请求一样由 reqwest 拼 query，只是在 redact 的
         // 日志模式下拼，所以编码方式、字段顺序都和真实请求一致，params 里标了的字段打码或不出现。
@@ -229,10 +237,12 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
             enable_logging,
             failed_log_level,
             #[cfg(feature = "debug-log")]
-            debug: debug_req.map(|req| DebugCtx::new(req, &request, &client.default_headers)),
+            debug: debug_req.map(|(params, body)| {
+                DebugCtx::new(params, body, &request, &client.default_headers)
+            }),
             sent_at: Instant::now(),
         };
-        if ctx.logging_on() {
+        if !ctx.debug_start() && enable_logging {
             log_start(&Start {
                 method: &ctx.method,
                 req: ctx.req_fields(),
@@ -247,21 +257,17 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
 
 #[cfg(feature = "debug-log")]
 impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
-    /// debug 日志里的 req：格式和 req_preview 一样，params 和 body 不打码。
+    /// debug 日志里的 params 和 body，不打码，返回 `(params, body)`。没有的是 null。
     /// 打码的那份已经序列化成功了，这里再失败也不影响发送，只在日志里写明
-    fn debug_req_preview(&self) -> String {
-        let mut parts = Vec::new();
-        match serde_json::to_string(&self.params) {
-            Ok(params) if params == "null" => {}
-            Ok(params) => parts.push(format!("params:{params}")),
-            Err(e) => parts.push(format!("params:<debug preview failed: {e}>")),
-        }
-        match self.body.debug_preview() {
-            Ok(None) => {}
-            Ok(Some(body)) => parts.push(format!("body:{body}")),
-            Err(e) => parts.push(format!("body:<debug preview failed: {e}>")),
-        }
-        format!("[{}]", parts.join(", "))
+    fn debug_req_json(&self) -> (serde_json::Value, serde_json::Value) {
+        let failed = |e: &dyn std::fmt::Display| format!("<debug preview failed: {e}>").into();
+        let params = serde_json::to_value(&self.params).unwrap_or_else(|e| failed(&e));
+        let body = match self.body.debug_preview() {
+            Ok(None) => serde_json::Value::Null,
+            Ok(Some(body)) => text_json(&body),
+            Err(e) => failed(&e),
+        };
+        (params, body)
     }
 }
 
@@ -391,17 +397,21 @@ pub(super) struct SendCtx {
 struct DebugCtx {
     /// 真正发出去的地址，params 不打码
     url: String,
-    /// 格式和 req_preview 一样，params 和 body 不打码
-    req: String,
-    /// 请求自己的头补上 client 默认头（只补请求里没有的名字，和 reqwest 发送时一样），转成一行
-    req_headers: String,
+    /// start 和结束两条共用
+    request: DebugRequest,
     /// RespBody 读完 body 后存一份，成功日志打原文用
     resp_body: std::sync::OnceLock<Bytes>,
 }
 
 #[cfg(feature = "debug-log")]
 impl DebugCtx {
-    fn new(req: String, request: &reqwest::Request, default_headers: &HeaderMap) -> Self {
+    fn new(
+        params: serde_json::Value,
+        body: serde_json::Value,
+        request: &reqwest::Request,
+        default_headers: &HeaderMap,
+    ) -> Self {
+        // 请求自己的头补上 client 默认头：只补请求里没有的名字，和 reqwest 发送时一样
         let mut headers = request.headers().clone();
         for (name, value) in default_headers {
             if let reqwest::header::Entry::Vacant(entry) = headers.entry(name) {
@@ -410,62 +420,78 @@ impl DebugCtx {
         }
         Self {
             url: request.url().to_string(),
-            req,
-            req_headers: headers_text(&headers),
+            request: DebugRequest {
+                headers: headers_json(&headers),
+                params,
+                body,
+            },
             resp_body: std::sync::OnceLock::new(),
         }
     }
 }
 
 impl SendCtx {
-    // ---- 打日志时取值：debug 时给原文，否则给打码值、None。cfg 只出现在这几个方法里 ----
-
-    /// start / success 要不要打：enable_logging 或者 debug
-    fn logging_on(&self) -> bool {
-        #[cfg(feature = "debug-log")]
-        if self.debug.is_some() {
-            return true;
-        }
-        self.enable_logging
-    }
-
-    /// 请求那一侧的字段
+    /// 平时日志里请求那一侧的字段：打码后的地址和请求摘要
     fn req_fields(&self) -> ReqFields<'_> {
-        #[cfg(feature = "debug-log")]
-        if let Some(debug) = &self.debug {
-            return ReqFields {
-                url: &debug.url,
-                req: &debug.req,
-                headers: Some(&debug.req_headers),
-            };
-        }
         ReqFields {
             url: self.url.as_str(),
             req: &self.req_preview,
-            headers: None,
         }
     }
 
-    /// 响应头，只在 debug 时有
-    fn resp_headers(&self, headers: &HeaderMap) -> Option<String> {
+    // ---- debug 日志：cfg 只出现在这几个方法里。返回 false 表示不是 debug，调用方打原来的日志 ----
+
+    /// debug 时打 start（请求那一侧）
+    fn debug_start(&self) -> bool {
         #[cfg(feature = "debug-log")]
-        if self.debug.is_some() {
-            return Some(headers_text(headers));
+        if let Some(debug) = &self.debug {
+            let start = DebugStart {
+                method: self.method.as_str(),
+                url: &debug.url,
+                request: &debug.request,
+            };
+            log_debug(None, "http call start", &start);
+            return true;
         }
-        #[cfg(not(feature = "debug-log"))]
-        let _ = headers;
-        None
+        false
     }
 
-    /// 成功时的响应原文，只在 debug 且 body 经过 RespBody::read_all 时有
-    fn debug_resp_body(&self, headers: &HeaderMap) -> Option<String> {
+    /// debug 时打结束那条：请求加响应。`level` 为 `None` 是成功（INFO）。
+    /// `resp_headers` 为 `None` 表示没拿到响应；`resp_body` 不给时用 read_all 存下的那份，都没有就是 null
+    fn debug_end(
+        &self,
+        level: Option<FailedLogLevel>,
+        message: &str,
+        status: Option<StatusCode>,
+        resp_headers: Option<&HeaderMap>,
+        resp_body: Option<&Bytes>,
+        error: Option<&HyErr>,
+    ) -> bool {
         #[cfg(feature = "debug-log")]
-        if let Some(body) = self.debug.as_ref().and_then(|d| d.resp_body.get()) {
-            return Some(body_preview(headers, body).into_owned());
+        if let Some(debug) = &self.debug {
+            let response = resp_headers.map(|headers| DebugResponse {
+                headers: headers_json(headers),
+                body: resp_body
+                    .or_else(|| debug.resp_body.get())
+                    .map_or(serde_json::Value::Null, |b| {
+                        text_json(&body_text(headers, b))
+                    }),
+            });
+            let end = DebugEnd {
+                method: self.method.as_str(),
+                url: &debug.url,
+                status: status.map(|s| s.as_u16()),
+                elapsed_ms: self.sent_at.elapsed().as_millis(),
+                request: &debug.request,
+                response,
+                error: error.map(|e| format!("{e:#}")),
+            };
+            log_debug(level, message, &end);
+            return true;
         }
         #[cfg(not(feature = "debug-log"))]
-        let _ = headers;
-        None
+        let _ = (level, message, status, resp_headers, resp_body, error);
+        false
     }
 
     /// RespBody 读完 body 后调，debug 时存一份给成功日志
@@ -508,13 +534,23 @@ impl SendCtx {
             status,
         };
         let err = request_failed(&self.method, self.url.as_str(), status, e);
-        let failure = Failure {
+        let level = self.failed_log_level;
+        if !self.debug_end(
+            Some(level),
+            "http call failed",
             status,
-            elapsed_ms: Some(self.sent_at.elapsed().as_millis()),
-            error: Some(&err),
-            ..Failure::new(&self.method, self.req_fields())
-        };
-        log_failed(self.failed_log_level, "http call failed", &failure);
+            None,
+            None,
+            Some(&err),
+        ) {
+            let failure = Failure {
+                status,
+                elapsed_ms: Some(self.sent_at.elapsed().as_millis()),
+                error: Some(&err),
+                ..Failure::new(&self.method, self.req_fields())
+            };
+            log_failed(level, "http call failed", &failure);
+        }
         SendFailure { err, stage }
     }
 
@@ -526,13 +562,23 @@ impl SendCtx {
         body: Bytes,
     ) -> SendFailure {
         let resp = self.response(status, headers, body);
-        log_status_failed(
-            self.failed_log_level,
-            &resp,
-            self.req_fields(),
-            &body_preview(&resp.headers, &resp.body),
-            self.resp_headers(&resp.headers).as_deref(),
-        );
+        let level = self.failed_log_level;
+        let (headers, body) = (Some(&resp.headers), Some(&resp.body));
+        if !self.debug_end(
+            Some(level),
+            "http call non-2xx",
+            Some(status),
+            headers,
+            body,
+            None,
+        ) {
+            log_status_failed(
+                level,
+                &resp,
+                self.req_fields(),
+                &body_preview(&resp.headers, &resp.body),
+            );
+        }
         // 错误里放 body_text：和日志预览一样按 Content-Type / charset 解码，但不转义换行，
         // 调用方拿 err_args["body"] 去解析对方的错误格式时内容和原文一致
         let err = non_success_status(
@@ -556,14 +602,18 @@ impl SendCtx {
         e: HyErr,
     ) -> SendFailure {
         let resp = self.response(status, headers, body);
-        log_decode_failed(
-            self.failed_log_level,
-            &resp,
-            self.req_fields(),
-            &e,
-            &body_preview(&resp.headers, &resp.body),
-            self.resp_headers(&resp.headers).as_deref(),
-        );
+        let level = self.failed_log_level;
+        let (headers, body) = (Some(&resp.headers), Some(&resp.body));
+        let message = "http call decode failed";
+        if !self.debug_end(Some(level), message, Some(status), headers, body, Some(&e)) {
+            log_decode_failed(
+                level,
+                &resp,
+                self.req_fields(),
+                &e,
+                &body_preview(&resp.headers, &resp.body),
+            );
+        }
         let err = decode_failed(
             &resp.method,
             resp.status,
@@ -577,8 +627,8 @@ impl SendCtx {
         }
     }
 
-    /// 成功：按 enable_logging（或 debug）打成功日志。`preview` 是类型提供的（打码后的）响应摘要，
-    /// 关了日志时不调用，省得白算；debug 时优先打 body 原文，没读过 body（`BodyStream`）才用它
+    /// 成功：debug 时打 debug 日志，否则按 enable_logging 打成功日志。`preview` 是类型提供的（打码后的）响应摘要，
+    /// 关了日志时不调用，省得白算
     pub(super) fn succeeded<Resp>(
         &self,
         status: StatusCode,
@@ -587,16 +637,17 @@ impl SendCtx {
         preview: impl FnOnce(&Resp) -> Option<String>,
     ) -> HttpResponse<Resp> {
         let resp = self.response(status, headers, body);
-        if self.logging_on() {
-            let resp_preview = self
-                .debug_resp_body(&resp.headers)
-                .or_else(|| preview(&resp.body).map(|p| to_one_line(p.into()).into_owned()));
-            log_resp_success(
-                &resp,
-                self.req_fields(),
-                resp_preview.as_deref(),
-                self.resp_headers(&resp.headers).as_deref(),
-            );
+        let logged = self.debug_end(
+            None,
+            "http call success",
+            Some(status),
+            Some(&resp.headers),
+            None,
+            None,
+        );
+        if !logged && self.enable_logging {
+            let resp_preview = preview(&resp.body).map(|p| to_one_line(p.into()).into_owned());
+            log_resp_success(&resp, self.req_fields(), resp_preview.as_deref());
         }
         resp
     }
@@ -932,10 +983,11 @@ mod tests {
         }
     }
 
-    /// debug 打开时（发到拒绝连接的端口，看 start 和传输失败两条日志）：url、req 是原文，带请求头，
-    /// enable_logging 关了也打 start。成功、非 2xx 的日志和服务端收到的头对照在集成测试里
+    /// debug 打开时（发到拒绝连接的端口，看 start 和传输失败两条）：pretty JSON，url、params、body 是原文，
+    /// 带请求头，enable_logging 关了也打。成功、非 2xx 的日志和服务端收到的头对照在集成测试里
     #[cfg(feature = "debug-log")]
     mod debug {
+        use serde_json::{Value, json};
         use test_support::headers::header_map;
 
         use super::*;
@@ -954,14 +1006,23 @@ mod tests {
             .unwrap()
         }
 
-        /// 发一次，返回打出来的日志（start 一行、failed 一行）
-        async fn logs(
-            cfg: RequestConfig<&Login, Json<&Login>>,
-            client: &ReqwestClient,
-        ) -> Vec<String> {
+        /// 发一次（必定传输失败），返回打出来的日志
+        async fn logs(cfg: RequestConfig<&Login, Json<&Login>>, client: &ReqwestClient) -> String {
             let (out, _guard) = capture();
             cfg.send::<Bytes>(client).await.unwrap_err();
-            out.text().lines().map(str::to_string).collect()
+            out.text()
+        }
+
+        /// 日志里 `message` 后面换行接的那段 pretty JSON
+        fn debug_json(log: &str, message: &str) -> Value {
+            let at = log
+                .find(&format!("{message}\n"))
+                .unwrap_or_else(|| panic!("no `{message}` in:\n{log}"));
+            serde_json::Deserializer::from_str(&log[at + message.len()..])
+                .into_iter::<Value>()
+                .next()
+                .unwrap()
+                .unwrap()
         }
 
         fn login() -> RequestConfig<&'static Login, Json<&'static Login>> {
@@ -971,56 +1032,63 @@ mod tests {
                 .enable_logging(false)
         }
 
-        /// enable_logging 关了也打 start；两条日志的 url、req 都是原文，不打码。
-        /// error 字段是返回给调用方的错误，里面的地址仍然打码，不受 debug 影响
+        /// start 是请求那一侧；url、params、body 原文，不打码
         #[tokio::test]
-        async fn raw_url_and_req() {
-            let lines = logs(login(), &debug_client()).await;
-            assert_eq!(lines.len(), 2, "{lines:?}");
-            assert!(lines[0].contains("http call start"), "{}", lines[0]);
-            assert!(lines[1].contains("http call failed"), "{}", lines[1]);
-            for line in &lines {
-                assert!(
-                    line.contains("url=http://127.0.0.1:1/login?username=alice&password=p%40ss&device_id=dev-1"),
-                    "{line}"
-                );
-                assert!(
-                    line.contains(
-                        r#"body:{"username":"alice","password":"p@ss","device_id":"dev-1"}"#
-                    ),
-                    "{line}"
-                );
-                assert!(!line.contains(r#""password":"***""#), "{line}");
-            }
+        async fn start_is_request() {
+            let log = logs(login(), &debug_client()).await;
+            let start = debug_json(&log, "http call start");
+            let login = json!({"username": "alice", "password": "p@ss", "device_id": "dev-1"});
+            assert_eq!(start["method"], "POST");
+            assert_eq!(
+                start["url"],
+                "http://127.0.0.1:1/login?username=alice&password=p%40ss&device_id=dev-1"
+            );
+            assert_eq!(start["request"]["params"], login);
+            assert_eq!(start["request"]["body"], login);
+            assert_eq!(start.as_object().unwrap().len(), 3, "{start:#}");
         }
 
         /// 请求头：请求自己的头（含 Json 自动加的 content-type）补上 client 默认头，同名以请求的为准
         #[tokio::test]
         async fn req_headers_merge_client_defaults() {
-            let lines = logs(login(), &debug_client()).await;
-            for line in &lines {
-                for part in [
-                    "x-both: request",
-                    "content-type: application/json",
-                    "accept: */*",
-                    "user-agent: ua",
-                    "x-default: d",
-                ] {
-                    assert!(line.contains(part), "{part} missing: {line}");
-                }
-                assert!(!line.contains("x-both: client"), "{line}");
-                // 传输失败没有响应
-                assert!(!line.contains("resp_headers="), "{line}");
-            }
+            let log = logs(login(), &debug_client()).await;
+            let headers = &debug_json(&log, "http call start")["request"]["headers"];
+            assert_eq!(
+                *headers,
+                json!({
+                    "x-both": "request",
+                    "content-type": "application/json",
+                    "accept": "*/*",
+                    "user-agent": "ua",
+                    "x-default": "d",
+                })
+            );
         }
 
-        /// debug 关时和原来一样：enable_logging 关了只有失败日志，打码，没有请求头
+        /// 传输失败：按失败级别打，带完整的请求和错误，没有状态和响应。
+        /// error 是返回给调用方的错误，里面的地址仍然打码
+        #[tokio::test]
+        async fn transport_failed_has_request_and_error() {
+            let log = logs(login(), &debug_client()).await;
+            assert!(log.contains(" WARN "), "{log}");
+            let start = debug_json(&log, "http call start");
+            let failed = debug_json(&log, "http call failed");
+            assert_eq!(failed["url"], start["url"]);
+            assert_eq!(failed["request"], start["request"]);
+            assert_eq!(failed["status"], Value::Null);
+            assert_eq!(failed["response"], Value::Null);
+            assert!(failed["elapsed_ms"].is_u64(), "{failed:#}");
+            let error = failed["error"].as_str().unwrap();
+            assert!(error.contains("password=***"), "{error}");
+        }
+
+        /// debug 关时和原来一样：enable_logging 关了只有一行失败日志，打码，没有 JSON
         #[tokio::test]
         async fn off_keeps_original_logs() {
-            let lines = logs(login(), &client()).await;
-            assert_eq!(lines.len(), 1, "{lines:?}");
-            assert!(lines[0].contains("password=***"), "{}", lines[0]);
-            assert!(!lines[0].contains("req_headers="), "{}", lines[0]);
+            let log = logs(login(), &client()).await;
+            assert_eq!(log.lines().count(), 1, "{log}");
+            assert!(log.contains("http call failed method=POST"), "{log}");
+            assert!(log.contains("password=***"), "{log}");
         }
     }
 }

@@ -4,7 +4,7 @@
 //! |---|---|---|---|
 //! | `reqwest` | [`reqwest_client`] | [`ReqwestComponent`](reqwest_client::ReqwestComponent) | [`ReqwestClient`](reqwest_client::ReqwestClient) |
 //!
-//! `debug-log`（带上 `reqwest`）：[`ReqwestConfig`](reqwest_client::ReqwestConfig) 多一个 `debug` 开关，打开后日志带原文和请求头、响应头。
+//! `debug-log`（带上 `reqwest`）：[`ReqwestConfig`](reqwest_client::ReqwestConfig) 多一个 `debug` 开关，打开后每次请求打两条 pretty JSON（请求、请求加响应），带原文和请求头、响应头。
 //! 只给测试用，放在 dev-dependencies 里开
 //!
 //! 每种实现单独一个模块，不在 crate 根上再导出，以后加别的实现时名字不会撞：
