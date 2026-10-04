@@ -291,7 +291,9 @@ let resp = RequestConfig::plain(Method::GET, url)
 测试里排查问题时，开 `http-client-reqwest-debug-log` feature（只放在 dev-dependencies 里），给 client 打开 `debug`：
 
 ```rust
-let client = ReqwestConfig::default().debug(true).build()?; // 配置文件里是 debug = true
+let client = ReqwestClient::debug()?; // 默认配置加 debug，等于 ReqwestConfig::default().debug(true).build()
+let client = ReqwestConfig { timeout: Some(t), ..Default::default() }.debug(true).build()?; // 要改别的配置时
+// 配置文件里是 debug = true
 ```
 
 打开后日志条数、消息、级别不变，只是 start / success 无视 `enable_logging` 强制打；`url`、`req`（params 和 body）、`resp` 换成原文，不再打码；多 `req_headers`（请求自己的头补上 client 默认头）和 `resp_headers` 两个字段，敏感头也是原值。返回给调用方的错误和 `HttpResponse.url` 仍是打码的。请求头是照 reqwest 的规则算的，发送时才加的 `Host`、`Content-Length`、`Accept-Encoding`、cookie、代理认证头不在里面；`BodyStream` 成功时没有 `resp`。

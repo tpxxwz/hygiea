@@ -284,6 +284,15 @@ pub struct ReqwestClient {
     pub(super) debug: bool,
 }
 
+impl ReqwestClient {
+    /// 默认配置、打开 debug 日志的 client，就是 `ReqwestConfig::default().debug(true).build()`。
+    /// 只在 `debug-log` feature 下存在，给测试用；要改别的配置就用 [`ReqwestConfig::debug`](ReqwestConfig::debug) 那条写法
+    #[cfg(feature = "debug-log")]
+    pub fn debug() -> Result<Self, HyErr> {
+        ReqwestConfig::default().debug(true).build()
+    }
+}
+
 /// 把配置铺到 reqwest 原生的 `ClientBuilder` 上。不对外：原生的 `Client` 用不了本模块的 `send`
 fn client_builder(config: ReqwestConfig) -> Result<ClientBuilder, HyErr> {
     let mut builder = Client::builder();
@@ -539,6 +548,14 @@ mod tests {
         fn switch_reaches_client() {
             assert!(!ReqwestConfig::default().build().unwrap().debug);
             assert!(ReqwestConfig::default().debug(true).build().unwrap().debug);
+        }
+
+        /// `ReqwestClient::debug()`：默认配置加上 debug
+        #[test]
+        fn shortcut_is_default_with_debug() {
+            let client = ReqwestClient::debug().unwrap();
+            assert!(client.debug);
+            assert_eq!(*client.default_headers, header_map(&[("accept", "*/*")]));
         }
 
         /// 配置文件里写 `debug = true`
