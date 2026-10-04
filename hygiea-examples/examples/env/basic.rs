@@ -6,7 +6,7 @@
 //! MY_APP_NAME=hello cargo run -p hygiea-examples --example env_basic
 //! ```
 
-use hygiea::HyErr;
+use hygiea::Result;
 use hygiea::env::{BuiltinKey, EnvKey, env_get, env_get_opt, env_get_or, env_get_or_else};
 
 /// 自定义 key：给应用自己的环境变量用，实现 `EnvKey` 就能用同一套函数取值
@@ -31,7 +31,7 @@ impl EnvKey for AppRegionKey {
     }
 }
 
-fn main() -> Result<(), HyErr> {
+fn main() -> Result<()> {
     println!("1. BuiltinKey — 框架内置的几个 key，部分自带默认值:");
     println!(
         "   BuiltinKey::DefaultHome 的默认值: {:?}",

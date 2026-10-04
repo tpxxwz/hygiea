@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 
 use httpmock::When;
-use hygiea_core::{HyErr, err};
+use hygiea_core::{Result, err};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -271,7 +271,7 @@ fn json_parts(value: Option<Value>) -> Vec<String> {
 
 impl RequestSpec {
     /// 检查并编译正则、路径模板
-    pub fn compile(mut self, cassette: &str, name: &str) -> Result<CompiledRequest, HyErr> {
+    pub fn compile(mut self, cassette: &str, name: &str) -> Result<CompiledRequest> {
         let invalid = |cause: String| err!(HttpMockErr::InvalidCassette, { "path": cassette, "cause": format!("[{name}] {cause}") });
         let method = self
             .method
@@ -280,7 +280,7 @@ impl RequestSpec {
         let regex = |pattern: &str| {
             regex::Regex::new(pattern).map_err(|e| invalid(format!("regex `{pattern}`: {e}")))
         };
-        let pairs = |pairs: &mut Pairs| -> Result<Vec<(regex::Regex, regex::Regex)>, HyErr> {
+        let pairs = |pairs: &mut Pairs| -> Result<Vec<(regex::Regex, regex::Regex)>> {
             std::mem::take(pairs)
                 .into_vec()
                 .iter()

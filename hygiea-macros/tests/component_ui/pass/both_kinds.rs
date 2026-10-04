@@ -1,5 +1,5 @@
 // Immediate / Deferred 各一个，都能 add 进同一个 Registry
-use hygiea::HyErr;
+use hygiea::{HyErr, Result};
 use hygiea::app::{
     CancellationToken, DeferredComponent, Name, ReadyResources, Registry, ResourceId, ResourceSink,
     Resources, ImmediateComponent, component,
@@ -23,7 +23,7 @@ impl ImmediateComponent for Db {
         vec![ResourceId::of::<Pool>()]
     }
 
-    async fn stop(&mut self) -> Result<(), HyErr> {
+    async fn stop(&mut self) -> Result<()> {
         Ok(())
     }
 
@@ -31,7 +31,7 @@ impl ImmediateComponent for Db {
         &mut self,
         state: &Resources,
         _shutdown: CancellationToken,
-    ) -> Result<Option<JoinHandle<()>>, HyErr> {
+    ) -> Result<Option<JoinHandle<()>>> {
         state.insert(Pool);
         Ok(None)
     }
@@ -56,7 +56,7 @@ impl hygiea::app::DeferredComponent for Api {
         None
     }
 
-    async fn prepare(&mut self, _sink: &ResourceSink) -> Result<(), HyErr> {
+    async fn prepare(&mut self, _sink: &ResourceSink) -> Result<()> {
         Ok(())
     }
 
@@ -64,7 +64,7 @@ impl hygiea::app::DeferredComponent for Api {
         &mut self,
         resources: ReadyResources,
         _shutdown: CancellationToken,
-    ) -> Result<Option<JoinHandle<()>>, HyErr> {
+    ) -> Result<Option<JoinHandle<()>>> {
         resources.require::<Pool>()?;
         Ok(None)
     }

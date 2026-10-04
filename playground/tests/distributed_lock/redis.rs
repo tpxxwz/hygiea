@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use fred::prelude::*;
 use hygiea::app::{CancellationToken, async_trait};
-use hygiea::{HyErr, ResultExt, err};
+use hygiea::{Result, ResultExt, err};
 
 use super::core::{BaseLockErr, DistributedLock, LockGuard};
 
@@ -37,7 +37,7 @@ pub struct RedisLock {
 /// 从节点升主后这把锁会丢，别人能再拿一次；强一致的场景（比如资金）用 PostgreSQL 的锁
 #[async_trait]
 impl DistributedLock for RedisLock {
-    async fn try_lock(&self, key: &str) -> Result<Option<LockGuard>, HyErr> {
+    async fn try_lock(&self, key: &str) -> Result<Option<LockGuard>> {
         let redis_key = format!("{KEY_PREFIX}{key}");
         let ttl = self.ttl.max(Duration::from_secs(1));
         let token = random_token();

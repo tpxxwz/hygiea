@@ -8,7 +8,7 @@ use serde::Deserialize;
 use hygiea_core::app::{
     BaseAppErr, CancellationToken, DeferredComponent, Name, ReadyResources, ResourceSink, component,
 };
-use hygiea_core::{HyErr, ResultExt, err};
+use hygiea_core::{Result, ResultExt, err};
 
 // ---- types ------------------------------------------------------------------
 
@@ -107,7 +107,7 @@ impl DeferredComponent for TonicComponent {
             .map(std::time::Duration::from_secs)
     }
 
-    async fn prepare(&mut self, _sink: &ResourceSink) -> Result<(), HyErr> {
+    async fn prepare(&mut self, _sink: &ResourceSink) -> Result<()> {
         let serve_fn = self
             .config
             .serve_fn
@@ -138,7 +138,7 @@ impl DeferredComponent for TonicComponent {
         &mut self,
         _resources: ReadyResources,
         shutdown: CancellationToken,
-    ) -> Result<Option<tokio::task::JoinHandle<()>>, HyErr> {
+    ) -> Result<Option<tokio::task::JoinHandle<()>>> {
         let (listener, serve_fn) = self.prepared.take().ok_or_else(|| {
             err!(
                 BaseAppErr::ComponentError,
@@ -196,7 +196,7 @@ mod tests {
                 &mut self,
                 _resources: &Resources,
                 _shutdown: CancellationToken,
-            ) -> Result<Option<tokio::task::JoinHandle<()>>, HyErr> {
+            ) -> Result<Option<tokio::task::JoinHandle<()>>> {
                 Ok(None)
             }
         }

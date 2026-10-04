@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use httpmock::prelude::{HttpMockRequest, HttpMockResponse};
-use hygiea_core::{HyErr, err};
+use hygiea_core::{HyErr, Result, err};
 use parking_lot::Mutex;
 use rhai::{AST, Dynamic, Engine, Scope};
 
@@ -132,7 +132,7 @@ impl RouteHandler {
     }
 
     /// 按顺序跑 handler 链，第一个给出响应的生效
-    fn run_chain(&self, req: Req, calls: usize, route: &str) -> Result<ResponseSpec, HyErr> {
+    fn run_chain(&self, req: Req, calls: usize, route: &str) -> Result<ResponseSpec> {
         for (i, stage) in self.chain.iter().enumerate() {
             if stage.delay_ms > 0 {
                 std::thread::sleep(Duration::from_millis(stage.delay_ms));
@@ -162,7 +162,7 @@ impl RouteHandler {
         calls: usize,
         route: &str,
         step: usize,
-    ) -> Result<Option<ResponseSpec>, HyErr> {
+    ) -> Result<Option<ResponseSpec>> {
         let mut state = self.shared.state.lock();
         let mut scope = Scope::new();
         scope.push("request", req);
@@ -190,7 +190,7 @@ impl RouteHandler {
     }
 
     /// 组装响应：`body` / `body_file` / `json` 三选一，文本里的 `{{base}}` 换成 mock server 的地址
-    fn build(&self, spec: ResponseSpec, route: &str) -> Result<Built, HyErr> {
+    fn build(&self, spec: ResponseSpec, route: &str) -> Result<Built> {
         let base = &self.shared.base;
         let mut headers: Vec<(String, String)> = spec.headers.into_iter().collect();
         let body = match (spec.body, spec.body_file, spec.json) {

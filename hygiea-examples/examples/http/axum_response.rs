@@ -14,7 +14,7 @@ use hygiea::http::{AxumConfig, HttpLimits, arity0, arity1, build_router};
 use hygiea::http_client::reqwest_client::{
     BaseHttpErr, Json, Method, RequestConfig, ReqwestConfig,
 };
-use hygiea::{BaseErr, HyErr, err, hy_err};
+use hygiea::{BaseErr, HyErr, Result, err, hy_err};
 use serde::{Deserialize, Serialize};
 
 /// 业务错误：项目前缀是本 crate 自己的 "001"（见 Cargo.toml 的 err_code_project_prefix），
@@ -47,7 +47,7 @@ struct Envelope<T> {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), HyErr> {
+async fn main() -> Result<()> {
     let _log_guard = hygiea::log::init_default()?;
 
     let router = Router::new()

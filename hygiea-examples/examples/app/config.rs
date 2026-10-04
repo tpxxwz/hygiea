@@ -18,7 +18,7 @@
 //!
 //! 启动时会先打出本次读了哪些文件、哪些环境变量名、哪些 `--set` 的 key（不打值，值里可能有密码）。
 
-use hygiea::HyErr;
+use hygiea::Result;
 use hygiea::app::{ConfigArgs, IntoRegistryConfig, Registry, RegistryConfig, clap};
 use hygiea::db::{SqlxSqliteComponent, SqlxSqliteConfig};
 use serde::Deserialize;
@@ -49,7 +49,7 @@ struct Cli {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), HyErr> {
+async fn main() -> Result<()> {
     let cli = <Cli as clap::Parser>::parse();
     // 配置目录默认是相对当前目录的 config/，这里换成绝对路径，从哪里 cargo run 都能找到
     let args = cli

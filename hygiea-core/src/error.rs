@@ -242,11 +242,11 @@ impl Error for HyErr {
 ///
 /// 闭包只在出错时才调用，成功路径不构造错误
 pub trait ResultExt<T> {
-    fn wrap_err(self, err: impl FnOnce() -> HyErr) -> Result<T, HyErr>;
+    fn wrap_err(self, err: impl FnOnce() -> HyErr) -> Result<T>;
 }
 
 impl<T, E: Into<Source>> ResultExt<T> for Result<T, E> {
-    fn wrap_err(self, err: impl FnOnce() -> HyErr) -> Result<T, HyErr> {
+    fn wrap_err(self, err: impl FnOnce() -> HyErr) -> Result<T> {
         self.map_err(|e| err().with_source(e))
     }
 }
@@ -387,7 +387,7 @@ macro_rules! __hygiea_check_keys {
 /// 适合函数中途校验不过就提前返回的场景：
 ///
 /// ```ignore
-/// fn withdraw(amount: i64, balance: i64) -> Result<(), HyErr> {
+/// fn withdraw(amount: i64, balance: i64) -> Result<()> {
 ///     if amount <= 0 {
 ///         bail!(BizErr::InvalidAmount, { "amount": amount });   // 带模板参数
 ///     }
@@ -693,7 +693,7 @@ mod tests {
     /// bail! 提前返回
     #[test]
     fn bail_returns_early() {
-        fn check_value(n: i32) -> Result<(), HyErr> {
+        fn check_value(n: i32) -> Result<()> {
             if n < 0 {
                 bail!(TestErr::Wrapped);
             }

@@ -1,7 +1,7 @@
 //! 应用组件 [`AwsComponent`]：加载公共配置，造出开了 feature 的各服务客户端，按组件名放进 Resources。
 
 use aws_config::SdkConfig;
-use hygiea_core::HyErr;
+use hygiea_core::Result;
 use hygiea_core::app::{
     CancellationToken, ImmediateComponent, Name, ResourceId, Resources, component,
 };
@@ -36,7 +36,7 @@ impl ImmediateComponent for AwsComponent {
         &mut self,
         resources: &Resources,
         _shutdown: CancellationToken,
-    ) -> Result<Option<JoinHandle<()>>, HyErr> {
+    ) -> Result<Option<JoinHandle<()>>> {
         let sdk_config = self.config.load().await;
         tracing::info!(
             "AWS config loaded [region={:?}]",

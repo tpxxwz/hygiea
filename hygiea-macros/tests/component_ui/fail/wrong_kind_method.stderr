@@ -5,7 +5,7 @@ error[E0407]: method `activate` is not a member of trait `ImmediateComponent`
 18 | |         &mut self,
 19 | |         _resources: ReadyResources,
 20 | |         _shutdown: CancellationToken,
-21 | |     ) -> Result<Option<JoinHandle<()>>, HyErr> {
+21 | |     ) -> Result<Option<JoinHandle<()>>> {
 22 | |         Ok(None)
 23 | |     }
    | |_____^ not a member of trait `ImmediateComponent`

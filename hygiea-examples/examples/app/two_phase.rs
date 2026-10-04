@@ -21,7 +21,7 @@ use axum::routing::get;
 use hygiea::app::Registry;
 use hygiea::db::{SqlxSqliteComponent, SqlxSqliteConfig, SqlxSqlitePool};
 use hygiea::http::{AxumComponent, AxumConfig, arity0};
-use hygiea::{BaseErr, HyErr, ResultExt, err};
+use hygiea::{BaseErr, Result, ResultExt, err};
 
 // ---- 全局状态 ----
 
@@ -33,14 +33,14 @@ static APP_STATE: OnceLock<AppState> = OnceLock::new();
 
 impl AppState {
     /// 只在 before_activate 里调一次
-    fn init(state: AppState) -> Result<(), HyErr> {
+    fn init(state: AppState) -> Result<()> {
         APP_STATE.set(state).map_err(|_| {
             err!(BaseErr::SysErr).with_source(std::io::Error::other("AppState already initialized"))
         })
     }
 
     /// 没初始化就返回错误，不 panic
-    pub fn get() -> Result<&'static AppState, HyErr> {
+    pub fn get() -> Result<&'static AppState> {
         APP_STATE.get().ok_or_else(|| {
             err!(BaseErr::SysErr).with_source(std::io::Error::other("AppState not initialized"))
         })
@@ -50,7 +50,7 @@ impl AppState {
 // ---- before_activate 里做的初始化 ----
 
 /// 建表、写入初始数据，相当于迁移和预热
-async fn migrate(db: &SqlxSqlitePool) -> Result<(), HyErr> {
+async fn migrate(db: &SqlxSqlitePool) -> Result<()> {
     sqlx::query("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
         .execute(&db.inner)
         .await
@@ -67,7 +67,7 @@ async fn migrate(db: &SqlxSqlitePool) -> Result<(), HyErr> {
 
 // ---- handler：从全局状态取连接池 ----
 
-async fn list_users() -> Result<Vec<String>, HyErr> {
+async fn list_users() -> Result<Vec<String>> {
     let db = &AppState::get()?.db;
     let names: Vec<(String,)> = sqlx::query_as("SELECT name FROM users ORDER BY id")
         .fetch_all(&db.inner)
@@ -77,7 +77,7 @@ async fn list_users() -> Result<Vec<String>, HyErr> {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), HyErr> {
+async fn main() -> Result<()> {
     let db = SqlxSqliteConfig {
         database: ":memory:".to_string(),
         // 内存库每个连接各是一个库，只留一个连接，建的表 handler 才看得到

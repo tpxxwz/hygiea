@@ -10,7 +10,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use hygiea_core::HyErr;
+use hygiea_core::Result;
 use hygiea_core::app::{
     CancellationToken, ImmediateComponent, Name, Registry, RegistryConfig, Resources, component,
 };
@@ -31,7 +31,7 @@ impl ImmediateComponent for Marker {
         &mut self,
         _state: &Resources,
         shutdown: CancellationToken,
-    ) -> Result<Option<JoinHandle<()>>, HyErr> {
+    ) -> Result<Option<JoinHandle<()>>> {
         self.0.lock().unwrap().push("startup".to_string());
         let events = self.0.clone();
         Ok(Some(tokio::spawn(async move {
@@ -40,7 +40,7 @@ impl ImmediateComponent for Marker {
         })))
     }
 
-    async fn stop(&mut self) -> Result<(), HyErr> {
+    async fn stop(&mut self) -> Result<()> {
         self.0.lock().unwrap().push("stop".to_string());
         Ok(())
     }

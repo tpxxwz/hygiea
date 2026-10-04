@@ -1,5 +1,5 @@
 // 正确用法：只依赖 hygiea（不用自己加 linkme / serde_json），err! 三种写法、bail!、HyErr::is
-use hygiea::{HyErr, bail, err, hy_err};
+use hygiea::{Result, bail, err, hy_err};
 
 #[derive(hy_err)]
 pub enum UserErr {
@@ -11,7 +11,7 @@ pub enum UserErr {
     Pair,
 }
 
-fn check(n: i64) -> Result<(), HyErr> {
+fn check(n: i64) -> Result<()> {
     if n < 0 {
         bail!(UserErr::NotFound, n);
     }

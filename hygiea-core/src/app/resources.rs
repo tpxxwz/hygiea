@@ -8,7 +8,7 @@ use std::sync::Arc;
 use dashmap::DashMap;
 
 use super::{BaseAppErr, Name};
-use crate::{HyErr, err};
+use crate::{Result, err};
 
 #[derive(Hash, PartialEq, Eq)]
 struct ResourceKey {
@@ -161,12 +161,12 @@ impl Resources {
 
     /// 取匿名资源，没有时返回 [`BaseAppErr::ResourceMissing`]。组件在 `startup` 里取依赖用这个，
     /// 缺了就是启动失败，不要 `get().unwrap()`
-    pub fn require<T: Resource>(&self) -> Result<T, HyErr> {
+    pub fn require<T: Resource>(&self) -> Result<T> {
         self.require_named("")
     }
 
     /// 取具名资源，没有时返回 [`BaseAppErr::ResourceMissing`]，错误里写明缺的是哪个类型、哪个名字
-    pub fn require_named<T: Resource>(&self, name: &str) -> Result<T, HyErr> {
+    pub fn require_named<T: Resource>(&self, name: &str) -> Result<T> {
         self.get_named(name).ok_or_else(|| {
             err!(
                 BaseAppErr::ResourceMissing,
@@ -253,12 +253,12 @@ impl ReadyResources {
     }
 
     /// 见 [`Resources::require`]
-    pub fn require<T: Resource>(&self) -> Result<T, HyErr> {
+    pub fn require<T: Resource>(&self) -> Result<T> {
         self.0.require()
     }
 
     /// 见 [`Resources::require_named`]
-    pub fn require_named<T: Resource>(&self, name: &str) -> Result<T, HyErr> {
+    pub fn require_named<T: Resource>(&self, name: &str) -> Result<T> {
         self.0.require_named(name)
     }
 

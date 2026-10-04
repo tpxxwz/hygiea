@@ -9,7 +9,7 @@ use axum::Router;
 use axum::routing::post;
 use hygiea::http_client::reqwest_client::{Json, Method, RequestConfig, ReqwestConfig};
 use hygiea::redact::redact;
-use hygiea::{BaseErr, HyErr, err};
+use hygiea::{BaseErr, Result, err};
 use serde::{Deserialize, Serialize};
 
 /// 请求参数：password 打码显示成 "***"，device_id 直接不出现在日志里，username 照常显示
@@ -35,7 +35,7 @@ async fn login(axum::Json(params): axum::Json<LoginParams>) -> axum::Json<LoginR
 }
 
 #[tokio::main]
-async fn main() -> Result<(), HyErr> {
+async fn main() -> Result<()> {
     // 只输出到控制台，级别 info：http 客户端每次请求默认打 "http call start" / "http call success" 两条 info 日志
     let _log_guard = hygiea::log::init_default()?;
 

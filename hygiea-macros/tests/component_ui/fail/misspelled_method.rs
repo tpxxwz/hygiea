@@ -1,6 +1,6 @@
 // provides 拼成 provide：不是 Component 的项，留在 ImmediateComponent 的 impl 里，报在这个方法上
 #![allow(unused_imports)]
-use hygiea::HyErr;
+use hygiea::{HyErr, Result};
 use hygiea::app::{CancellationToken, DeferredComponent, Name, ReadyResources, ResourceId, ResourceSink, Resources, ImmediateComponent, component};
 use tokio::task::JoinHandle;
 
@@ -22,7 +22,7 @@ impl ImmediateComponent for Db {
         &mut self,
         _state: &Resources,
         _shutdown: CancellationToken,
-    ) -> Result<Option<JoinHandle<()>>, HyErr> {
+    ) -> Result<Option<JoinHandle<()>>> {
         Ok(None)
     }
 }

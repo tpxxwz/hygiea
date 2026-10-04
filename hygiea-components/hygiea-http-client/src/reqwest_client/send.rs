@@ -78,7 +78,7 @@ use futures_util::StreamExt;
 
 #[cfg(feature = "debug-log")]
 use hygiea_core::{BaseErr, ResultExt, err};
-use hygiea_core::{HyErr, redact};
+use hygiea_core::{HyErr, Result, redact};
 
 use super::body::IntoBody;
 use super::error::{
@@ -132,7 +132,7 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
     pub async fn send<Decoder>(
         self,
         sender: impl IntoSender<Params, Req, Decoder>,
-    ) -> Result<HttpResponse<Decoder::Output>, HyErr>
+    ) -> Result<HttpResponse<Decoder::Output>>
     where
         Decoder: FromBody,
     {
@@ -143,7 +143,7 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
     pub(super) async fn send_once<Decoder: FromBody>(
         self,
         client: &ReqwestClient,
-    ) -> Result<HttpResponse<Decoder::Output>, HyErr> {
+    ) -> Result<HttpResponse<Decoder::Output>> {
         let (ctx, resp) = match self.dispatch(client).await? {
             Ok(sent) => sent,
             Err(failure) => return Err(failure.err),
@@ -162,7 +162,7 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
     pub(super) async fn send_once_bytes<Decoder: FromBytes>(
         self,
         client: &ReqwestClient,
-    ) -> Result<Result<HttpResponse<Decoder::Output>, SendFailure>, HyErr> {
+    ) -> Result<Result<HttpResponse<Decoder::Output>, SendFailure>> {
         let (ctx, resp) = match self.dispatch(client).await? {
             Ok(sent) => sent,
             Err(failure) => return Ok(Err(failure)),
@@ -184,7 +184,7 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
     async fn dispatch(
         self,
         client: &ReqwestClient,
-    ) -> Result<Result<(SendCtx, reqwest::Response), SendFailure>, HyErr> {
+    ) -> Result<Result<(SendCtx, reqwest::Response), SendFailure>> {
         // into_request 会消费 self，日志要用的东西先取出来
         let (enable_logging, failed_log_level) = (self.enable_logging, self.failed_log_level);
         let method = self.method.clone();
@@ -268,7 +268,7 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
 impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
     /// debug 日志里的 params 和 body，不打码，返回 `(params, body)`。没有的是 null。
     /// 序列化失败返回 `JsonError`，请求不发出
-    fn debug_req_json(&self) -> Result<(serde_json::Value, serde_json::Value), HyErr> {
+    fn debug_req_json(&self) -> Result<(serde_json::Value, serde_json::Value)> {
         let params = serde_json::to_value(&self.params)
             .wrap_err(|| err!(BaseErr::JsonError, "serialize params for debug log failed"))?;
         let body = match self.body.debug_preview()? {
@@ -280,7 +280,7 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
 }
 
 /// 非 2xx：读完 body（一般是很小的错误页），读失败按传输失败报。外层 `Err` 是打日志失败
-async fn read_status_failure(ctx: &SendCtx, resp: reqwest::Response) -> Result<SendFailure, HyErr> {
+async fn read_status_failure(ctx: &SendCtx, resp: reqwest::Response) -> Result<SendFailure> {
     let (status, headers) = (resp.status(), resp.headers().clone());
     match RespBody::new(resp, ctx).read_all().await? {
         Ok(body) => ctx.status_failed(status, headers, body),
@@ -364,7 +364,7 @@ pub trait IntoSender<Params, Req, Decoder: FromBody>: sealed::Sealed {
     fn send_request(
         self,
         cfg: RequestConfig<Params, Req>,
-    ) -> impl Future<Output = Result<HttpResponse<Decoder::Output>, HyErr>> + Send;
+    ) -> impl Future<Output = Result<HttpResponse<Decoder::Output>>> + Send;
 }
 
 impl<Params, Req, Decoder> IntoSender<Params, Req, Decoder> for &ReqwestClient
@@ -377,7 +377,7 @@ where
     fn send_request(
         self,
         cfg: RequestConfig<Params, Req>,
-    ) -> impl Future<Output = Result<HttpResponse<Decoder::Output>, HyErr>> + Send {
+    ) -> impl Future<Output = Result<HttpResponse<Decoder::Output>>> + Send {
         cfg.send_once::<Decoder>(self)
     }
 }
@@ -455,7 +455,7 @@ impl SendCtx {
     // 序列化失败返回 Err，一路传给 send ----
 
     /// debug 时打 start（请求那一侧）
-    fn debug_start(&self) -> Result<bool, HyErr> {
+    fn debug_start(&self) -> Result<bool> {
         #[cfg(feature = "debug-log")]
         if let Some(debug) = &self.debug {
             let start = DebugStart {
@@ -479,7 +479,7 @@ impl SendCtx {
         resp_headers: Option<&HeaderMap>,
         resp_body: Option<&Bytes>,
         error: Option<&HyErr>,
-    ) -> Result<bool, HyErr> {
+    ) -> Result<bool> {
         #[cfg(feature = "debug-log")]
         if let Some(debug) = &self.debug {
             let response = resp_headers.map(|headers| DebugResponse {
@@ -540,7 +540,7 @@ impl SendCtx {
         &self,
         e: reqwest::Error,
         status: Option<StatusCode>,
-    ) -> Result<SendFailure, HyErr> {
+    ) -> Result<SendFailure> {
         let stage = FailStage::Transport {
             timeout: e.is_timeout(),
             connect: e.is_connect(),
@@ -573,7 +573,7 @@ impl SendCtx {
         status: StatusCode,
         headers: HeaderMap,
         body: Bytes,
-    ) -> Result<SendFailure, HyErr> {
+    ) -> Result<SendFailure> {
         let resp = self.response(status, headers, body);
         let level = self.failed_log_level;
         let (headers, body) = (Some(&resp.headers), Some(&resp.body));
@@ -613,7 +613,7 @@ impl SendCtx {
         headers: HeaderMap,
         body: Bytes,
         e: HyErr,
-    ) -> Result<SendFailure, HyErr> {
+    ) -> Result<SendFailure> {
         let resp = self.response(status, headers, body);
         let level = self.failed_log_level;
         let (headers, body) = (Some(&resp.headers), Some(&resp.body));
@@ -648,8 +648,8 @@ impl SendCtx {
         status: StatusCode,
         headers: HeaderMap,
         body: Resp,
-        preview: impl FnOnce(&Resp) -> Result<Option<String>, HyErr>,
-    ) -> Result<HttpResponse<Resp>, HyErr> {
+        preview: impl FnOnce(&Resp) -> Result<Option<String>>,
+    ) -> Result<HttpResponse<Resp>> {
         let resp = self.response(status, headers, body);
         let logged = self.debug_end(
             None,
@@ -688,12 +688,12 @@ impl<'a> RespBody<'a> {
     }
 
     /// 读完整个 body（已按透明压缩解压）。响应头到了但 body 没读完，照样算没拿到完整响应
-    pub async fn bytes(self) -> Result<Bytes, HyErr> {
+    pub async fn bytes(self) -> Result<Bytes> {
         self.read_all().await?.map_err(|f| f.err)
     }
 
     /// 同 [`RespBody::bytes`]，失败时带上重试判断要用的信息。外层 `Err` 是打日志失败
-    pub(super) async fn read_all(self) -> Result<Result<Bytes, SendFailure>, HyErr> {
+    pub(super) async fn read_all(self) -> Result<Result<Bytes, SendFailure>> {
         let status = self.resp.status();
         let ctx = self.ctx;
         match self.resp.bytes().await {
@@ -710,7 +710,7 @@ impl<'a> RespBody<'a> {
     /// 外层 `Err` 是打日志失败
     pub(super) async fn decode<Decoder: FromBytes>(
         self,
-    ) -> Result<Result<Decoder::Output, SendFailure>, HyErr> {
+    ) -> Result<Result<Decoder::Output, SendFailure>> {
         let (status, headers, ctx) = (self.status(), self.headers().clone(), self.ctx);
         let bytes = match self.read_all().await? {
             Ok(bytes) => bytes,

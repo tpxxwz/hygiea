@@ -6,7 +6,7 @@
 //!
 //! 启动后按 Ctrl+C 退出。
 
-use hygiea::HyErr;
+use hygiea::Result;
 use hygiea::app::Registry;
 use hygiea::db::{SqlxSqliteComponent, SqlxSqliteConfig, SqlxSqlitePool};
 
@@ -18,7 +18,7 @@ fn memory_db() -> SqlxSqliteConfig {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), HyErr> {
+async fn main() -> Result<()> {
     // 同一个组件类型用不同的名字 add 两次；同类型、同名字重复 add 会 panic
     let registry = Registry::new()
         .add_named::<SqlxSqliteComponent>("primary", memory_db())

@@ -8,7 +8,7 @@ use time::macros::format_description;
 use time::{OffsetDateTime, UtcDateTime};
 
 use super::HygieaDateTimeExt;
-use crate::{BaseErr, HyErr, ResultExt, err};
+use crate::{BaseErr, HyErr, Result, ResultExt, err};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DateTimeFormatter {
@@ -189,7 +189,7 @@ impl WithOffsetParser {
         }
     }
 
-    pub fn parse(self, input: &str) -> Result<OffsetDateTime, HyErr> {
+    pub fn parse(self, input: &str) -> Result<OffsetDateTime> {
         OffsetDateTime::parse(input, self.description()).wrap_err(|| {
             err!(
                 BaseErr::DateError,
@@ -226,7 +226,7 @@ impl DateTimeFormattable for OffsetDateTime {
 }
 
 impl DateTimeFormatter {
-    pub fn format<T: HygieaDateTimeExt>(self, datetime: &T) -> Result<String, HyErr> {
+    pub fn format<T: HygieaDateTimeExt>(self, datetime: &T) -> Result<String> {
         HygieaDateTimeExt::format_ext(datetime, self)
     }
 }

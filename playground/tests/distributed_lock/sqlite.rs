@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
-use hygiea::HyErr;
+use hygiea::Result;
 use hygiea::app::async_trait;
 use hygiea::db::SqlxSqlitePool;
 use tokio::sync::Mutex as AsyncMutex;
@@ -41,7 +41,7 @@ fn keyed_lock(database: &str, key: &str) -> Arc<AsyncMutex<()>> {
 /// 进程退出锁自然就没了，不需要 TTL
 #[async_trait]
 impl DistributedLock for SqlxSqlitePool {
-    async fn try_lock(&self, key: &str) -> Result<Option<LockGuard>, HyErr> {
+    async fn try_lock(&self, key: &str) -> Result<Option<LockGuard>> {
         let lock = keyed_lock(&self.config().database, key);
         let Ok(held) = lock.try_lock_owned() else {
             return Ok(None);

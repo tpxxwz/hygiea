@@ -3,7 +3,7 @@
 
 use hygiea::app::async_trait;
 use hygiea::db::{SeaOrmPgPool, SqlxPgPool};
-use hygiea::{HyErr, ResultExt, err};
+use hygiea::{Result, ResultExt, err};
 
 use super::core::{BaseLockErr, DistributedLock, LockGuard};
 
@@ -26,7 +26,7 @@ pub(crate) fn advisory_key(key: &str) -> i64 {
 /// 不同 key 撞上同一个哈希的概率可以忽略
 #[async_trait]
 impl DistributedLock for SqlxPgPool {
-    async fn try_lock(&self, key: &str) -> Result<Option<LockGuard>, HyErr> {
+    async fn try_lock(&self, key: &str) -> Result<Option<LockGuard>> {
         let acquire_failed = || err!(BaseLockErr::AcquireFailed, key);
         let mut tx = self.inner.begin().await.wrap_err(acquire_failed)?;
         let (acquired,): (bool,) = sqlx::query_as("SELECT pg_try_advisory_xact_lock($1)")
@@ -55,7 +55,7 @@ impl DistributedLock for SqlxPgPool {
 /// 不同 key 撞上同一个哈希的概率可以忽略
 #[async_trait]
 impl DistributedLock for SeaOrmPgPool {
-    async fn try_lock(&self, key: &str) -> Result<Option<LockGuard>, HyErr> {
+    async fn try_lock(&self, key: &str) -> Result<Option<LockGuard>> {
         let acquire_failed = || err!(BaseLockErr::AcquireFailed, key);
         let mut tx = self
             .inner

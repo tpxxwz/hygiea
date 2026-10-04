@@ -1,6 +1,6 @@
 //! 模板渲染（minijinja），带限量缓存；以及 `{}` 位置参数格式化。
 
-use crate::{BaseErr, HyErr, ResultExt, bail, err};
+use crate::{BaseErr, HyErr, Result, ResultExt, bail, err};
 use lru::LruCache;
 use minijinja::{Environment, UndefinedBehavior};
 use parking_lot::RwLock;
@@ -34,12 +34,12 @@ static CACHE: LazyLock<RwLock<LruCache<String, Arc<Environment<'static>>>>> =
 
 /// 渲染模板，不缓存，每次重新解析。语法错误、变量缺失（Strict 模式）返回 `TemplateError`，
 /// minijinja 的原始错误挂在 source 上
-pub fn tpl_once(source: &str, args: impl Serialize) -> Result<String, HyErr> {
+pub fn tpl_once(source: &str, args: impl Serialize) -> Result<String> {
     ONCE_ENV.render_str(source, args).wrap_err(render_failed)
 }
 
 /// 渲染模板，解析结果按模板原文缓存复用（上限 1024 条，满了淘汰最早插入的）。错误同 [`tpl_once`]
-pub fn tpl_cached(source: &str, args: impl Serialize) -> Result<String, HyErr> {
+pub fn tpl_cached(source: &str, args: impl Serialize) -> Result<String> {
     let env = cached_env(source)?;
     env.get_template(NAME)
         .and_then(|t| t.render(args))
@@ -50,7 +50,7 @@ fn render_failed() -> HyErr {
     err!(BaseErr::TemplateError, "render template failed")
 }
 
-fn cached_env(source: &str) -> Result<Arc<Environment<'static>>, HyErr> {
+fn cached_env(source: &str) -> Result<Arc<Environment<'static>>> {
     if let Some(env) = CACHE.read().peek(source) {
         return Ok(env.clone());
     }
@@ -67,7 +67,7 @@ fn cached_env(source: &str) -> Result<Arc<Environment<'static>>, HyErr> {
 /// 单独的 `{` 或 `}` 报错。直接做字符串替换，不经过 minijinja，所以 `{%`、`{#` 之类都是普通文本。
 ///
 /// 字符串参数原样填入，其余按 JSON 输出（`null`、`true`、`[1,2]`）
-pub fn tpl_pos(source: &str, args: &[serde_json::Value]) -> Result<String, HyErr> {
+pub fn tpl_pos(source: &str, args: &[serde_json::Value]) -> Result<String> {
     let mut out = String::with_capacity(source.len() + args.len() * 8);
     let mut next = 0usize;
     let mut chars = source.chars().peekable();

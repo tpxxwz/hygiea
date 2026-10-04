@@ -4,7 +4,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use hygiea::app::async_trait;
-use hygiea::{HyErr, hy_err};
+use hygiea::{Result, hy_err};
 
 /// 分布式锁的错误。和 `hygiea::BaseErr` 共用项目前缀 999（playground 的 Cargo.toml 里配成 999，保持原来的错误码），模块前缀是 04；
 /// 后端的原始错误挂在 source 上
@@ -19,7 +19,7 @@ pub enum BaseLockErr {
     ReleaseFailed,
 }
 
-type ReleaseFuture = Pin<Box<dyn Future<Output = Result<(), HyErr>> + Send>>;
+type ReleaseFuture = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
 
 /// 持有中的锁。`release().await` 释放锁并拿到结果（推荐）；没调 `release` 就 drop 的话，
 /// 在后台释放，失败只打 WARN。
@@ -37,7 +37,7 @@ impl LockGuard {
     /// 这里只存着，释放时才执行
     pub fn new(
         key: impl Into<String>,
-        release: impl Future<Output = Result<(), HyErr>> + Send + 'static,
+        release: impl Future<Output = Result<()>> + Send + 'static,
     ) -> Self {
         Self {
             key: key.into(),
@@ -51,7 +51,7 @@ impl LockGuard {
     }
 
     /// 释放锁，返回后端释放的结果
-    pub async fn release(mut self) -> Result<(), HyErr> {
+    pub async fn release(mut self) -> Result<()> {
         match self.release.take() {
             Some(release) => release.await,
             None => Ok(()),
@@ -88,7 +88,7 @@ impl Drop for LockGuard {
 pub trait DistributedLock: Send + Sync {
     /// 尝试加锁，拿不到（被别人占着，包括被自己持有）立即返回 `Ok(None)`，不可重入；
     /// 后端出错返回 [`BaseLockErr::AcquireFailed`]
-    async fn try_lock(&self, key: &str) -> Result<Option<LockGuard>, HyErr>;
+    async fn try_lock(&self, key: &str) -> Result<Option<LockGuard>>;
 }
 
 #[cfg(test)]
@@ -107,7 +107,7 @@ mod tests {
 
     #[async_trait]
     impl DistributedLock for FakeLock {
-        async fn try_lock(&self, key: &str) -> Result<Option<LockGuard>, HyErr> {
+        async fn try_lock(&self, key: &str) -> Result<Option<LockGuard>> {
             let mut held = self.held.lock().unwrap();
             if held.iter().any(|k| k == key) {
                 return Ok(None);

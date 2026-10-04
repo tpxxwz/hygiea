@@ -9,11 +9,10 @@ use super::component::ComponentEntry;
 use super::signal::{ShutdownSignals, force_exit};
 use super::{BaseAppErr, Component, Name, RegistryConfig, ResourceId, Resources};
 use crate::log::{BaseLogErr, LogGuard};
-use crate::{HyErr, err};
+use crate::{HyErr, Result, err};
 
 /// [`Registry::before_activate`] / [`Registry::on_ready`] 的回调，装箱后存进 Registry
-type Hook =
-    Box<dyn FnOnce(Resources) -> Pin<Box<dyn Future<Output = Result<(), HyErr>> + Send>> + Send>;
+type Hook = Box<dyn FnOnce(Resources) -> Pin<Box<dyn Future<Output = Result<()>> + Send>> + Send>;
 
 /// 组件注册表：按注册顺序启动组件，收到退出信号后关闭。
 ///
@@ -126,7 +125,7 @@ impl Registry {
     pub fn before_activate<F, Fut>(mut self, f: F) -> Self
     where
         F: FnOnce(Resources) -> Fut + Send + 'static,
-        Fut: Future<Output = Result<(), HyErr>> + Send + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
     {
         if self.before_activate.is_some() {
             panic!("before_activate already set");
@@ -145,7 +144,7 @@ impl Registry {
     pub fn on_ready<F, Fut>(mut self, f: F) -> Self
     where
         F: FnOnce(Resources) -> Fut + Send + 'static,
-        Fut: Future<Output = Result<(), HyErr>> + Send + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
     {
         if self.on_ready.is_some() {
             panic!("on_ready already set");
@@ -197,7 +196,7 @@ impl Registry {
     ///
     /// ```ignore
     /// #[tokio::main]
-    /// async fn main() -> Result<(), HyErr> {
+    /// async fn main() -> Result<()> {
     ///     let (registry, cfg) = Registry::load_config::<AppConfig>(&ConfigArgs::from_cli());
     ///     let (result, _log_guard) = registry.run().await;
     ///     tracing::info!("bye");   // _log_guard 还活着，能写进文件
@@ -207,13 +206,13 @@ impl Registry {
     ///
     /// 注意别写成 `let (result, _) = ..`：`_` 会让 guard 立刻被丢掉
     #[must_use = "持有返回的日志 guard 到 main 结束，并处理结果"]
-    pub async fn run(mut self) -> (Result<(), HyErr>, Option<LogGuard>) {
+    pub async fn run(mut self) -> (Result<()>, Option<LogGuard>) {
         let result = self.run_until_shutdown().await;
         // guard 交出去之后 self 才 drop，组件在 Drop 里打的日志照样能写进文件
         (result, self.log_guard.take())
     }
 
-    async fn run_until_shutdown(&mut self) -> Result<(), HyErr> {
+    async fn run_until_shutdown(&mut self) -> Result<()> {
         // 最先装好信号监听：之后组件启动期间收到的信号会留着，不会按系统默认行为直接杀掉进程
         let mut signals = ShutdownSignals::install();
 
@@ -285,7 +284,7 @@ impl Registry {
     /// - 依赖成环：[`BaseAppErr::DependencyCycle`]，报出环上的组件
     ///
     /// 关闭按启动的逆序，所以排好之后关闭顺序也自然是对的
-    fn sort_by_dependencies(&mut self) -> Result<(), HyErr> {
+    fn sort_by_dependencies(&mut self) -> Result<()> {
         let n = self.components.len();
         let label = |idx: usize| {
             let entry = &self.components[idx];
@@ -373,7 +372,7 @@ impl Registry {
         Ok(())
     }
 
-    async fn start_components(&mut self) -> Result<(), HyErr> {
+    async fn start_components(&mut self) -> Result<()> {
         for idx in 0..self.components.len() {
             let entry = &mut self.components[idx];
             let (name, type_name) = (entry.name.clone(), entry.type_name);
@@ -429,7 +428,7 @@ impl Registry {
 
     /// 第二阶段：按启动顺序调 Deferred 组件的 `activate`。所有组件第一阶段都成功了才会走到这里，
     /// 失败时由 run 统一关闭全部组件
-    async fn activate_components(&mut self) -> Result<(), HyErr> {
+    async fn activate_components(&mut self) -> Result<()> {
         for idx in 0..self.components.len() {
             let entry = &mut self.components[idx];
             if !entry.deferred {

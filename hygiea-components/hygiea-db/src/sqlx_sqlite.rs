@@ -11,7 +11,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, S
 use hygiea_core::app::{
     BaseAppErr, CancellationToken, ImmediateComponent, Name, ResourceId, Resources, component,
 };
-use hygiea_core::{HyErr, ResultExt, err};
+use hygiea_core::{Result, ResultExt, err};
 
 // ---- config -----------------------------------------------------------------
 
@@ -85,7 +85,7 @@ impl SqlxSqliteConfig {
         }
     }
 
-    fn connect_options(&self) -> Result<SqliteConnectOptions, HyErr> {
+    fn connect_options(&self) -> Result<SqliteConnectOptions> {
         let mut options = SqliteConnectOptions::from_str(&self.url())
             .wrap_err(|| {
                 err!(
@@ -140,7 +140,7 @@ impl SqlxSqliteConfig {
     }
 }
 
-fn parse_sqlite_option<T>(value: &str, name: &str) -> Result<T, HyErr>
+fn parse_sqlite_option<T>(value: &str, name: &str) -> Result<T>
 where
     T: FromStr,
     T::Err: std::error::Error + Send + Sync + 'static,
@@ -170,7 +170,7 @@ impl SqlxSqlitePool {
         &self.config
     }
 
-    pub async fn connect(config: SqlxSqliteConfig) -> Result<Self, HyErr> {
+    pub async fn connect(config: SqlxSqliteConfig) -> Result<Self> {
         let connect_options = config.connect_options()?;
         let pool = if config.connect_lazy {
             config.pool_options().connect_lazy_with(connect_options)
@@ -230,7 +230,7 @@ impl ImmediateComponent for SqlxSqliteComponent {
         &mut self,
         resources: &Resources,
         _shutdown: CancellationToken,
-    ) -> Result<Option<tokio::task::JoinHandle<()>>, HyErr> {
+    ) -> Result<Option<tokio::task::JoinHandle<()>>> {
         tracing::info!("Connecting to SQLite database: {}", self.config.database);
         let pool = SqlxSqlitePool::connect(self.config.clone()).await?;
         tracing::info!("SQLite database connection established");
@@ -239,7 +239,7 @@ impl ImmediateComponent for SqlxSqliteComponent {
         Ok(None)
     }
 
-    async fn stop(&mut self) -> Result<(), HyErr> {
+    async fn stop(&mut self) -> Result<()> {
         if let Some(pool) = self.pool.take() {
             // 不再发新连接，等借出去的连接还回来（在途查询跑完）后全部关掉
             pool.inner.close().await;

@@ -13,7 +13,7 @@
 
 use std::time::Duration;
 
-use hygiea::HyErr;
+use hygiea::Result;
 use hygiea::app::{CancellationToken, ImmediateComponent, Name, Registry, Resources, component};
 
 // ---- 正常的后台任务：每秒打一行，收到退出信号就结束 ----
@@ -32,7 +32,7 @@ impl ImmediateComponent for TickerComponent {
         &mut self,
         _resources: &Resources,
         shutdown: CancellationToken,
-    ) -> Result<Option<tokio::task::JoinHandle<()>>, HyErr> {
+    ) -> Result<Option<tokio::task::JoinHandle<()>>> {
         let handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(1));
             let mut ticks = 0u32;
@@ -53,7 +53,7 @@ impl ImmediateComponent for TickerComponent {
     }
 
     // 后台任务结束之后调用：关连接、刷缓冲之类的收尾放这里
-    async fn stop(&mut self) -> Result<(), HyErr> {
+    async fn stop(&mut self) -> Result<()> {
         tracing::info!("ticker: stop() called, cleanup done");
         Ok(())
     }
@@ -75,7 +75,7 @@ impl ImmediateComponent for StuckComponent {
         &mut self,
         _resources: &Resources,
         _shutdown: CancellationToken,
-    ) -> Result<Option<tokio::task::JoinHandle<()>>, HyErr> {
+    ) -> Result<Option<tokio::task::JoinHandle<()>>> {
         // 故意不看 shutdown
         let handle = tokio::spawn(async {
             loop {
@@ -92,7 +92,7 @@ impl ImmediateComponent for StuckComponent {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), HyErr> {
+async fn main() -> Result<()> {
     // 没有依赖关系的组件按 add 的顺序启动，关闭时反过来：先关 stuck，再关 ticker
     let (result, _log_guard) = Registry::new()
         .add::<TickerComponent>(())

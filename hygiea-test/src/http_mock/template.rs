@@ -6,7 +6,7 @@
 
 use std::sync::LazyLock;
 
-use hygiea_core::{HyErr, err};
+use hygiea_core::{Result, err};
 use regex::Regex;
 
 use super::error::HttpMockErr;
@@ -25,7 +25,7 @@ pub(crate) struct PathTemplate {
 }
 
 impl PathTemplate {
-    pub fn new(path: &str) -> Result<Self, HyErr> {
+    pub fn new(path: &str) -> Result<Self> {
         let invalid = |cause: String| err!(HttpMockErr::InvalidTemplate, path).with_source(cause);
         let (pattern, vars) = parse(path).map_err(invalid)?;
         for (name, constraint) in &vars {

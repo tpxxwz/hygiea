@@ -5,7 +5,7 @@ use fred::types::config::ClusterDiscoveryPolicy;
 use hygiea_core::app::{
     BaseAppErr, CancellationToken, ImmediateComponent, Name, ResourceId, Resources, component,
 };
-use hygiea_core::{HyErr, ResultExt, err};
+use hygiea_core::{Result, ResultExt, err};
 use serde::Deserialize;
 use std::sync::Arc;
 use std::time::Duration;
@@ -113,7 +113,7 @@ impl FredRedisPool {
         &self.config
     }
 
-    pub async fn connect(config: RedisConfig) -> Result<Self, HyErr> {
+    pub async fn connect(config: RedisConfig) -> Result<Self> {
         let fred_config = build_fred_config(&config)?;
         let perf = build_perf_config(&config);
         let connection = build_connection_config(&config);
@@ -182,7 +182,7 @@ impl ImmediateComponent for RedisComponent {
         &mut self,
         resources: &Resources,
         _shutdown: CancellationToken,
-    ) -> Result<Option<JoinHandle<()>>, HyErr> {
+    ) -> Result<Option<JoinHandle<()>>> {
         tracing::info!(
             "Connecting to Redis [mode={}] with pool_size={}",
             self.config.mode,
@@ -195,7 +195,7 @@ impl ImmediateComponent for RedisComponent {
         Ok(None)
     }
 
-    async fn stop(&mut self) -> Result<(), HyErr> {
+    async fn stop(&mut self) -> Result<()> {
         if let Some(pool) = self.pool.take() {
             // 发 QUIT 正常断开所有连接
             pool.quit()
@@ -211,7 +211,7 @@ impl ImmediateComponent for RedisComponent {
 // Build helpers
 // ============================================================
 
-fn build_fred_config(config: &RedisConfig) -> Result<Config, HyErr> {
+fn build_fred_config(config: &RedisConfig) -> Result<Config> {
     let server = match config.mode.as_str() {
         "standalone" => ServerConfig::Centralized {
             server: Server::new(&config.host, config.port),

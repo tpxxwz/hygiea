@@ -14,7 +14,7 @@ use futures_util::{Stream, StreamExt};
 use reqwest::header::CONTENT_TYPE;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
-use hygiea_core::{BaseErr, HyErr, ResultExt, err, redact};
+use hygiea_core::{BaseErr, Result, ResultExt, err, redact};
 
 use super::body::Json;
 use super::error::write_failed;
@@ -37,13 +37,13 @@ pub trait FromBytes {
     type Output;
 
     /// 从读完的 body 解码。`headers` 是响应头
-    fn from_bytes(headers: &HeaderMap, body: Bytes) -> Result<Self::Output, HyErr>;
+    fn from_bytes(headers: &HeaderMap, body: Bytes) -> Result<Self::Output>;
 
     /// 解码成功后日志里怎么打这个响应。默认 `Ok(None)`，成功日志里不输出 `resp`：
     /// 没有类型信息就没法打码，body 也可能很大。
     /// `Json<T>` 按 [`redact::to_redacted_json`] 重新序列化，`T` 里标了 `#[redact(..)]` 的字段会打码。
     /// 返回 `Err` 时 `send` 返回这个错误（请求已经成功了，只是日志打不出来）
-    fn decoded_preview(_output: &Self::Output) -> Result<Option<String>, HyErr> {
+    fn decoded_preview(_output: &Self::Output) -> Result<Option<String>> {
         Ok(None)
     }
 }
@@ -57,11 +57,11 @@ pub trait FromBody {
     type Output;
 
     /// 从还没读的响应体得到结果
-    fn from_body(body: RespBody<'_>) -> impl Future<Output = Result<Self::Output, HyErr>> + Send;
+    fn from_body(body: RespBody<'_>) -> impl Future<Output = Result<Self::Output>> + Send;
 
     /// 成功日志里的响应摘要，`Ok(None)` 表示不输出 `resp`，`Err` 时 `send` 返回这个错误。
     /// [`FromBytes`] 类型用它的 `decoded_preview`
-    fn resp_preview(_output: &Self::Output) -> Result<Option<String>, HyErr> {
+    fn resp_preview(_output: &Self::Output) -> Result<Option<String>> {
         Ok(None)
     }
 }
@@ -72,11 +72,11 @@ where
 {
     type Output = T::Output;
 
-    async fn from_body(body: RespBody<'_>) -> Result<Self::Output, HyErr> {
+    async fn from_body(body: RespBody<'_>) -> Result<Self::Output> {
         body.decode::<T>().await?.map_err(|f| f.err)
     }
 
-    fn resp_preview(output: &Self::Output) -> Result<Option<String>, HyErr> {
+    fn resp_preview(output: &Self::Output) -> Result<Option<String>> {
         T::decoded_preview(output)
     }
 }
@@ -84,7 +84,7 @@ where
 impl FromBytes for Bytes {
     type Output = Bytes;
 
-    fn from_bytes(_: &HeaderMap, body: Bytes) -> Result<Bytes, HyErr> {
+    fn from_bytes(_: &HeaderMap, body: Bytes) -> Result<Bytes> {
         Ok(body)
     }
 }
@@ -93,7 +93,7 @@ impl FromBytes for String {
     type Output = String;
 
     /// 按 `Content-Type` 里的 charset 解码（没写或不认识就按 UTF-8），和日志、错误里的规则一致
-    fn from_bytes(headers: &HeaderMap, body: Bytes) -> Result<String, HyErr> {
+    fn from_bytes(headers: &HeaderMap, body: Bytes) -> Result<String> {
         let content_type = headers
             .get(CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
@@ -103,7 +103,7 @@ impl FromBytes for String {
 
     /// 调用方要的就是文本，原样打（没法打码；有敏感内容就用 `Json<T>` 标 `#[redact]`，
     /// 或者 `enable_logging(false)`）。`Bytes` 可能是二进制、`()` 不关心内容，这两个不打
-    fn decoded_preview(output: &String) -> Result<Option<String>, HyErr> {
+    fn decoded_preview(output: &String) -> Result<Option<String>> {
         Ok(Some(output.clone()))
     }
 }
@@ -111,7 +111,7 @@ impl FromBytes for String {
 impl FromBytes for () {
     type Output = ();
 
-    fn from_bytes(_: &HeaderMap, _: Bytes) -> Result<(), HyErr> {
+    fn from_bytes(_: &HeaderMap, _: Bytes) -> Result<()> {
         Ok(())
     }
 }
@@ -126,13 +126,13 @@ impl FromBytes for () {
 impl<T: serde::de::DeserializeOwned + serde::Serialize> FromBytes for Json<T> {
     type Output = T;
 
-    fn from_bytes(_: &HeaderMap, body: Bytes) -> Result<T, HyErr> {
+    fn from_bytes(_: &HeaderMap, body: Bytes) -> Result<T> {
         serde_json::from_slice(&body)
             .wrap_err(|| err!(BaseErr::JsonError, "deserialize response body failed"))
     }
 
     /// 重新序列化失败时返回错误，不退回原文，否则打码就白做了
-    fn decoded_preview(output: &T) -> Result<Option<String>, HyErr> {
+    fn decoded_preview(output: &T) -> Result<Option<String>> {
         redact::to_redacted_json(output).map(Some)
     }
 }
@@ -152,11 +152,11 @@ impl<T: serde::de::DeserializeOwned + serde::Serialize> FromBytes for Json<T> {
 ///
 /// 成功日志只在拿到响应头时打一条（没有 `resp`），之后读的过程库不再打日志；
 /// 中途出错时每一块报 `RequestFailed`，由调用方处理。body 没读完，不能用于带重试发送
-pub struct BodyStream(pub(super) Pin<Box<dyn Stream<Item = Result<Bytes, HyErr>> + Send>>);
+pub struct BodyStream(pub(super) Pin<Box<dyn Stream<Item = Result<Bytes>> + Send>>);
 
 impl BodyStream {
     /// 读下一块，读完返回 `None`
-    pub async fn next(&mut self) -> Option<Result<Bytes, HyErr>> {
+    pub async fn next(&mut self) -> Option<Result<Bytes>> {
         StreamExt::next(&mut self.0).await
     }
 
@@ -165,7 +165,7 @@ impl BodyStream {
     ///
     /// 读失败报 `RequestFailed`；写失败报 [`WriteFailed`](super::BaseHttpErr::WriteFailed)，io 错误在 source 上。
     /// 中途失败时 writer 里已经写了一部分，要不要删文件由调用方决定
-    pub async fn write_to<W: AsyncWrite + Unpin>(mut self, mut writer: W) -> Result<u64, HyErr> {
+    pub async fn write_to<W: AsyncWrite + Unpin>(mut self, mut writer: W) -> Result<u64> {
         let mut written = 0u64;
         while let Some(chunk) = self.next().await {
             let chunk = chunk?;
@@ -178,7 +178,7 @@ impl BodyStream {
 }
 
 impl Stream for BodyStream {
-    type Item = Result<Bytes, HyErr>;
+    type Item = Result<Bytes>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.0.as_mut().poll_next(cx)
@@ -195,7 +195,7 @@ impl FromBody for BodyStream {
     type Output = BodyStream;
 
     /// 不读 body，直接把流接过去
-    async fn from_body(body: RespBody<'_>) -> Result<BodyStream, HyErr> {
+    async fn from_body(body: RespBody<'_>) -> Result<BodyStream> {
         Ok(body.into_stream())
     }
 }

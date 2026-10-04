@@ -2,26 +2,26 @@
 
 use time::UtcDateTime;
 
-use crate::{BaseErr, HyErr, ResultExt, err};
+use crate::{BaseErr, Result, ResultExt, err};
 
 pub use chrono::{DateTime, Utc};
 
 /// 框架 UTC 主类型是 time 的 `UtcDateTime`；持有 chrono `DateTime<Utc>` 的场景
 /// （serde、第三方 chrono 生态）经此 trait 与主类型互转。
 pub trait DateTimeUtcExt {
-    fn to_utc_datetime(&self) -> Result<UtcDateTime, HyErr>;
-    fn from_utc_datetime(datetime: UtcDateTime) -> Result<DateTime<Utc>, HyErr>;
+    fn to_utc_datetime(&self) -> Result<UtcDateTime>;
+    fn from_utc_datetime(datetime: UtcDateTime) -> Result<DateTime<Utc>>;
 }
 
 impl DateTimeUtcExt for DateTime<Utc> {
-    fn to_utc_datetime(&self) -> Result<UtcDateTime, HyErr> {
+    fn to_utc_datetime(&self) -> Result<UtcDateTime> {
         let nanos =
             self.timestamp() as i128 * 1_000_000_000 + self.timestamp_subsec_nanos() as i128;
         UtcDateTime::from_unix_timestamp_nanos(nanos)
             .wrap_err(|| err!(BaseErr::DateError, "to_utc_datetime out of range"))
     }
 
-    fn from_utc_datetime(datetime: UtcDateTime) -> Result<DateTime<Utc>, HyErr> {
+    fn from_utc_datetime(datetime: UtcDateTime) -> Result<DateTime<Utc>> {
         DateTime::from_timestamp(datetime.unix_timestamp(), datetime.nanosecond()).ok_or_else(
             || {
                 err!(

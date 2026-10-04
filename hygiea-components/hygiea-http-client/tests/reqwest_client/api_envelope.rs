@@ -6,7 +6,7 @@
 use std::error::Error as _;
 
 use hygiea_core::redact::{self, redact};
-use hygiea_core::{BaseErr, HyErr, ResultExt, err};
+use hygiea_core::{BaseErr, HyErr, Result, ResultExt, err};
 use hygiea_http_client::reqwest_client::*;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -48,7 +48,7 @@ struct Envelope {
 impl<T: DeserializeOwned + Serialize> FromBytes for ApiResult<T> {
     type Output = Self;
 
-    fn from_bytes(headers: &HeaderMap, body: Bytes) -> Result<Self, HyErr> {
+    fn from_bytes(headers: &HeaderMap, body: Bytes) -> Result<Self> {
         let envelope = Json::<Envelope>::from_bytes(headers, body)?;
         let (data, raw_data) = if envelope.code == "0" {
             let data = serde_json::from_value(envelope.data)
@@ -68,7 +68,7 @@ impl<T: DeserializeOwned + Serialize> FromBytes for ApiResult<T> {
     /// 业务成功时按 `T` 的规则打码；业务失败时 `data` 没解析、没法打码，把 code、msg 和原始 data
     /// 原样打出来，和非 2xx 一样，排查为什么失败要看对方到底回了什么。
     /// 返回 `None` 的话成功日志里没有 resp，所以这里自己拼
-    fn decoded_preview(output: &Self) -> Result<Option<String>, HyErr> {
+    fn decoded_preview(output: &Self) -> Result<Option<String>> {
         if !output.is_ok() {
             let raw = serde_json::json!({ "code": output.code, "msg": output.msg, "data": output.raw_data });
             return Ok(Some(raw.to_string()));
@@ -126,7 +126,7 @@ const ROUTES: &[(&str, u16, &str)] = &[
 async fn fetch<T: DeserializeOwned + Serialize + Send>(
     base: &str,
     path: &str,
-) -> Result<HttpResponse<ApiResult<T>>, HyErr> {
+) -> Result<HttpResponse<ApiResult<T>>> {
     RequestConfig::plain(Method::GET, format!("{base}{path}"))
         .send::<ApiResult<T>>(&local_config().build().unwrap())
         .await

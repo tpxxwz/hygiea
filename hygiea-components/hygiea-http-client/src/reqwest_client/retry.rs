@@ -28,7 +28,7 @@
 
 use std::future::Future;
 
-use hygiea_core::HyErr;
+use hygiea_core::{HyErr, Result};
 
 use super::ReqwestClient;
 use super::body::IntoBody;
@@ -117,7 +117,7 @@ where
     fn send_request(
         self,
         cfg: RequestConfig<Params, Req>,
-    ) -> impl Future<Output = Result<HttpResponse<Decoder::Output>, HyErr>> + Send {
+    ) -> impl Future<Output = Result<HttpResponse<Decoder::Output>>> + Send {
         let (
             client,
             RetryCtx {

@@ -7,7 +7,7 @@
 
 use hygiea_core::HyErr;
 #[cfg(feature = "debug-log")]
-use hygiea_core::{BaseErr, ResultExt, err};
+use hygiea_core::{BaseErr, Result, ResultExt, err};
 
 use super::request::HttpResponse;
 use super::{Level, Method, StatusCode};
@@ -255,7 +255,7 @@ pub(super) fn log_debug(
     message: &str,
     pretty: bool,
     fields: &impl serde::Serialize,
-) -> Result<(), HyErr> {
+) -> Result<()> {
     let json = if pretty {
         serde_json::to_string_pretty(fields)
     } else {

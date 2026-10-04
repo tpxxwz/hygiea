@@ -7,7 +7,7 @@ use serde::Deserialize;
 use hygiea_core::app::{
     BaseAppErr, CancellationToken, DeferredComponent, Name, ReadyResources, ResourceSink, component,
 };
-use hygiea_core::{HyErr, ResultExt, err};
+use hygiea_core::{HyErr, Result, ResultExt, err};
 
 // ---- config -----------------------------------------------------------------
 
@@ -86,7 +86,7 @@ impl DeferredComponent for AxumComponent {
         self.config.shutdown_timeout_secs.map(Duration::from_secs)
     }
 
-    async fn prepare(&mut self, _sink: &ResourceSink) -> Result<(), HyErr> {
+    async fn prepare(&mut self, _sink: &ResourceSink) -> Result<()> {
         let addr = self.config.addr();
         let router = self
             .config
@@ -107,7 +107,7 @@ impl DeferredComponent for AxumComponent {
         &mut self,
         _resources: ReadyResources,
         shutdown: CancellationToken,
-    ) -> Result<Option<tokio::task::JoinHandle<()>>, HyErr> {
+    ) -> Result<Option<tokio::task::JoinHandle<()>>> {
         let (listener, router) = self.prepared.take().ok_or_else(|| {
             err!(
                 BaseAppErr::ComponentError,

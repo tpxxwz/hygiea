@@ -6,7 +6,7 @@
 //! ```
 
 use hygiea::redact::{redact, to_redacted_json};
-use hygiea::{BaseErr, HyErr, ResultExt, err};
+use hygiea::{BaseErr, Result, ResultExt, err};
 use serde::Serialize;
 
 #[redact]
@@ -21,7 +21,7 @@ struct LoginRequest {
     device_id: String,
 }
 
-fn main() -> Result<(), HyErr> {
+fn main() -> Result<()> {
     let req = LoginRequest {
         username: "alice".to_string(),
         password: "p@ssw0rd".to_string(),

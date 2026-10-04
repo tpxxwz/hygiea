@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use hygiea_core::{HyErr, redact};
+use hygiea_core::{Result, redact};
 
 use super::error::invalid_header;
 use super::{HeaderMap, HeaderValue};
@@ -20,25 +20,25 @@ use super::{HeaderMap, HeaderValue};
 /// 其他形式由外部类型自己实现这个 trait，比如签名头的结构体；保留字段统一由
 /// [`RequestConfig::headers`](super::RequestConfig::headers) 拦截
 pub trait IntoHeaders {
-    fn into_headers(self) -> Result<HeaderMap, HyErr>;
+    fn into_headers(self) -> Result<HeaderMap>;
 }
 
 /// 已经是合法的 header，直接用
 impl IntoHeaders for HeaderMap {
-    fn into_headers(self) -> Result<HeaderMap, HyErr> {
+    fn into_headers(self) -> Result<HeaderMap> {
         Ok(self)
     }
 }
 
 /// 借用的 header，clone 一份（值是引用计数，不复制内容）
 impl IntoHeaders for &HeaderMap {
-    fn into_headers(self) -> Result<HeaderMap, HyErr> {
+    fn into_headers(self) -> Result<HeaderMap> {
         Ok(self.clone())
     }
 }
 
 /// 多份按顺序合并，同名的以靠后的为准
-fn merge_headers<T: IntoHeaders>(parts: impl IntoIterator<Item = T>) -> Result<HeaderMap, HyErr> {
+fn merge_headers<T: IntoHeaders>(parts: impl IntoIterator<Item = T>) -> Result<HeaderMap> {
     let mut merged = HeaderMap::new();
     for part in parts {
         // HeaderMap 的 extend 对已有的名字整组替换，后面的值覆盖前面的
@@ -48,13 +48,13 @@ fn merge_headers<T: IntoHeaders>(parts: impl IntoIterator<Item = T>) -> Result<H
 }
 
 impl<T: IntoHeaders, const N: usize> IntoHeaders for [T; N] {
-    fn into_headers(self) -> Result<HeaderMap, HyErr> {
+    fn into_headers(self) -> Result<HeaderMap> {
         merge_headers(self)
     }
 }
 
 impl<T: IntoHeaders> IntoHeaders for Vec<T> {
-    fn into_headers(self) -> Result<HeaderMap, HyErr> {
+    fn into_headers(self) -> Result<HeaderMap> {
         merge_headers(self)
     }
 }
@@ -64,7 +64,7 @@ macro_rules! impl_into_headers_for_tuple {
     ($($part:ident),+) => {
         impl<$($part: IntoHeaders),+> IntoHeaders for ($($part,)+) {
             #[allow(non_snake_case)]
-            fn into_headers(self) -> Result<HeaderMap, HyErr> {
+            fn into_headers(self) -> Result<HeaderMap> {
                 let ($($part,)+) = self;
                 let mut merged = HeaderMap::new();
                 $(merged.extend($part.into_headers()?);)+
@@ -93,7 +93,7 @@ const RESERVED_HEADERS: &[&str] = &[
 ];
 
 /// client 和请求两级共用：转换并拦保留字段（`ReqwestConfig::default_headers`、`RequestConfig::headers`）
-pub(super) fn checked_headers(headers: impl IntoHeaders) -> Result<HeaderMap, HyErr> {
+pub(super) fn checked_headers(headers: impl IntoHeaders) -> Result<HeaderMap> {
     let headers = headers.into_headers()?;
     // 拦掉 RESERVED_HEADERS 里那些
     for name in headers.keys() {
@@ -153,7 +153,7 @@ impl fmt::Debug for Auth {
 ///
 /// reqwest 没有暴露 header_sensitive，所以自己构造，再走公开的 `header()`——它只会把非敏感变敏感、
 /// 不会反向关掉，标记能保住。值里有换行之类的非法字符时报 `InvalidHeader`，错误信息里不带凭据原文
-pub(super) fn auth_value(raw: String) -> Result<HeaderValue, HyErr> {
+pub(super) fn auth_value(raw: String) -> Result<HeaderValue> {
     let mut value = HeaderValue::from_str(&raw).map_err(|e| {
         invalid_header("authorization value contains invalid characters").with_source(e)
     })?;

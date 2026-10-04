@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use reqwest::header::AUTHORIZATION;
 
-use hygiea_core::HyErr;
+use hygiea_core::Result;
 
 use super::body::IntoBody;
 use super::headers::{Auth, IntoHeaders, auth_value, checked_headers};
@@ -95,7 +95,7 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
     /// 添加请求头，见 [`IntoHeaders`]。多次调用、或者一次传数组 / 元组，都按顺序合并，同名的以靠后的为准
     /// （整组值替换，不是追加），比如 `.headers(&*BASE_HEADERS)?.headers(&session)?`。
     /// 转换失败或使用了保留字段时返回 `Err`；要清空已设置的请求头就重新构造一个 `RequestConfig`
-    pub fn headers(mut self, headers: impl IntoHeaders) -> Result<Self, HyErr> {
+    pub fn headers(mut self, headers: impl IntoHeaders) -> Result<Self> {
         self.headers.extend(checked_headers(headers)?);
         Ok(self)
     }
@@ -129,7 +129,7 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
     /// 认证头的值在这里构造，值里有换行之类的非法字符时返回 [`InvalidHeader`](super::BaseHttpErr::InvalidHeader)；
     /// body 构造失败时返回 [`IntoBody::apply`] 报的错。
     /// URL、params、body 的错误和 reqwest 一样，要到 `build()` 时才暴露；`send` 会在那之前逐项检查
-    pub(super) fn into_request(self, client: &Client) -> Result<RequestBuilder, HyErr> {
+    pub(super) fn into_request(self, client: &Client) -> Result<RequestBuilder> {
         let mut req = client.request(self.method, &self.url).headers(self.headers);
         if let Some(auth) = self.auth {
             req = match auth {

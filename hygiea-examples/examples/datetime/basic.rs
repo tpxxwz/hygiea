@@ -7,7 +7,7 @@
 //! cargo run -p hygiea-examples --example datetime_basic
 //! ```
 
-use hygiea::HyErr;
+use hygiea::Result;
 use hygiea::datetime::{
     HygieaDateTimeExt, HygieaOffsetDateTimeExt, HygieaUtcDateTimeExt, OffsetResult,
     WithOffsetFormatter, WithOffsetParser, WithoutOffsetFormatter, WithoutOffsetParser, now_local,
@@ -17,7 +17,7 @@ use time::{OffsetDateTime, UtcDateTime};
 
 /// `_local` 系列返回 `OffsetResult`：夏令时切换时钟面时间可能不存在或出现两次，库不替调用方选，
 /// 原样返回。这里为了打印简单，歧义取较早的一个，实际业务按场景处理（见 `datetime` 模块文档）
-fn fmt_local(result: Result<OffsetResult<OffsetDateTime>, HyErr>) -> Result<String, HyErr> {
+fn fmt_local(result: Result<OffsetResult<OffsetDateTime>>) -> Result<String> {
     Ok(match result? {
         OffsetResult::Some(dt) => dt.format_ext_rfc3339()?,
         OffsetResult::Ambiguous(a, b) => format!(
@@ -29,7 +29,7 @@ fn fmt_local(result: Result<OffsetResult<OffsetDateTime>, HyErr>) -> Result<Stri
     })
 }
 
-fn main() -> Result<(), HyErr> {
+fn main() -> Result<()> {
     // ===== 格式化 =====
     let utc = now_utc();
     println!("1. 格式化（当前 UTC 时刻）:");

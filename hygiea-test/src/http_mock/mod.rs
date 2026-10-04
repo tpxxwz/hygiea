@@ -138,7 +138,7 @@ use std::sync::atomic::AtomicUsize;
 
 use httpmock::MockServer;
 use httpmock::prelude::HttpMockRequest;
-use hygiea_core::{HyErr, ResultExt, err};
+use hygiea_core::{Result, ResultExt, err};
 use parking_lot::Mutex;
 use rhai::Engine;
 use serde::Serialize;
@@ -233,7 +233,7 @@ impl Cassette {
     }
 
     /// 读目录（有的话），合上代码加的 state、文件、路由，检查路由冲突，起 server、注册路由
-    pub async fn start(self) -> Result<Mocked, HyErr> {
+    pub async fn start(self) -> Result<Mocked> {
         let dir = self.dir;
         let (mut state, mut files, cassettes) = match &dir {
             Some(dir) => load_dir(dir, self.data_dir.as_deref().unwrap_or(DATA_DIR))?,
@@ -302,7 +302,7 @@ impl Cassette {
 type Loaded = (Value, HashMap<String, Vec<u8>>, Vec<(String, CassetteFile)>);
 
 /// 服务目录：state、文件表（在数据目录 `data` 下）、所有 cassette
-fn load_dir(dir: &str, data_dir: &str) -> Result<Loaded, HyErr> {
+fn load_dir(dir: &str, data_dir: &str) -> Result<Loaded> {
     if !Path::new(dir).is_dir() {
         return Err(err!(HttpMockErr::CassetteNotFound, dir));
     }
@@ -327,7 +327,7 @@ fn load_dir(dir: &str, data_dir: &str) -> Result<Loaded, HyErr> {
 }
 
 /// 目录下的所有 `.toml`（不含子目录），按文件名排序，报错顺序稳定
-fn toml_files(dir: &str) -> Result<Vec<String>, HyErr> {
+fn toml_files(dir: &str) -> Result<Vec<String>> {
     let read_failed = || err!(HttpMockErr::ReadFailed, dir);
     let mut paths = Vec::new();
     for entry in std::fs::read_dir(dir).wrap_err(read_failed)? {
@@ -340,16 +340,16 @@ fn toml_files(dir: &str) -> Result<Vec<String>, HyErr> {
     Ok(paths)
 }
 
-fn read_file(path: &str) -> Result<String, HyErr> {
+fn read_file(path: &str) -> Result<String> {
     std::fs::read_to_string(path).wrap_err(|| err!(HttpMockErr::ReadFailed, path))
 }
 
-fn parse_cassette(path: &str) -> Result<CassetteFile, HyErr> {
+fn parse_cassette(path: &str) -> Result<CassetteFile> {
     toml::from_str(&read_file(path)?).wrap_err(|| err!(HttpMockErr::ParseFailed, path))
 }
 
 /// `dir` 下的所有文件读进内存，key 是相对 `dir` 的路径，用 `/` 分隔
-fn load_files(dir: &str) -> Result<HashMap<String, Vec<u8>>, HyErr> {
+fn load_files(dir: &str) -> Result<HashMap<String, Vec<u8>>> {
     let read_failed = |path: &Path| err!(HttpMockErr::ReadFailed, path.display().to_string());
     let mut files = HashMap::new();
     let mut dirs = vec![PathBuf::from(dir)];
@@ -392,7 +392,7 @@ pub(crate) fn file_key(path: &str) -> Result<String, String> {
 }
 
 /// 读 state 文件，顶层必须是对象
-fn load_state(path: &str) -> Result<Value, HyErr> {
+fn load_state(path: &str) -> Result<Value> {
     let value: Value = serde_json::from_str(&read_file(path)?)
         .wrap_err(|| err!(HttpMockErr::ParseFailed, path))?;
     if value.is_object() {
@@ -403,7 +403,7 @@ fn load_state(path: &str) -> Result<Value, HyErr> {
 }
 
 /// `vars` 是脚本能用的外部变量（[`script::HANDLER_VARS`] / [`script::MATCH_VARS`]），严格变量模式下编译要用
-fn compile_script(engine: &Engine, path: String, vars: &[&str]) -> Result<rhai::AST, HyErr> {
+fn compile_script(engine: &Engine, path: String, vars: &[&str]) -> Result<rhai::AST> {
     engine
         .compile_file_with_scope(&script::compile_scope(vars), path.clone().into())
         .map_err(|e| err!(HttpMockErr::ScriptCompileFailed, path).with_source(e.to_string()))
@@ -435,7 +435,7 @@ fn compile_route(
     dir: Option<&str>,
     path: &str,
     def: RouteDef,
-) -> Result<Route, HyErr> {
+) -> Result<Route> {
     let RouteDef {
         name,
         mut request,
@@ -536,7 +536,7 @@ fn script_path(dir: Option<&str>, script: &str) -> Result<String, String> {
 }
 
 /// 同一个 method 下两条路由能匹配同一个路径就报错；一条是字面量、一条是模板的不算，字面量优先
-fn check_conflicts(routes: &[Route]) -> Result<(), HyErr> {
+fn check_conflicts(routes: &[Route]) -> Result<()> {
     for (i, a) in routes.iter().enumerate() {
         for b in &routes[i + 1..] {
             if a.request.method != b.request.method {
@@ -656,7 +656,7 @@ impl Mocked {
     }
 
     /// 当前状态转成 `T`，断言用
-    pub fn state<T: DeserializeOwned>(&self) -> Result<T, HyErr> {
+    pub fn state<T: DeserializeOwned>(&self) -> Result<T> {
         let state = script::to_json(&self.shared.state.lock())
             .map_err(|e| err!(HttpMockErr::StateConvertFailed).with_source(e))?;
         serde_json::from_value(state)
@@ -664,7 +664,7 @@ impl Mocked {
     }
 
     /// 在测试里改状态，比如清掉会话模拟过期：拿到当前状态（JSON），改完写回去
-    pub fn update_state(&self, f: impl FnOnce(&mut Value)) -> Result<(), HyErr> {
+    pub fn update_state(&self, f: impl FnOnce(&mut Value)) -> Result<()> {
         let mut state = self.shared.state.lock();
         let mut value = script::to_json(&state)
             .map_err(|e| err!(HttpMockErr::StateConvertFailed).with_source(e))?;
@@ -675,7 +675,7 @@ impl Mocked {
     }
 
     /// 整个替换状态
-    pub fn set_state<T: Serialize>(&self, value: &T) -> Result<(), HyErr> {
+    pub fn set_state<T: Serialize>(&self, value: &T) -> Result<()> {
         let value = rhai::serde::to_dynamic(value)
             .map_err(|e| err!(HttpMockErr::StateConvertFailed).with_source(e.to_string()))?;
         *self.shared.state.lock() = value;

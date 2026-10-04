@@ -1,6 +1,6 @@
 // Deferred 组件在 prepare 里读资源：ResourceSink 只能放、不能读
 #![allow(unused_imports)]
-use hygiea::HyErr;
+use hygiea::{HyErr, Result};
 use hygiea::app::{CancellationToken, DeferredComponent, Name, ReadyResources, ResourceId, ResourceSink, Resources, ImmediateComponent, component};
 use tokio::task::JoinHandle;
 
@@ -17,7 +17,7 @@ impl DeferredComponent for Api {
         Self
     }
 
-    async fn prepare(&mut self, sink: &ResourceSink) -> Result<(), HyErr> {
+    async fn prepare(&mut self, sink: &ResourceSink) -> Result<()> {
         sink.require::<Pool>()?;
         Ok(())
     }
@@ -26,7 +26,7 @@ impl DeferredComponent for Api {
         &mut self,
         _resources: ReadyResources,
         _shutdown: CancellationToken,
-    ) -> Result<Option<JoinHandle<()>>, HyErr> {
+    ) -> Result<Option<JoinHandle<()>>> {
         Ok(None)
     }
 }

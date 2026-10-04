@@ -26,7 +26,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{EnvFilter, Layer, Registry, fmt};
 
 use crate::datetime::{DateTimeFormatter, now, now_local};
-use crate::{HyErr, ResultExt, err, hy_err};
+use crate::{Result, ResultExt, err, hy_err};
 
 // ---- errors ----------------------------------------------------------------
 
@@ -194,13 +194,13 @@ pub struct LogGuard(#[allow(dead_code)] Vec<WorkerGuard>);
 ///
 /// 用 [`crate::app::Registry`] 时不用自己调，它拿到配置后会立即按配置初始化；
 /// 不用组件框架的程序（脚本、CLI）直接调这个，返回的 guard 要一直持有
-pub fn init(cfg: &TracingConfig) -> Result<LogGuard, HyErr> {
+pub fn init(cfg: &TracingConfig) -> Result<LogGuard> {
     init_tracing(cfg).map(LogGuard)
 }
 
 /// 用默认配置初始化：只输出到控制台，级别 `info`，
 /// 本地时间。脚本、小工具里一行搞定：`let _guard = hygiea::log::init_default()?;`
-pub fn init_default() -> Result<LogGuard, HyErr> {
+pub fn init_default() -> Result<LogGuard> {
     init(&TracingConfig::default())
 }
 
@@ -223,7 +223,7 @@ impl FormatTime for LogTime {
 /// tracing 没有公开的"全局 subscriber 装过没有"的查询（`has_been_set` 连线程级的 `set_default` 也算），所以自己记
 static INSTALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-fn init_tracing(cfg: &TracingConfig) -> Result<Vec<WorkerGuard>, HyErr> {
+fn init_tracing(cfg: &TracingConfig) -> Result<Vec<WorkerGuard>> {
     use std::sync::atomic::Ordering;
     if INSTALLED
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -248,7 +248,7 @@ fn init_tracing(cfg: &TracingConfig) -> Result<Vec<WorkerGuard>, HyErr> {
 fn build_and_install(
     cfg: &TracingConfig,
     created_dirs: &mut Vec<PathBuf>,
-) -> Result<Vec<WorkerGuard>, HyErr> {
+) -> Result<Vec<WorkerGuard>> {
     let timer = LogTime {
         format: cfg.time_format,
         utc: cfg.utc_time,
@@ -347,7 +347,7 @@ fn build_and_install(
 
 /// 按 tracing 的语法解析 filter，解析失败时原始错误挂在 source 上。
 /// 注意 tracing 会把不带 `=` 的非级别名（比如 `infoo`）当成 target 名，这种能解析成功，不报错
-fn parse_filter(filter: &str) -> Result<EnvFilter, HyErr> {
+fn parse_filter(filter: &str) -> Result<EnvFilter> {
     EnvFilter::try_new(filter).wrap_err(|| err!(BaseLogErr::InvalidFilter, filter))
 }
 
@@ -360,7 +360,7 @@ fn check_file_overlap(
     root_dir: &str,
     layers: &[FileLayer],
     created_dirs: &mut Vec<PathBuf>,
-) -> Result<(), HyErr> {
+) -> Result<()> {
     let mut enabled: Vec<(usize, &FileLayer, PathBuf)> = Vec::new();
     for (i, l) in layers.iter().enumerate().filter(|(_, l)| !l.disable) {
         let dir = layer_dir(root_dir, l);

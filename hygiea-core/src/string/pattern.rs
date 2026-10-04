@@ -1,6 +1,6 @@
 //! 正则工具，编译结果缓存复用（限量）。
 
-use crate::{BaseErr, HyErr, ResultExt, err};
+use crate::{BaseErr, Result, ResultExt, err};
 use lru::LruCache;
 use parking_lot::RwLock;
 use regex::{NoExpand, Regex};
@@ -17,7 +17,7 @@ static PATTERN_CACHE: LazyLock<RwLock<LruCache<String, Arc<Regex>>>> =
     LazyLock::new(|| RwLock::new(LruCache::new(PATTERN_CACHE_CAPACITY)));
 
 /// 对应 `Regex::is_match`：`resource` 中是否存在匹配。
-pub fn is_match(regex: &str, resource: &str) -> Result<bool, HyErr> {
+pub fn is_match(regex: &str, resource: &str) -> Result<bool> {
     Ok(get_pattern(regex)?.is_match(resource))
 }
 
@@ -25,32 +25,28 @@ pub fn is_match(regex: &str, resource: &str) -> Result<bool, HyErr> {
 ///
 /// `replacement` 里的 `$1`、`${name}` 会展开成捕获组（不存在的组展开成空串），`$$` 是字面量 `$`。
 /// 替换串来自用户输入或数据时用 [`replace_literal`]，否则里面的 `$` 会被悄悄吃掉
-pub fn replace(regex: &str, resource: &str, replacement: &str) -> Result<String, HyErr> {
+pub fn replace(regex: &str, resource: &str, replacement: &str) -> Result<String> {
     Ok(get_pattern(regex)?
         .replace(resource, replacement)
         .into_owned())
 }
 
 /// 对应 `Regex::replace_all`：替换所有匹配。`$` 的展开规则同 [`replace`]，要字面量用 [`replace_all_literal`]
-pub fn replace_all(regex: &str, resource: &str, replacement: &str) -> Result<String, HyErr> {
+pub fn replace_all(regex: &str, resource: &str, replacement: &str) -> Result<String> {
     Ok(get_pattern(regex)?
         .replace_all(resource, replacement)
         .into_owned())
 }
 
 /// 同 [`replace`]，但 `replacement` 原样插入，`$` 不做任何解析
-pub fn replace_literal(regex: &str, resource: &str, replacement: &str) -> Result<String, HyErr> {
+pub fn replace_literal(regex: &str, resource: &str, replacement: &str) -> Result<String> {
     Ok(get_pattern(regex)?
         .replace(resource, NoExpand(replacement))
         .into_owned())
 }
 
 /// 同 [`replace_all`]，但 `replacement` 原样插入，`$` 不做任何解析
-pub fn replace_all_literal(
-    regex: &str,
-    resource: &str,
-    replacement: &str,
-) -> Result<String, HyErr> {
+pub fn replace_all_literal(regex: &str, resource: &str, replacement: &str) -> Result<String> {
     Ok(get_pattern(regex)?
         .replace_all(resource, NoExpand(replacement))
         .into_owned())
@@ -58,13 +54,13 @@ pub fn replace_all_literal(
 
 /// 对应 `Regex::captures`：第一次匹配的所有捕获组（下标从 0 对应 group 1，不含
 /// group 0 整体匹配），regex 没有匹配上时返回 `None`。
-pub fn captures(regex: &str, resource: &str) -> Result<Option<Vec<Option<String>>>, HyErr> {
+pub fn captures(regex: &str, resource: &str) -> Result<Option<Vec<Option<String>>>> {
     let pattern = get_pattern(regex)?;
     Ok(pattern.captures(resource).map(|caps| capture_groups(&caps)))
 }
 
 /// 对应 `Regex::captures_iter`：每一次匹配各自的所有捕获组（某次匹配里某个组没捕获到就是 None）。
-pub fn captures_all(regex: &str, resource: &str) -> Result<Vec<Vec<Option<String>>>, HyErr> {
+pub fn captures_all(regex: &str, resource: &str) -> Result<Vec<Vec<Option<String>>>> {
     let pattern = get_pattern(regex)?;
     Ok(pattern
         .captures_iter(resource)
@@ -80,14 +76,14 @@ fn capture_groups(caps: &regex::Captures) -> Vec<Option<String>> {
 }
 
 /// 对应 `Regex::find`：第一次匹配的整体文本（不是捕获组），没有匹配时返回 `None`。
-pub fn find(regex: &str, resource: &str) -> Result<Option<String>, HyErr> {
+pub fn find(regex: &str, resource: &str) -> Result<Option<String>> {
     Ok(get_pattern(regex)?
         .find(resource)
         .map(|m| m.as_str().to_string()))
 }
 
 /// 对应 `Regex::find_iter`：所有匹配的整体文本（不是捕获组）。
-pub fn find_all(regex: &str, resource: &str) -> Result<Vec<String>, HyErr> {
+pub fn find_all(regex: &str, resource: &str) -> Result<Vec<String>> {
     Ok(get_pattern(regex)?
         .find_iter(resource)
         .map(|m| m.as_str().to_string())
@@ -96,17 +92,14 @@ pub fn find_all(regex: &str, resource: &str) -> Result<Vec<String>, HyErr> {
 
 /// [`captures`] 的简写：第一次匹配的第 1 个捕获组。没有匹配、或这个组没捕获到时返回 `None`。
 /// 要整体匹配用 [`find`]
-pub fn first_group(regex: &str, resource: &str) -> Result<Option<String>, HyErr> {
+pub fn first_group(regex: &str, resource: &str) -> Result<Option<String>> {
     Ok(captures(regex, resource)?
         .and_then(|groups| groups.into_iter().next())
         .flatten())
 }
 
 /// [`captures`] 的简写：第一次匹配的第 1、2 个捕获组，规则同 [`first_group`]
-pub fn first_two_groups(
-    regex: &str,
-    resource: &str,
-) -> Result<(Option<String>, Option<String>), HyErr> {
+pub fn first_two_groups(regex: &str, resource: &str) -> Result<(Option<String>, Option<String>)> {
     let mut groups = captures(regex, resource)?.unwrap_or_default().into_iter();
     Ok((groups.next().flatten(), groups.next().flatten()))
 }
@@ -115,7 +108,7 @@ pub fn first_two_groups(
 ///
 /// 没命中时在锁外编译，编译成功才拿写锁插入：大正则编译期间不会挡住其他正则调用，
 /// 非法正则也不会去拿写锁。两个线程同时编译同一个新正则时各编译一次，后插入的覆盖前一个，结果一样
-fn get_pattern(regex: &str) -> Result<Arc<Regex>, HyErr> {
+fn get_pattern(regex: &str) -> Result<Arc<Regex>> {
     if let Some(p) = PATTERN_CACHE.read().peek(regex) {
         return Ok(Arc::clone(p));
     }

@@ -1,6 +1,6 @@
 // 不用宏、手写两个 impl：Kind 写成 Deferred 却实现的是 ImmediateComponent，编译不过
 #![allow(unused_imports)]
-use hygiea::HyErr;
+use hygiea::{HyErr, Result};
 use hygiea::app::{CancellationToken, DeferredComponent, Name, ReadyResources, ResourceId, ResourceSink, Resources, ImmediateComponent, component};
 use tokio::task::JoinHandle;
 
@@ -21,7 +21,7 @@ impl ImmediateComponent for Db {
         &mut self,
         _state: &Resources,
         _shutdown: CancellationToken,
-    ) -> Result<Option<JoinHandle<()>>, HyErr> {
+    ) -> Result<Option<JoinHandle<()>>> {
         Ok(None)
     }
 }

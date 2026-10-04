@@ -9,7 +9,7 @@
 //!
 //! 组件都是假的（只打日志），不连真实服务，只看顺序。
 
-use hygiea::HyErr;
+use hygiea::Result;
 use hygiea::app::{
     CancellationToken, ImmediateComponent, Name, Registry, ResourceId, Resources, component,
 };
@@ -42,7 +42,7 @@ impl ImmediateComponent for DbComponent {
         &mut self,
         resources: &Resources,
         _shutdown: CancellationToken,
-    ) -> Result<Option<tokio::task::JoinHandle<()>>, HyErr> {
+    ) -> Result<Option<tokio::task::JoinHandle<()>>> {
         tracing::info!("db ready");
         resources.insert(Db);
         Ok(None)
@@ -73,7 +73,7 @@ impl ImmediateComponent for CacheComponent {
         &mut self,
         resources: &Resources,
         _shutdown: CancellationToken,
-    ) -> Result<Option<tokio::task::JoinHandle<()>>, HyErr> {
+    ) -> Result<Option<tokio::task::JoinHandle<()>>> {
         // depends_on 里声明过，这时一定已经在了；require 仍然返回错误而不是 panic
         let _db = resources.require::<Db>()?;
         tracing::info!("cache ready (uses db)");
@@ -102,7 +102,7 @@ impl ImmediateComponent for ApiComponent {
         &mut self,
         resources: &Resources,
         _shutdown: CancellationToken,
-    ) -> Result<Option<tokio::task::JoinHandle<()>>, HyErr> {
+    ) -> Result<Option<tokio::task::JoinHandle<()>>> {
         let _db = resources.require::<Db>()?;
         let _cache = resources.require::<Cache>()?;
         tracing::info!("api ready (uses db and cache)");
@@ -111,7 +111,7 @@ impl ImmediateComponent for ApiComponent {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), HyErr> {
+async fn main() -> Result<()> {
     // 1. 缺依赖：Api 依赖 Db、Cache，但没有注册提供它们的组件。
     //    run 在启动任何组件之前就返回 ResourceMissing，回调都不会执行
     let (result, _log_guard) = Registry::new().add::<ApiComponent>(()).run().await;

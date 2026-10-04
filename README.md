@@ -120,7 +120,7 @@ use axum::routing::get;
 use hygiea::app::{ConfigArgs, IntoRegistryConfig, Registry, RegistryConfig};
 use hygiea::db::{SqlxSqliteComponent, SqlxSqliteConfig};
 use hygiea::http::{AxumComponent, AxumConfig};
-use hygiea::HyErr;
+use hygiea::Result;
 use serde::Deserialize;
 
 /// 对应 config/dev.toml：框架的配置在 [registry] 段，每个组件的配置各占一段
@@ -138,7 +138,7 @@ impl IntoRegistryConfig for AppConfig {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), HyErr> {
+async fn main() -> Result<()> {
     // 读 config/<env>.toml（默认 dev），再叠加 -f 指定的文件、HYGIEA__ 环境变量、--set
     let (registry, mut config) = Registry::load_config::<AppConfig>(&ConfigArgs::from_cli());
     config.http.router = Some(Router::new().route("/hello", get(|| async { "hello\n" })));
@@ -207,7 +207,7 @@ fn main() {
 需要 `http-client-reqwest` feature。每次请求在 INFO 级别打 `http call start` / `http call success`，失败打 WARN（可配置）。标了 `#[redact(mask)]` 的字段在这些日志里显示为 `"***"`（包括 params、请求体、URL，以及 `send` 解码出的响应体），实际发送和接收的仍是真实值。非 2xx 和解码失败的响应原样记录，因为排查问题需要看原文。
 
 ```rust
-use hygiea::HyErr;
+use hygiea::Result;
 use hygiea::http_client::reqwest_client::{Json, Method, ReqwestClient, ReqwestConfig, RequestConfig};
 use hygiea::redact::redact;
 use serde::{Deserialize, Serialize};
@@ -228,7 +228,7 @@ struct LoginResp {
     token: String,
 }
 
-async fn login(client: &ReqwestClient) -> Result<String, HyErr> {
+async fn login(client: &ReqwestClient) -> Result<String> {
     let req = LoginReq { user: "alice".into(), password: "p@ss".into() };
     // 请求体 Json(..) 表示按 JSON 编码；send::<Json<LoginResp>> 表示按 JSON 解码，resp.body 是 LoginResp
     let resp = RequestConfig::with_body(Method::POST, "https://api.example.com/login", Json(req))

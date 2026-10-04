@@ -13,7 +13,7 @@ use serde::Deserialize;
 use hygiea_core::app::{
     BaseAppErr, CancellationToken, ImmediateComponent, Name, ResourceId, Resources, component,
 };
-use hygiea_core::{HyErr, ResultExt, err};
+use hygiea_core::{Result, ResultExt, err};
 
 use super::HeaderMap;
 use super::config::{HeaderMapConfig, ProxyConfig};
@@ -198,7 +198,7 @@ impl Default for ReqwestConfig {
 impl ReqwestConfig {
     /// 添加默认头，见 [`IntoHeaders`]。多次调用、或者一次传数组 / 元组，都和已有的（包括配置文件里的）按顺序合并，
     /// 同名的以靠后的为准。转换失败、使用了保留字段、或者已有的默认头本身不合法时返回 `Err`
-    pub fn default_headers(mut self, headers: impl IntoHeaders) -> Result<Self, HyErr> {
+    pub fn default_headers(mut self, headers: impl IntoHeaders) -> Result<Self> {
         let mut merged = HeaderMap::try_from(std::mem::take(&mut self.default_headers))
             .map_err(invalid_header)?;
         merged.extend(checked_headers(headers)?);
@@ -227,7 +227,7 @@ impl ReqwestConfig {
 
     /// 造出 [`ReqwestClient`]。请求头无效时返回 `InvalidConfig`；代理 URL 或 reqwest 构建失败时返回
     /// [`ClientBuildFailed`](super::BaseHttpErr::ClientBuildFailed)，reqwest 错误保留在 source 上
-    pub fn build(self) -> Result<ReqwestClient, HyErr> {
+    pub fn build(self) -> Result<ReqwestClient> {
         #[cfg(feature = "debug-log")]
         let (debug, user_agent, default_headers) = (
             self.debug,
@@ -256,7 +256,7 @@ impl ReqwestConfig {
 fn client_default_headers(
     user_agent: Option<String>,
     default_headers: HeaderMapConfig,
-) -> Result<HeaderMap, HyErr> {
+) -> Result<HeaderMap> {
     use reqwest::header::{ACCEPT, HeaderValue, USER_AGENT};
 
     let mut headers = HeaderMap::new();
@@ -304,7 +304,7 @@ impl ReqwestClient {
     /// 默认配置、打开 debug 日志的 client，就是 `ReqwestConfig::default().debug(true).build()`。
     /// 只在 `debug-log` feature 下存在，给测试用；要改别的配置就用 [`ReqwestConfig::debug`](ReqwestConfig::debug) 那条写法
     #[cfg(feature = "debug-log")]
-    pub fn debug() -> Result<Self, HyErr> {
+    pub fn debug() -> Result<Self> {
         ReqwestConfig::default().debug(true).build()
     }
 
@@ -334,7 +334,7 @@ impl ReqwestClient {
 }
 
 /// 把配置铺到 reqwest 原生的 `ClientBuilder` 上。不对外：原生的 `Client` 用不了本模块的 `send`
-fn client_builder(config: ReqwestConfig) -> Result<ClientBuilder, HyErr> {
+fn client_builder(config: ReqwestConfig) -> Result<ClientBuilder> {
     let mut builder = Client::builder();
     if config.cookie_store {
         builder = builder.cookie_store(true);
@@ -404,7 +404,7 @@ impl ImmediateComponent for ReqwestComponent {
         &mut self,
         resources: &Resources,
         _shutdown: CancellationToken,
-    ) -> Result<Option<tokio::task::JoinHandle<()>>, HyErr> {
+    ) -> Result<Option<tokio::task::JoinHandle<()>>> {
         let client = self
             .config
             .clone()

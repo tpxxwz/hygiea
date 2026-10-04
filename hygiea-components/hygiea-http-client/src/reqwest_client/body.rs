@@ -5,7 +5,7 @@ use std::fmt;
 
 use reqwest::header::CONTENT_TYPE;
 
-use hygiea_core::{BaseErr, HyErr, ResultExt, err, redact};
+use hygiea_core::{BaseErr, Result, ResultExt, err, redact};
 
 use super::error::invalid_header;
 use super::text::{decode_charset, is_text_content_type, to_one_line};
@@ -62,16 +62,16 @@ impl ContentType {
 pub trait IntoBody {
     /// 把 body 铺到 `RequestBuilder` 上，content-type 一并设置。
     /// 构造 body 本身失败时（比如 [`Multipart`] 某段的 mime 不合法）返回 `Err`，请求不发出去
-    fn apply(self, req: RequestBuilder) -> Result<RequestBuilder, HyErr>;
+    fn apply(self, req: RequestBuilder) -> Result<RequestBuilder>;
 
     /// 打日志用的请求体摘要，`None` 表示没有 body。内容不做长度限制——批量导出这类场景由调用方
     /// 自己用 [`RequestConfig::enable_logging`](super::RequestConfig::enable_logging) 控制要不要打。
     /// 序列化失败时返回 `Err`
-    fn preview(&self) -> Result<Option<String>, HyErr>;
+    fn preview(&self) -> Result<Option<String>>;
 
     /// debug 日志（`debug-log` feature 下 [`ReqwestConfig::debug`](super::ReqwestConfig) 打开时）用的请求体摘要，
     /// 不打码。默认和 [`IntoBody::preview`] 相同，只有会打码的类型（[`Json`]、[`Form`]）需要覆盖
-    fn debug_preview(&self) -> Result<Option<String>, HyErr> {
+    fn debug_preview(&self) -> Result<Option<String>> {
         self.preview()
     }
 }
@@ -192,66 +192,66 @@ impl fmt::Debug for MultipartPart {
 }
 
 impl IntoBody for () {
-    fn apply(self, req: RequestBuilder) -> Result<RequestBuilder, HyErr> {
+    fn apply(self, req: RequestBuilder) -> Result<RequestBuilder> {
         Ok(req)
     }
 
-    fn preview(&self) -> Result<Option<String>, HyErr> {
+    fn preview(&self) -> Result<Option<String>> {
         Ok(None)
     }
 }
 
 impl<T: serde::Serialize> IntoBody for Json<T> {
-    fn apply(self, req: RequestBuilder) -> Result<RequestBuilder, HyErr> {
+    fn apply(self, req: RequestBuilder) -> Result<RequestBuilder> {
         Ok(req.json(&self.0))
     }
 
-    fn preview(&self) -> Result<Option<String>, HyErr> {
+    fn preview(&self) -> Result<Option<String>> {
         redact::to_redacted_json(&self.0).map(Some)
     }
 
-    fn debug_preview(&self) -> Result<Option<String>, HyErr> {
+    fn debug_preview(&self) -> Result<Option<String>> {
         plain_json(&self.0).map(Some)
     }
 }
 
 impl<T: serde::Serialize> IntoBody for Form<T> {
-    fn apply(self, req: RequestBuilder) -> Result<RequestBuilder, HyErr> {
+    fn apply(self, req: RequestBuilder) -> Result<RequestBuilder> {
         Ok(req.form(&self.0))
     }
 
-    fn preview(&self) -> Result<Option<String>, HyErr> {
+    fn preview(&self) -> Result<Option<String>> {
         redact::to_redacted_json(&self.0).map(Some)
     }
 
-    fn debug_preview(&self) -> Result<Option<String>, HyErr> {
+    fn debug_preview(&self) -> Result<Option<String>> {
         plain_json(&self.0).map(Some)
     }
 }
 
 /// 不打码的 JSON，debug 日志用
-fn plain_json<T: serde::Serialize>(value: &T) -> Result<String, HyErr> {
+fn plain_json<T: serde::Serialize>(value: &T) -> Result<String> {
     serde_json::to_string(value)
         .wrap_err(|| err!(BaseErr::JsonError, "serialize body for debug log failed"))
 }
 
 impl IntoBody for Raw {
-    fn apply(self, req: RequestBuilder) -> Result<RequestBuilder, HyErr> {
+    fn apply(self, req: RequestBuilder) -> Result<RequestBuilder> {
         Ok(req.header(CONTENT_TYPE, self.0.as_str()).body(self.1))
     }
 
-    fn preview(&self) -> Result<Option<String>, HyErr> {
+    fn preview(&self) -> Result<Option<String>> {
         Ok(Some(raw_preview(self.0, &self.1)))
     }
 }
 
 impl IntoBody for RawStream {
-    fn apply(self, req: RequestBuilder) -> Result<RequestBuilder, HyErr> {
+    fn apply(self, req: RequestBuilder) -> Result<RequestBuilder> {
         Ok(req.header(CONTENT_TYPE, self.0.as_str()).body(self.1))
     }
 
     /// 流读一次就消费掉，拿不到内容，只给一个标记；`Body` 其实是内存字节时和 [`Raw`] 一样打
-    fn preview(&self) -> Result<Option<String>, HyErr> {
+    fn preview(&self) -> Result<Option<String>> {
         Ok(Some(match self.1.as_bytes() {
             Some(bytes) => raw_preview(self.0, bytes),
             None => "<stream>".to_string(),
@@ -270,7 +270,7 @@ fn raw_preview(content_type: ContentType, bytes: &[u8]) -> String {
 }
 
 impl IntoBody for Multipart {
-    fn apply(self, req: RequestBuilder) -> Result<RequestBuilder, HyErr> {
+    fn apply(self, req: RequestBuilder) -> Result<RequestBuilder> {
         let mut form = multipart::Form::new();
         for (name, part) in self.parts {
             // Body::from(Bytes) 是内存字节，不复制；带上长度，reqwest 能算出 Content-Length
@@ -291,7 +291,7 @@ impl IntoBody for Multipart {
     }
 
     /// 每段只打名字、文件名和字节数，不打内容：可能是文件，也可能是密码之类的文本字段
-    fn preview(&self) -> Result<Option<String>, HyErr> {
+    fn preview(&self) -> Result<Option<String>> {
         let parts: Vec<String> = self
             .parts
             .iter()
@@ -307,11 +307,11 @@ impl IntoBody for Multipart {
 /// reqwest 原生的 multipart，段可以是流或文件（`Part::stream`、`Form::file`），不能重试。
 /// boundary 和各段头由 reqwest 生成
 impl IntoBody for multipart::Form {
-    fn apply(self, req: RequestBuilder) -> Result<RequestBuilder, HyErr> {
+    fn apply(self, req: RequestBuilder) -> Result<RequestBuilder> {
         Ok(req.multipart(self))
     }
 
-    fn preview(&self) -> Result<Option<String>, HyErr> {
+    fn preview(&self) -> Result<Option<String>> {
         Ok(Some("<multipart>".to_string()))
     }
 }

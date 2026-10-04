@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 
 use hygiea::app::Registry;
 use hygiea::db::{SqlxSqliteComponent, SqlxSqliteConfig, SqlxSqlitePool};
-use hygiea::{BaseErr, HyErr, err};
+use hygiea::{BaseErr, Result, err};
 
 // ---- 全局状态 ----
 
@@ -24,14 +24,14 @@ static APP_STATE: OnceLock<AppState> = OnceLock::new();
 
 impl AppState {
     /// 只在 before_activate 里调一次
-    fn init(state: AppState) -> Result<(), HyErr> {
+    fn init(state: AppState) -> Result<()> {
         APP_STATE.set(state).map_err(|_| {
             err!(BaseErr::SysErr).with_source(std::io::Error::other("AppState already initialized"))
         })
     }
 
     /// 没初始化就返回错误，不 panic
-    pub fn get() -> Result<&'static AppState, HyErr> {
+    pub fn get() -> Result<&'static AppState> {
         APP_STATE.get().ok_or_else(|| {
             err!(BaseErr::SysErr).with_source(std::io::Error::other("AppState not initialized"))
         })
@@ -40,7 +40,7 @@ impl AppState {
 
 // ---- 业务代码：直接取全局状态 ----
 
-fn report() -> Result<(), HyErr> {
+fn report() -> Result<()> {
     let state = AppState::get()?;
     tracing::info!(
         "primary: {}, replica: {}",
@@ -58,7 +58,7 @@ fn memory_db() -> SqlxSqliteConfig {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), HyErr> {
+async fn main() -> Result<()> {
     let registry = Registry::new()
         .add_named::<SqlxSqliteComponent>("primary", memory_db())
         .add_named::<SqlxSqliteComponent>("replica", memory_db());

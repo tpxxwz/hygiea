@@ -1,6 +1,6 @@
 // 漏写 build：报在类型名上
 #![allow(unused_imports)]
-use hygiea::HyErr;
+use hygiea::{HyErr, Result};
 use hygiea::app::{CancellationToken, DeferredComponent, Name, ReadyResources, ResourceId, ResourceSink, Resources, ImmediateComponent, component};
 use tokio::task::JoinHandle;
 
@@ -14,7 +14,7 @@ impl ImmediateComponent for Db {
         &mut self,
         _state: &Resources,
         _shutdown: CancellationToken,
-    ) -> Result<Option<JoinHandle<()>>, HyErr> {
+    ) -> Result<Option<JoinHandle<()>>> {
         Ok(None)
     }
 }

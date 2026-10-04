@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::routing::{get, post};
-use hygiea_core::{HyErr, err, hy_err};
+use hygiea_core::{Result, err, hy_err};
 use hygiea_http::{AxumConfig, HttpLimits, HttpTimeout, arity0, arity1, build_router};
 use tower::ServiceExt;
 
@@ -24,23 +24,23 @@ struct Echo {
     msg: String,
 }
 
-async fn ok0() -> Result<&'static str, HyErr> {
+async fn ok0() -> Result<&'static str> {
     Ok("pong")
 }
 
-async fn fail0() -> Result<&'static str, HyErr> {
+async fn fail0() -> Result<&'static str> {
     Err(err!(TestErr::Boom, "zero"))
 }
 
-async fn ok1(req: Echo) -> Result<Echo, HyErr> {
+async fn ok1(req: Echo) -> Result<Echo> {
     Ok(req)
 }
 
-async fn fail1(_req: Echo) -> Result<Echo, HyErr> {
+async fn fail1(_req: Echo) -> Result<Echo> {
     Err(err!(TestErr::Boom, "one"))
 }
 
-async fn slow0() -> Result<&'static str, HyErr> {
+async fn slow0() -> Result<&'static str> {
     tokio::time::sleep(Duration::from_secs(2)).await;
     Ok("too slow")
 }

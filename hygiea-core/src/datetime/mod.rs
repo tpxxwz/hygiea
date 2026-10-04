@@ -60,7 +60,7 @@
 //! # 错误与返回值
 //!
 //! - 不会失败的方法直接返回值（比如 `UtcDateTime::start_of_day`）；
-//! - 可能失败的（越界、解析失败）返回 `Result<_, HyErr>`，错误码是 `BaseErr::DateError`；
+//! - 可能失败的（越界、解析失败）返回 [`Result<_>`](crate::Result)（错误是 `HyErr`），错误码是 `BaseErr::DateError`；
 //! - 有多种可能结果的（本地钟面时间对应 0/1/2 个时刻）原样返回 `OffsetResult`。
 //!
 //! # 格式名

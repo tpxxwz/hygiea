@@ -1,6 +1,6 @@
 // 手写 type Kind：由宏按 trait 填，不能自己写
 #![allow(unused_imports)]
-use hygiea::HyErr;
+use hygiea::{HyErr, Result};
 use hygiea::app::{CancellationToken, DeferredComponent, Name, ReadyResources, ResourceId, ResourceSink, Resources, ImmediateComponent, component};
 use tokio::task::JoinHandle;
 
@@ -19,7 +19,7 @@ impl ImmediateComponent for Db {
         &mut self,
         _state: &Resources,
         _shutdown: CancellationToken,
-    ) -> Result<Option<JoinHandle<()>>, HyErr> {
+    ) -> Result<Option<JoinHandle<()>>> {
         Ok(None)
     }
 }

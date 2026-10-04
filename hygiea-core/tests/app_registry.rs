@@ -16,7 +16,7 @@ use hygiea_core::app::{
     BaseAppErr, CancellationToken, DeferredComponent, ImmediateComponent, Name, ReadyResources,
     Registry, RegistryConfig, ResourceId, ResourceSink, Resources, component,
 };
-use hygiea_core::{HyErr, err};
+use hygiea_core::{Result, err};
 use tokio::task::JoinHandle;
 
 // ---- 测试用组件 -------------------------------------------------------------
@@ -167,7 +167,7 @@ impl ImmediateComponent for TestComponent {
         &mut self,
         state: &Resources,
         shutdown: CancellationToken,
-    ) -> Result<Option<JoinHandle<()>>, HyErr> {
+    ) -> Result<Option<JoinHandle<()>>> {
         self.events
             .lock()
             .unwrap()
@@ -211,7 +211,7 @@ impl ImmediateComponent for TestComponent {
         Ok(handle)
     }
 
-    async fn stop(&mut self) -> Result<(), HyErr> {
+    async fn stop(&mut self) -> Result<()> {
         self.events
             .lock()
             .unwrap()
@@ -227,7 +227,7 @@ impl ImmediateComponent for TestComponent {
 }
 
 /// `on_ready` 的回调故意返回错误，让 `run` 在启动完成后立刻进入关闭流程，不用等 OS 信号
-async fn force_shutdown(_state: Resources) -> Result<(), HyErr> {
+async fn force_shutdown(_state: Resources) -> Result<()> {
     Err(err!(
         BaseAppErr::ComponentError,
         "forced shutdown for test".to_string()
@@ -648,7 +648,7 @@ impl DeferredComponent for TestDeferred {
             .collect()
     }
 
-    async fn prepare(&mut self, sink: &ResourceSink) -> Result<(), HyErr> {
+    async fn prepare(&mut self, sink: &ResourceSink) -> Result<()> {
         self.events
             .lock()
             .unwrap()
@@ -663,7 +663,7 @@ impl DeferredComponent for TestDeferred {
         &mut self,
         resources: ReadyResources,
         _shutdown: CancellationToken,
-    ) -> Result<Option<JoinHandle<()>>, HyErr> {
+    ) -> Result<Option<JoinHandle<()>>> {
         let mut read = Vec::new();
         for name in self
             .behavior
@@ -693,7 +693,7 @@ impl DeferredComponent for TestDeferred {
         })))
     }
 
-    async fn stop(&mut self) -> Result<(), HyErr> {
+    async fn stop(&mut self) -> Result<()> {
         self.events
             .lock()
             .unwrap()

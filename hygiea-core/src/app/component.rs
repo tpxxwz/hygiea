@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use tokio::task::JoinHandle;
 
 use super::{CancellationToken, Name, ReadyResources, ResourceId, ResourceSink, Resources};
-use crate::HyErr;
+use crate::Result;
 
 /// 应用组件的公共部分：怎么构建、提供和依赖哪些资源、怎么关闭。
 ///
@@ -83,7 +83,7 @@ pub trait Component: Sized + Send + 'static {
     /// 给没有后台任务、但持有外部资源的组件用，比如连接池：在这里关掉连接（等在途查询完成），
     /// 数据库那边看到的是正常断开，而不是进程退出导致的连接异常中断。返回错误只打 WARN，
     /// 不影响关后面的组件
-    async fn stop(&mut self) -> Result<(), HyErr> {
+    async fn stop(&mut self) -> Result<()> {
         Ok(())
     }
 
@@ -115,7 +115,7 @@ pub trait ImmediateComponent: Component {
         &mut self,
         state: &Resources,
         shutdown: CancellationToken,
-    ) -> Result<Option<JoinHandle<()>>, HyErr>;
+    ) -> Result<Option<JoinHandle<()>>>;
 }
 
 /// [`Deferred`] 组件的启动，分两个阶段
@@ -126,7 +126,7 @@ pub trait DeferredComponent: Component {
     /// 可能失败的初始化尽量放在这里，这样失败时别的 Deferred 组件都还没开始工作。
     /// `sink` 只能往 Resources 里放东西、读不了：这时别的组件可能还没启动完，要读的资源等 `activate`。
     /// 返回错误时，前面已经启动的组件会自动关闭
-    async fn prepare(&mut self, sink: &ResourceSink) -> Result<(), HyErr>;
+    async fn prepare(&mut self, sink: &ResourceSink) -> Result<()>;
 
     /// 第二阶段：所有组件的第一阶段、`before_activate` 的回调都执行完了，开始工作（接请求、开始消费等）。
     ///
@@ -144,7 +144,7 @@ pub trait DeferredComponent: Component {
         &mut self,
         resources: ReadyResources,
         shutdown: CancellationToken,
-    ) -> Result<Option<JoinHandle<()>>, HyErr>;
+    ) -> Result<Option<JoinHandle<()>>>;
 }
 
 /// 按 `Component::Kind` 分派到两个子 trait。模块私有，外部没法实现 `Kind`，
@@ -184,16 +184,16 @@ pub(super) mod sealed {
             &mut self,
             state: &Resources,
             shutdown: CancellationToken,
-        ) -> Result<Option<JoinHandle<()>>, HyErr>;
+        ) -> Result<Option<JoinHandle<()>>>;
 
         /// 第二阶段：Deferred 调 `activate`，Immediate 什么都不做
         async fn activate(
             &mut self,
             state: &Resources,
             shutdown: CancellationToken,
-        ) -> Result<Option<JoinHandle<()>>, HyErr>;
+        ) -> Result<Option<JoinHandle<()>>>;
 
-        async fn stop(&mut self) -> Result<(), HyErr>;
+        async fn stop(&mut self) -> Result<()>;
     }
 
     struct ImmediateObject<C>(C);
@@ -204,7 +204,7 @@ pub(super) mod sealed {
             &mut self,
             state: &Resources,
             shutdown: CancellationToken,
-        ) -> Result<Option<JoinHandle<()>>, HyErr> {
+        ) -> Result<Option<JoinHandle<()>>> {
             ImmediateComponent::startup(&mut self.0, state, shutdown).await
         }
 
@@ -212,11 +212,11 @@ pub(super) mod sealed {
             &mut self,
             _state: &Resources,
             _shutdown: CancellationToken,
-        ) -> Result<Option<JoinHandle<()>>, HyErr> {
+        ) -> Result<Option<JoinHandle<()>>> {
             Ok(None)
         }
 
-        async fn stop(&mut self) -> Result<(), HyErr> {
+        async fn stop(&mut self) -> Result<()> {
             Component::stop(&mut self.0).await
         }
     }
@@ -229,7 +229,7 @@ pub(super) mod sealed {
             &mut self,
             state: &Resources,
             _shutdown: CancellationToken,
-        ) -> Result<Option<JoinHandle<()>>, HyErr> {
+        ) -> Result<Option<JoinHandle<()>>> {
             DeferredComponent::prepare(&mut self.0, &ResourceSink::new(state)).await?;
             Ok(None)
         }
@@ -238,11 +238,11 @@ pub(super) mod sealed {
             &mut self,
             state: &Resources,
             shutdown: CancellationToken,
-        ) -> Result<Option<JoinHandle<()>>, HyErr> {
+        ) -> Result<Option<JoinHandle<()>>> {
             DeferredComponent::activate(&mut self.0, ReadyResources::new(state), shutdown).await
         }
 
-        async fn stop(&mut self) -> Result<(), HyErr> {
+        async fn stop(&mut self) -> Result<()> {
             Component::stop(&mut self.0).await
         }
     }

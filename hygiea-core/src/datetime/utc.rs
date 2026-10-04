@@ -4,21 +4,21 @@ use time::format_description::well_known::Rfc3339;
 use time::{Duration, Month, OffsetDateTime, Time, UtcDateTime};
 
 use super::{DateTimeFormattable, DateTimeFormatter};
-use crate::{BaseErr, HyErr, ResultExt, err};
+use crate::{BaseErr, Result, ResultExt, err};
 
 /// UTC/绝对时间相关的通用日期时间扩展。
 ///
 /// `OffsetDateTime` 与 `UtcDateTime` 都实现本 trait；返回日期时间的方法保持实现类型。
 pub trait HygieaDateTimeExt: Sized + DateTimeFormattable {
     /// 从 Unix 毫秒时间戳创建日期时间。
-    fn from_millis(ms: i64) -> Result<Self, HyErr>;
+    fn from_millis(ms: i64) -> Result<Self>;
     /// 从 Unix 秒时间戳创建日期时间。
-    fn from_secs(s: i64) -> Result<Self, HyErr>;
+    fn from_secs(s: i64) -> Result<Self>;
 
     /// 解析携带 offset 的 RFC 3339；时区/offset 语义由实现类型决定。
-    fn parse_ext_rfc3339(s: &str) -> Result<Self, HyErr>;
+    fn parse_ext_rfc3339(s: &str) -> Result<Self>;
     /// 按实现类型自身的时区/offset 语义输出 RFC 3339。
-    fn format_ext_rfc3339(&self) -> Result<String, HyErr> {
+    fn format_ext_rfc3339(&self) -> Result<String> {
         self.format_with(&Rfc3339)
             .wrap_err(|| err!(BaseErr::DateError, "format RFC 3339 datetime failed"))
     }
@@ -26,7 +26,7 @@ pub trait HygieaDateTimeExt: Sized + DateTimeFormattable {
     ///
     /// 配不带 offset 的格式时，字符串里没有 offset：`OffsetDateTime` 不一定是系统时区（比如 [`now()`](super::now)
     /// 是 UTC），要本地时间用 `format_ext_local`。
-    fn format_ext(&self, formatter: impl Into<DateTimeFormatter>) -> Result<String, HyErr> {
+    fn format_ext(&self, formatter: impl Into<DateTimeFormatter>) -> Result<String> {
         let result = match formatter.into() {
             DateTimeFormatter::WithOffset(formatter) => self.format_with(formatter.description()),
             DateTimeFormatter::WithoutOffset(formatter) => {
@@ -37,7 +37,7 @@ pub trait HygieaDateTimeExt: Sized + DateTimeFormattable {
     }
 
     /// 在绝对时间线上平移指定时长，`OffsetDateTime` 保留自身的 offset。越界返回 `DateError`
-    fn shift(&self, duration: Duration) -> Result<Self, HyErr>;
+    fn shift(&self, duration: Duration) -> Result<Self>;
 }
 
 /// `UtcDateTime` 专有的 UTC 日历边界扩展。
@@ -50,38 +50,38 @@ pub trait HygieaUtcDateTimeExt: HygieaDateTimeExt {
     /// 做区间判断用半开区间 `[start_of_day, start_of_next_day)`
     fn end_of_day(&self) -> Self;
     /// 返回下一天的开始。
-    fn start_of_next_day(&self) -> Result<Self, HyErr>;
+    fn start_of_next_day(&self) -> Result<Self>;
 
     // ---- 周边界 ----------------------------------------------------------------
 
     /// 返回当前周的开始，周一为一周第一天。
-    fn start_of_week(&self) -> Result<Self, HyErr>;
+    fn start_of_week(&self) -> Result<Self>;
     /// 返回当前周的结束，周日为一周最后一天。做区间判断用半开区间 `[start_of_week, start_of_next_week)`
-    fn end_of_week(&self) -> Result<Self, HyErr>;
+    fn end_of_week(&self) -> Result<Self>;
     /// 返回下一周（下周一）的开始。
-    fn start_of_next_week(&self) -> Result<Self, HyErr>;
+    fn start_of_next_week(&self) -> Result<Self>;
 
     // ---- 月边界 ----------------------------------------------------------------
 
     /// 返回当前月的开始。
-    fn start_of_month(&self) -> Result<Self, HyErr>;
+    fn start_of_month(&self) -> Result<Self>;
     /// 返回当前月的结束。做区间判断用半开区间 `[start_of_month, start_of_next_month)`
-    fn end_of_month(&self) -> Result<Self, HyErr>;
+    fn end_of_month(&self) -> Result<Self>;
     /// 返回下个月的开始。
-    fn start_of_next_month(&self) -> Result<Self, HyErr>;
+    fn start_of_next_month(&self) -> Result<Self>;
 
     // ---- 年边界 ----------------------------------------------------------------
 
     /// 返回当前年的开始。
-    fn start_of_year(&self) -> Result<Self, HyErr>;
+    fn start_of_year(&self) -> Result<Self>;
     /// 返回当前年的结束。做区间判断用半开区间 `[start_of_year, start_of_next_year)`
-    fn end_of_year(&self) -> Result<Self, HyErr>;
+    fn end_of_year(&self) -> Result<Self>;
     /// 返回下一年的开始。
-    fn start_of_next_year(&self) -> Result<Self, HyErr>;
+    fn start_of_next_year(&self) -> Result<Self>;
 }
 
 impl HygieaDateTimeExt for UtcDateTime {
-    fn from_millis(ms: i64) -> Result<Self, HyErr> {
+    fn from_millis(ms: i64) -> Result<Self> {
         UtcDateTime::from_unix_timestamp_nanos(ms as i128 * 1_000_000).wrap_err(|| {
             err!(
                 BaseErr::DateError,
@@ -90,7 +90,7 @@ impl HygieaDateTimeExt for UtcDateTime {
         })
     }
 
-    fn from_secs(s: i64) -> Result<Self, HyErr> {
+    fn from_secs(s: i64) -> Result<Self> {
         UtcDateTime::from_unix_timestamp(s).wrap_err(|| {
             err!(
                 BaseErr::DateError,
@@ -99,7 +99,7 @@ impl HygieaDateTimeExt for UtcDateTime {
         })
     }
 
-    fn parse_ext_rfc3339(s: &str) -> Result<Self, HyErr> {
+    fn parse_ext_rfc3339(s: &str) -> Result<Self> {
         UtcDateTime::parse(s, &Rfc3339).wrap_err(|| {
             err!(
                 BaseErr::DateError,
@@ -108,7 +108,7 @@ impl HygieaDateTimeExt for UtcDateTime {
         })
     }
 
-    fn shift(&self, duration: Duration) -> Result<Self, HyErr> {
+    fn shift(&self, duration: Duration) -> Result<Self> {
         self.checked_add(duration).ok_or_else(|| {
             err!(
                 BaseErr::DateError,
@@ -127,7 +127,7 @@ impl HygieaUtcDateTimeExt for UtcDateTime {
         UtcDateTime::new(self.date(), Time::MAX)
     }
 
-    fn start_of_next_day(&self) -> Result<Self, HyErr> {
+    fn start_of_next_day(&self) -> Result<Self> {
         let date = self.date().next_day().ok_or_else(|| {
             err!(
                 BaseErr::DateError,
@@ -137,7 +137,7 @@ impl HygieaUtcDateTimeExt for UtcDateTime {
         Ok(UtcDateTime::new(date, Time::MIDNIGHT))
     }
 
-    fn start_of_week(&self) -> Result<Self, HyErr> {
+    fn start_of_week(&self) -> Result<Self> {
         let midnight = self.start_of_day();
         let days = self.weekday().number_days_from_monday() as i64;
         midnight.checked_sub(Duration::days(days)).ok_or_else(|| {
@@ -148,7 +148,7 @@ impl HygieaUtcDateTimeExt for UtcDateTime {
         })
     }
 
-    fn end_of_week(&self) -> Result<Self, HyErr> {
+    fn end_of_week(&self) -> Result<Self> {
         self.start_of_week()?
             .checked_add(Duration::days(7) - Duration::nanoseconds(1))
             .ok_or_else(|| {
@@ -159,7 +159,7 @@ impl HygieaUtcDateTimeExt for UtcDateTime {
             })
     }
 
-    fn start_of_next_week(&self) -> Result<Self, HyErr> {
+    fn start_of_next_week(&self) -> Result<Self> {
         self.start_of_week()?
             .checked_add(Duration::days(7))
             .ok_or_else(|| {
@@ -170,7 +170,7 @@ impl HygieaUtcDateTimeExt for UtcDateTime {
             })
     }
 
-    fn start_of_month(&self) -> Result<Self, HyErr> {
+    fn start_of_month(&self) -> Result<Self> {
         let date = self
             .date()
             .replace_day(1)
@@ -178,7 +178,7 @@ impl HygieaUtcDateTimeExt for UtcDateTime {
         Ok(UtcDateTime::new(date, Time::MIDNIGHT))
     }
 
-    fn end_of_month(&self) -> Result<Self, HyErr> {
+    fn end_of_month(&self) -> Result<Self> {
         let next_month = self
             .start_of_month()?
             .checked_add(Duration::days(31))
@@ -205,7 +205,7 @@ impl HygieaUtcDateTimeExt for UtcDateTime {
             })
     }
 
-    fn start_of_next_month(&self) -> Result<Self, HyErr> {
+    fn start_of_next_month(&self) -> Result<Self> {
         let next_month = self
             .start_of_month()?
             .checked_add(Duration::days(31))
@@ -222,7 +222,7 @@ impl HygieaUtcDateTimeExt for UtcDateTime {
         Ok(UtcDateTime::new(date, Time::MIDNIGHT))
     }
 
-    fn start_of_year(&self) -> Result<Self, HyErr> {
+    fn start_of_year(&self) -> Result<Self> {
         let date = self
             .date()
             .replace_day(1)
@@ -231,7 +231,7 @@ impl HygieaUtcDateTimeExt for UtcDateTime {
         Ok(UtcDateTime::new(date, Time::MIDNIGHT))
     }
 
-    fn end_of_year(&self) -> Result<Self, HyErr> {
+    fn end_of_year(&self) -> Result<Self> {
         let next_year = self.year().checked_add(1).ok_or_else(|| {
             err!(
                 BaseErr::DateError,
@@ -253,7 +253,7 @@ impl HygieaUtcDateTimeExt for UtcDateTime {
             })
     }
 
-    fn start_of_next_year(&self) -> Result<Self, HyErr> {
+    fn start_of_next_year(&self) -> Result<Self> {
         let next_year = self.year().checked_add(1).ok_or_else(|| {
             err!(
                 BaseErr::DateError,
@@ -270,7 +270,7 @@ impl HygieaUtcDateTimeExt for UtcDateTime {
 }
 
 impl HygieaDateTimeExt for OffsetDateTime {
-    fn from_millis(ms: i64) -> Result<OffsetDateTime, HyErr> {
+    fn from_millis(ms: i64) -> Result<OffsetDateTime> {
         OffsetDateTime::from_unix_timestamp_nanos(ms as i128 * 1_000_000).wrap_err(|| {
             err!(
                 BaseErr::DateError,
@@ -279,7 +279,7 @@ impl HygieaDateTimeExt for OffsetDateTime {
         })
     }
 
-    fn from_secs(s: i64) -> Result<OffsetDateTime, HyErr> {
+    fn from_secs(s: i64) -> Result<OffsetDateTime> {
         OffsetDateTime::from_unix_timestamp(s).wrap_err(|| {
             err!(
                 BaseErr::DateError,
@@ -288,7 +288,7 @@ impl HygieaDateTimeExt for OffsetDateTime {
         })
     }
 
-    fn parse_ext_rfc3339(s: &str) -> Result<OffsetDateTime, HyErr> {
+    fn parse_ext_rfc3339(s: &str) -> Result<OffsetDateTime> {
         OffsetDateTime::parse(s, &Rfc3339).wrap_err(|| {
             err!(
                 BaseErr::DateError,
@@ -297,7 +297,7 @@ impl HygieaDateTimeExt for OffsetDateTime {
         })
     }
 
-    fn shift(&self, duration: Duration) -> Result<OffsetDateTime, HyErr> {
+    fn shift(&self, duration: Duration) -> Result<OffsetDateTime> {
         self.checked_add(duration).ok_or_else(|| {
             err!(
                 BaseErr::DateError,

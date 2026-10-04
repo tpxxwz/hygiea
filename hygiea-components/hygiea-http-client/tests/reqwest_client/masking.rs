@@ -4,6 +4,7 @@ use hygiea_http_client::reqwest_client::*;
 use serde::{Deserialize, Serialize};
 
 use crate::support::*;
+use hygiea_core::Result;
 
 /// 请求：params 和 body
 mod request {
@@ -208,12 +209,7 @@ mod response {
         data: T,
     }
 
-    async fn send<Decoder>(
-        path: &str,
-    ) -> (
-        Result<HttpResponse<Decoder::Output>, hygiea_core::HyErr>,
-        String,
-    )
+    async fn send<Decoder>(path: &str) -> (Result<HttpResponse<Decoder::Output>>, String)
     where
         Decoder: FromBody,
         Decoder::Output: Send,

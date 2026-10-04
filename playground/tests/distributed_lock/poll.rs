@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use super::core::{DistributedLock, LockGuard};
-use hygiea::HyErr;
+use hygiea::Result;
 use hygiea::app::async_trait;
 
 // ========== 轮询等待 ==========
@@ -23,7 +23,7 @@ pub async fn lock_with_timeout<L: DistributedLock + ?Sized>(
     lock: &L,
     key: &str,
     timeout: Duration,
-) -> Result<Option<LockGuard>, HyErr> {
+) -> Result<Option<LockGuard>> {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
         if let Some(guard) = lock.try_lock(key).await? {
@@ -61,7 +61,7 @@ mod tests {
 
     #[async_trait]
     impl DistributedLock for FakeLock {
-        async fn try_lock(&self, key: &str) -> Result<Option<LockGuard>, HyErr> {
+        async fn try_lock(&self, key: &str) -> Result<Option<LockGuard>> {
             let mut held = self.held.lock().unwrap();
             if held.iter().any(|k| k == key) {
                 return Ok(None);

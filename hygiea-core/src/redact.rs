@@ -33,7 +33,7 @@ use std::cell::Cell;
 
 use serde::{Serialize, Serializer};
 
-use crate::{BaseErr, HyErr, ResultExt, err};
+use crate::{BaseErr, Result, ResultExt, err};
 
 pub use hygiea_macros::redact;
 
@@ -78,7 +78,7 @@ pub fn write_masked<S: Serializer>(serializer: S) -> Result<S::Ok, S::Error> {
 
 /// 打开日志模式序列化成 JSON，标了的字段打码，也就是日志里该打的那一份。
 /// 保留原始结构和数值类型。序列化失败时返回 `JsonError`
-pub fn to_redacted_json<T: Serialize + ?Sized>(value: &T) -> Result<String, HyErr> {
+pub fn to_redacted_json<T: Serialize + ?Sized>(value: &T) -> Result<String> {
     scope(|| serde_json::to_string(value))
         .wrap_err(|| err!(BaseErr::JsonError, "serialize log preview failed"))
 }

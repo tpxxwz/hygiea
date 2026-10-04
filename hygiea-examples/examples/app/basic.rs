@@ -9,7 +9,7 @@
 
 use axum::Router;
 use axum::routing::get;
-use hygiea::HyErr;
+use hygiea::Result;
 use hygiea::app::{ConfigArgs, IntoRegistryConfig, Registry, RegistryConfig};
 use hygiea::db::{SqlxSqliteComponent, SqlxSqliteConfig};
 use hygiea::http::{AxumComponent, AxumConfig};
@@ -30,7 +30,7 @@ impl IntoRegistryConfig for AppConfig {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), HyErr> {
+async fn main() -> Result<()> {
     // 读 <配置目录>/<env>.toml（默认 dev），再叠加 -f 指定的文件、HYGIEA__ 环境变量、--set。
     // 配置目录用绝对路径，从哪里 cargo run 都能找到
     let args = ConfigArgs::from_cli()

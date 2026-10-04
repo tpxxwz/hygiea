@@ -10,7 +10,7 @@ use sqlx::postgres::PgPoolOptions;
 use hygiea_core::app::{
     BaseAppErr, CancellationToken, ImmediateComponent, Name, ResourceId, Resources, component,
 };
-use hygiea_core::{HyErr, ResultExt, err};
+use hygiea_core::{Result, ResultExt, err};
 
 // ---- config -----------------------------------------------------------------
 
@@ -124,7 +124,7 @@ impl SqlxPgPool {
         &self.config
     }
 
-    pub async fn connect(config: SqlxPgConfig) -> Result<Self, HyErr> {
+    pub async fn connect(config: SqlxPgConfig) -> Result<Self> {
         let pool = if config.connect_lazy {
             config.pool_options().connect_lazy(&config.url())
         } else {
@@ -183,7 +183,7 @@ impl ImmediateComponent for SqlxPgComponent {
         &mut self,
         resources: &Resources,
         _shutdown: CancellationToken,
-    ) -> Result<Option<tokio::task::JoinHandle<()>>, HyErr> {
+    ) -> Result<Option<tokio::task::JoinHandle<()>>> {
         tracing::info!(
             "Connecting to database: {}@{}:{}/{}",
             self.config.username,
@@ -198,7 +198,7 @@ impl ImmediateComponent for SqlxPgComponent {
         Ok(None)
     }
 
-    async fn stop(&mut self) -> Result<(), HyErr> {
+    async fn stop(&mut self) -> Result<()> {
         if let Some(pool) = self.pool.take() {
             // 不再发新连接，等借出去的连接还回来（在途查询跑完）后全部关掉
             pool.inner.close().await;

@@ -1,4 +1,4 @@
-use crate::{BaseErr, HyErr, err};
+use crate::{BaseErr, Result, err};
 
 pub trait EnvKey {
     fn key_name(&self) -> &str;
@@ -128,7 +128,7 @@ impl EnvKey for BuiltinKey {
 // ---- functions --------------------------------------------------------------
 
 /// 取环境变量；没有时用 key 自带的 [`EnvKey::default_value`]，两者都没有返回 `EnvError`
-pub fn env_get(key: impl EnvKey) -> Result<String, HyErr> {
+pub fn env_get(key: impl EnvKey) -> Result<String> {
     let name = key.key_name();
     std::env::var(name)
         .ok()

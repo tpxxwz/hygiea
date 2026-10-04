@@ -4,8 +4,8 @@
 
 use std::error::Error as _;
 
-use hygiea_core::HyErr;
 use hygiea_core::app::{BaseAppErr, Component, Name, Registry, ResourceId, Resources};
+use hygiea_core::{HyErr, Result};
 use hygiea_http_client::reqwest_client::{
     Json, Method, RequestConfig, ReqwestClient, ReqwestComponent, ReqwestConfig,
 };
@@ -110,7 +110,7 @@ async fn invalid_config_fails_startup() {
     };
     let (result, _guard) = Registry::new()
         .add::<ReqwestComponent>(config)
-        .on_ready(|_| async { panic!("init callback must not run") as Result<(), HyErr> })
+        .on_ready(|_| async { panic!("init callback must not run") as Result<()> })
         .run()
         .await;
     let err = result.unwrap_err();

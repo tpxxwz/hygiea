@@ -8,11 +8,11 @@
 //! 日志文件写在系统临时目录下的 `hygiea-examples/log_basic/`，运行结束会打印这个路径和文件内容，
 //! 方便直接在输出里对比控制台和文件两份日志的差异。
 
-use hygiea::HyErr;
+use hygiea::Result;
 use hygiea::datetime::WithOffsetFormatter;
 use hygiea::log::{ConsoleLayer, FileLayer, Rolling, TracingConfig, init};
 
-fn main() -> Result<(), HyErr> {
+fn main() -> Result<()> {
     // 每次运行前清空，只看这一次的输出
     let log_dir = std::env::temp_dir().join("hygiea-examples/log_basic");
     let _ = std::fs::remove_dir_all(&log_dir);

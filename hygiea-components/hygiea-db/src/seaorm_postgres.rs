@@ -9,7 +9,7 @@ use serde::Deserialize;
 use hygiea_core::app::{
     BaseAppErr, CancellationToken, ImmediateComponent, Name, ResourceId, Resources, component,
 };
-use hygiea_core::{HyErr, ResultExt, err};
+use hygiea_core::{Result, ResultExt, err};
 
 // ---- config -----------------------------------------------------------------
 
@@ -159,7 +159,7 @@ impl SeaOrmPgPool {
         &self.config
     }
 
-    pub async fn connect(config: SeaOrmPgConfig) -> Result<Self, HyErr> {
+    pub async fn connect(config: SeaOrmPgConfig) -> Result<Self> {
         let conn: DatabaseConnection =
             Database::connect(config.connect_options())
                 .await
@@ -216,7 +216,7 @@ impl ImmediateComponent for SeaOrmPgComponent {
         &mut self,
         resources: &Resources,
         _shutdown: CancellationToken,
-    ) -> Result<Option<tokio::task::JoinHandle<()>>, HyErr> {
+    ) -> Result<Option<tokio::task::JoinHandle<()>>> {
         tracing::info!(
             "Connecting to database: {}@{}:{}/{}",
             self.config.username,
@@ -231,7 +231,7 @@ impl ImmediateComponent for SeaOrmPgComponent {
         Ok(None)
     }
 
-    async fn stop(&mut self) -> Result<(), HyErr> {
+    async fn stop(&mut self) -> Result<()> {
         if let Some(pool) = self.pool.take() {
             // 等在途查询跑完后关掉连接池
             pool.inner

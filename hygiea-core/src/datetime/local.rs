@@ -8,7 +8,7 @@ use time::{Duration, Month, OffsetDateTime, Time};
 use time_tz::{Offset, OffsetDateTimeExt, OffsetResult, PrimitiveDateTimeExt, TimeZone, Tz};
 
 use super::*;
-use crate::{BaseErr, HyErr, ResultExt, err};
+use crate::{BaseErr, Result, ResultExt, err};
 
 static LOCAL_TIMEZONE: OnceLock<&'static Tz> = OnceLock::new();
 
@@ -57,7 +57,7 @@ fn detect_timezone(tz_env: Option<String>) -> &'static Tz {
 
 /// 换到系统时区在该时刻使用的 offset。time-tz 的 `to_timezone` 在时间贴近上下界（±9999 年）、
 /// 加上 offset 越界时会 panic，这里先取 offset，再用 time 的 `checked_to_offset`，越界返回 `DateError`
-fn to_local(datetime: &OffsetDateTime) -> Result<OffsetDateTime, HyErr> {
+fn to_local(datetime: &OffsetDateTime) -> Result<OffsetDateTime> {
     let offset = local_timezone().get_offset_utc(datetime).to_utc();
     datetime.checked_to_offset(offset).ok_or_else(|| {
         err!(
@@ -91,7 +91,7 @@ impl WithoutOffsetParser {
         WithoutOffsetFormatter::from(self).description()
     }
 
-    pub fn parse(self, input: &str) -> Result<OffsetResult<OffsetDateTime>, HyErr> {
+    pub fn parse(self, input: &str) -> Result<OffsetResult<OffsetDateTime>> {
         let datetime = PrimitiveDateTime::parse(input, self.description()).wrap_err(|| {
             err!(
                 BaseErr::DateError,
@@ -111,77 +111,77 @@ pub trait HygieaOffsetDateTimeExt: HygieaDateTimeExt {
     // ---- 解析与格式化 ------------------------------------------------------
 
     /// 按携带 offset 的指定格式解析，并保留输入中的 offset。
-    fn parse_ext_with_offset(s: &str, parser: WithOffsetParser) -> Result<OffsetDateTime, HyErr>;
+    fn parse_ext_with_offset(s: &str, parser: WithOffsetParser) -> Result<OffsetDateTime>;
     /// 将不携带 offset 的钟面时间按缓存的系统 IANA 时区解析。
     ///
     /// 返回值保留唯一、歧义或不存在三种时区解析结果。
     fn parse_ext_local(
         s: &str,
         parser: WithoutOffsetParser,
-    ) -> Result<OffsetResult<OffsetDateTime>, HyErr>;
+    ) -> Result<OffsetResult<OffsetDateTime>>;
     /// 转换到系统 IANA 时区在该时间点使用的 offset，再按指定格式输出。
-    fn format_ext_local(&self, formatter: DateTimeFormatter) -> Result<String, HyErr>;
+    fn format_ext_local(&self, formatter: DateTimeFormatter) -> Result<String>;
 
     // ---- 时间平移 ------------------------------------------------------------
 
     /// 在绝对时间线上平移指定时长，再转换到系统 IANA 时区。
-    fn shift_local(&self, duration: Duration) -> Result<OffsetDateTime, HyErr>;
+    fn shift_local(&self, duration: Duration) -> Result<OffsetDateTime>;
 
     // ---- 日边界 ----------------------------------------------------------------
 
     /// 按系统 IANA 时区返回当前本地日期的开始。
-    fn start_of_day_local(&self) -> Result<OffsetResult<OffsetDateTime>, HyErr>;
+    fn start_of_day_local(&self) -> Result<OffsetResult<OffsetDateTime>>;
     /// 按系统 IANA 时区返回当前本地日期的结束。做区间判断用半开区间 `[start_of_day_local, start_of_next_day_local)`
-    fn end_of_day_local(&self) -> Result<OffsetResult<OffsetDateTime>, HyErr>;
+    fn end_of_day_local(&self) -> Result<OffsetResult<OffsetDateTime>>;
     /// 按系统 IANA 时区返回下一天的开始。
-    fn start_of_next_day_local(&self) -> Result<OffsetResult<OffsetDateTime>, HyErr>;
+    fn start_of_next_day_local(&self) -> Result<OffsetResult<OffsetDateTime>>;
 
     // ---- 周边界 ----------------------------------------------------------------
 
     /// 按系统 IANA 时区返回当前本地周的开始，周一为一周第一天。
-    fn start_of_week_local(&self) -> Result<OffsetResult<OffsetDateTime>, HyErr>;
+    fn start_of_week_local(&self) -> Result<OffsetResult<OffsetDateTime>>;
     /// 按系统 IANA 时区返回当前本地周的结束，周日为一周最后一天。
     /// 做区间判断用半开区间 `[start_of_week_local, start_of_next_week_local)`
-    fn end_of_week_local(&self) -> Result<OffsetResult<OffsetDateTime>, HyErr>;
+    fn end_of_week_local(&self) -> Result<OffsetResult<OffsetDateTime>>;
     /// 按系统 IANA 时区返回下一周（下周一）的开始。
-    fn start_of_next_week_local(&self) -> Result<OffsetResult<OffsetDateTime>, HyErr>;
+    fn start_of_next_week_local(&self) -> Result<OffsetResult<OffsetDateTime>>;
 
     // ---- 月边界 ----------------------------------------------------------------
 
     /// 按系统 IANA 时区返回当前本地月的开始。
-    fn start_of_month_local(&self) -> Result<OffsetResult<OffsetDateTime>, HyErr>;
+    fn start_of_month_local(&self) -> Result<OffsetResult<OffsetDateTime>>;
     /// 按系统 IANA 时区返回当前本地月的结束。做区间判断用半开区间 `[start_of_month_local, start_of_next_month_local)`
-    fn end_of_month_local(&self) -> Result<OffsetResult<OffsetDateTime>, HyErr>;
+    fn end_of_month_local(&self) -> Result<OffsetResult<OffsetDateTime>>;
     /// 按系统 IANA 时区返回下个月的开始。
-    fn start_of_next_month_local(&self) -> Result<OffsetResult<OffsetDateTime>, HyErr>;
+    fn start_of_next_month_local(&self) -> Result<OffsetResult<OffsetDateTime>>;
 
     // ---- 年边界 ----------------------------------------------------------------
 
     /// 按系统 IANA 时区返回当前本地年的开始。
-    fn start_of_year_local(&self) -> Result<OffsetResult<OffsetDateTime>, HyErr>;
+    fn start_of_year_local(&self) -> Result<OffsetResult<OffsetDateTime>>;
     /// 按系统 IANA 时区返回当前本地年的结束。做区间判断用半开区间 `[start_of_year_local, start_of_next_year_local)`
-    fn end_of_year_local(&self) -> Result<OffsetResult<OffsetDateTime>, HyErr>;
+    fn end_of_year_local(&self) -> Result<OffsetResult<OffsetDateTime>>;
     /// 按系统 IANA 时区返回下一年的开始。
-    fn start_of_next_year_local(&self) -> Result<OffsetResult<OffsetDateTime>, HyErr>;
+    fn start_of_next_year_local(&self) -> Result<OffsetResult<OffsetDateTime>>;
 }
 
 impl HygieaOffsetDateTimeExt for OffsetDateTime {
-    fn parse_ext_with_offset(s: &str, parser: WithOffsetParser) -> Result<OffsetDateTime, HyErr> {
+    fn parse_ext_with_offset(s: &str, parser: WithOffsetParser) -> Result<OffsetDateTime> {
         parser.parse(s)
     }
 
     fn parse_ext_local(
         s: &str,
         parser: WithoutOffsetParser,
-    ) -> Result<OffsetResult<OffsetDateTime>, HyErr> {
+    ) -> Result<OffsetResult<OffsetDateTime>> {
         parser.parse(s)
     }
 
-    fn format_ext_local(&self, formatter: DateTimeFormatter) -> Result<String, HyErr> {
+    fn format_ext_local(&self, formatter: DateTimeFormatter) -> Result<String> {
         HygieaDateTimeExt::format_ext(&to_local(self)?, formatter)
     }
 
-    fn shift_local(&self, duration: Duration) -> Result<OffsetDateTime, HyErr> {
+    fn shift_local(&self, duration: Duration) -> Result<OffsetDateTime> {
         let shifted = self.checked_add(duration).ok_or_else(|| {
             err!(
                 BaseErr::DateError,
@@ -191,7 +191,7 @@ impl HygieaOffsetDateTimeExt for OffsetDateTime {
         to_local(&shifted)
     }
 
-    fn start_of_day_local(&self) -> Result<OffsetResult<OffsetDateTime>, HyErr> {
+    fn start_of_day_local(&self) -> Result<OffsetResult<OffsetDateTime>> {
         let local = to_local(self)?;
         Ok(resolve_local(PrimitiveDateTime::new(
             local.date(),
@@ -199,7 +199,7 @@ impl HygieaOffsetDateTimeExt for OffsetDateTime {
         )))
     }
 
-    fn end_of_day_local(&self) -> Result<OffsetResult<OffsetDateTime>, HyErr> {
+    fn end_of_day_local(&self) -> Result<OffsetResult<OffsetDateTime>> {
         let local = to_local(self)?;
         Ok(resolve_local(PrimitiveDateTime::new(
             local.date(),
@@ -207,7 +207,7 @@ impl HygieaOffsetDateTimeExt for OffsetDateTime {
         )))
     }
 
-    fn start_of_next_day_local(&self) -> Result<OffsetResult<OffsetDateTime>, HyErr> {
+    fn start_of_next_day_local(&self) -> Result<OffsetResult<OffsetDateTime>> {
         let local = to_local(self)?;
         let date = local.date().next_day().ok_or_else(|| {
             err!(
@@ -218,7 +218,7 @@ impl HygieaOffsetDateTimeExt for OffsetDateTime {
         Ok(resolve_local(PrimitiveDateTime::new(date, Time::MIDNIGHT)))
     }
 
-    fn start_of_week_local(&self) -> Result<OffsetResult<OffsetDateTime>, HyErr> {
+    fn start_of_week_local(&self) -> Result<OffsetResult<OffsetDateTime>> {
         let local = to_local(self)?;
         let days = local.weekday().number_days_from_monday() as i64;
         let date = local
@@ -233,7 +233,7 @@ impl HygieaOffsetDateTimeExt for OffsetDateTime {
         Ok(resolve_local(PrimitiveDateTime::new(date, Time::MIDNIGHT)))
     }
 
-    fn end_of_week_local(&self) -> Result<OffsetResult<OffsetDateTime>, HyErr> {
+    fn end_of_week_local(&self) -> Result<OffsetResult<OffsetDateTime>> {
         let local = to_local(self)?;
         let days = 6 - local.weekday().number_days_from_monday() as i64;
         let date = local
@@ -248,7 +248,7 @@ impl HygieaOffsetDateTimeExt for OffsetDateTime {
         Ok(resolve_local(PrimitiveDateTime::new(date, Time::MAX)))
     }
 
-    fn start_of_next_week_local(&self) -> Result<OffsetResult<OffsetDateTime>, HyErr> {
+    fn start_of_next_week_local(&self) -> Result<OffsetResult<OffsetDateTime>> {
         let local = to_local(self)?;
         let days = 7 - local.weekday().number_days_from_monday() as i64;
         let date = local
@@ -263,7 +263,7 @@ impl HygieaOffsetDateTimeExt for OffsetDateTime {
         Ok(resolve_local(PrimitiveDateTime::new(date, Time::MIDNIGHT)))
     }
 
-    fn start_of_month_local(&self) -> Result<OffsetResult<OffsetDateTime>, HyErr> {
+    fn start_of_month_local(&self) -> Result<OffsetResult<OffsetDateTime>> {
         let local = to_local(self)?;
         let date = local
             .date()
@@ -272,7 +272,7 @@ impl HygieaOffsetDateTimeExt for OffsetDateTime {
         Ok(resolve_local(PrimitiveDateTime::new(date, Time::MIDNIGHT)))
     }
 
-    fn end_of_month_local(&self) -> Result<OffsetResult<OffsetDateTime>, HyErr> {
+    fn end_of_month_local(&self) -> Result<OffsetResult<OffsetDateTime>> {
         let local = to_local(self)?;
         let first = PrimitiveDateTime::new(
             local
@@ -299,7 +299,7 @@ impl HygieaOffsetDateTimeExt for OffsetDateTime {
         Ok(resolve_local(end))
     }
 
-    fn start_of_next_month_local(&self) -> Result<OffsetResult<OffsetDateTime>, HyErr> {
+    fn start_of_next_month_local(&self) -> Result<OffsetResult<OffsetDateTime>> {
         let local = to_local(self)?;
         let first = local
             .date()
@@ -317,7 +317,7 @@ impl HygieaOffsetDateTimeExt for OffsetDateTime {
         Ok(resolve_local(PrimitiveDateTime::new(date, Time::MIDNIGHT)))
     }
 
-    fn start_of_year_local(&self) -> Result<OffsetResult<OffsetDateTime>, HyErr> {
+    fn start_of_year_local(&self) -> Result<OffsetResult<OffsetDateTime>> {
         let local = to_local(self)?;
         let date = local
             .date()
@@ -327,7 +327,7 @@ impl HygieaOffsetDateTimeExt for OffsetDateTime {
         Ok(resolve_local(PrimitiveDateTime::new(date, Time::MIDNIGHT)))
     }
 
-    fn end_of_year_local(&self) -> Result<OffsetResult<OffsetDateTime>, HyErr> {
+    fn end_of_year_local(&self) -> Result<OffsetResult<OffsetDateTime>> {
         let local = to_local(self)?;
         let next_year = local.year().checked_add(1).ok_or_else(|| {
             err!(
@@ -352,7 +352,7 @@ impl HygieaOffsetDateTimeExt for OffsetDateTime {
         Ok(resolve_local(end))
     }
 
-    fn start_of_next_year_local(&self) -> Result<OffsetResult<OffsetDateTime>, HyErr> {
+    fn start_of_next_year_local(&self) -> Result<OffsetResult<OffsetDateTime>> {
         let local = to_local(self)?;
         let next_year = local.year().checked_add(1).ok_or_else(|| {
             err!(
@@ -386,7 +386,7 @@ mod tests {
         time_tz::timezones::get_by_name(name).expect("known timezone")
     }
 
-    fn unique(result: Result<OffsetResult<OffsetDateTime>, HyErr>) -> OffsetDateTime {
+    fn unique(result: Result<OffsetResult<OffsetDateTime>>) -> OffsetDateTime {
         match result {
             Ok(OffsetResult::Some(dt)) => dt,
             Ok(other) => panic!("expected unique local datetime, got {other:?}"),
