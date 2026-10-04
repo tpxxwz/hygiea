@@ -23,6 +23,8 @@ reqwest = [
     "dep:futures-util",
     "dep:tracing",
 ]
+# debug 日志：ReqwestConfig::debug 打开后日志带原文和请求头、响应头，只给测试用
+debug-log = ["reqwest"]
 
 [dependencies]
 hygiea-core = { workspace = true, features = ["app", "redact"] }

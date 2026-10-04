@@ -6,6 +6,7 @@
 //! - `masking`：日志里的字段打码
 //! - `retry`：带重试的发送
 //! - `api_envelope`：`{code, msg, data}` 外层结构的示范写法
+//! - `debug`：debug 日志（只在 `debug-log` feature 下编译）
 //!
 //! ## 为什么有这个 main.rs
 //!
@@ -29,6 +30,8 @@ mod support;
 
 mod api_envelope;
 mod client_config;
+#[cfg(feature = "debug-log")]
+mod debug;
 mod logs;
 mod masking;
 mod retry;

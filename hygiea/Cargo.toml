@@ -48,5 +48,7 @@ db-seaorm-postgres = ["dep:hygiea-db", "hygiea-db/seaorm", "hygiea-db/postgres"]
 redis-fred = ["dep:hygiea-redis", "hygiea-redis/fred"]
 http-axum = ["dep:hygiea-http", "hygiea-http/axum"]
 http-client-reqwest = ["dep:hygiea-http-client", "hygiea-http-client/reqwest"]
+# ReqwestConfig::debug：日志带原文和请求头、响应头，只在 dev-dependencies 里开
+http-client-reqwest-debug-log = ["http-client-reqwest", "hygiea-http-client/debug-log"]
 grpc-tonic = ["dep:hygiea-grpc", "hygiea-grpc/tonic"]
 aws-s3 = ["dep:hygiea-aws", "hygiea-aws/s3"]

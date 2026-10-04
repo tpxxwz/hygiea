@@ -9,6 +9,7 @@
 //! | `body_text(headers, body)` | 响应 body 转文本：文本类解码，二进制只给 `<N bytes ..>`；**不转义** | 本模块 |
 //! | `to_one_line(text)` | 让日志保持一行：`\n` `\r` `\t` 换成空格，其他控制字符转义 | 本模块，单字符转义用 `char::escape_default` |
 //! | `body_preview(headers, body)` | 响应的日志摘要，就是 `to_one_line(body_text(..))` | 本模块 |
+//! | `headers_text(headers)` | debug 日志里的请求头 / 响应头，一行，不打码 | 本模块 |
 //!
 //! 标准库的 `str::escape_default` 会转义所有非 ASCII（中文变成 `\u{..}`），`str::escape_debug` 会转义
 //! 引号和反斜杠（JSON 里全是 `\"`），都不适合日志，所以 `to_one_line` 自己实现。
@@ -42,7 +43,7 @@ use std::borrow::Cow;
 
 use reqwest::header::CONTENT_TYPE;
 
-use super::{Bytes, HeaderMap};
+use super::{Bytes, HeaderMap, HeaderValue};
 
 //
 // 调用方在前、被调用的在后：body_preview → body_text → is_text_content_type / decode_charset，
@@ -135,6 +136,27 @@ pub(super) fn to_one_line(text: Cow<'_, str>) -> Cow<'_, str> {
         }
     }
     escaped.into()
+}
+
+/// debug 日志里的头：`{name: value, name: [v1, v2]}`，同名多值合成一个列表，按 `HeaderMap` 的顺序。
+/// 不是 UTF-8 的值显示成 `<N bytes>`，最后过一遍 [`to_one_line`]。不打码，sensitive 的头也打原值
+#[cfg_attr(not(feature = "debug-log"), allow(dead_code))]
+pub(super) fn headers_text(headers: &HeaderMap) -> String {
+    let value_text = |v: &HeaderValue| match std::str::from_utf8(v.as_bytes()) {
+        Ok(s) => s.to_string(),
+        Err(_) => format!("<{} bytes>", v.len()),
+    };
+    let entries: Vec<String> = headers
+        .keys()
+        .map(|name| {
+            let values: Vec<String> = headers.get_all(name).iter().map(value_text).collect();
+            match values.as_slice() {
+                [one] => format!("{name}: {one}"),
+                many => format!("{name}: [{}]", many.join(", ")),
+            }
+        })
+        .collect();
+    to_one_line(format!("{{{}}}", entries.join(", ")).into()).into_owned()
 }
 
 #[cfg(test)]
@@ -348,6 +370,46 @@ mod tests {
             assert_eq!(
                 preview(Some("application/octet-stream"), b""),
                 "<0 bytes application/octet-stream>"
+            );
+        }
+    }
+
+    /// `headers_text()`：debug 日志里的头
+    mod headers_text {
+        use super::*;
+
+        fn value(bytes: &[u8]) -> HeaderValue {
+            HeaderValue::from_bytes(bytes).unwrap()
+        }
+
+        /// 空的是 `{}`
+        #[test]
+        fn empty() {
+            assert_eq!(headers_text(&HeaderMap::new()), "{}");
+        }
+
+        /// 单值直接写，同名多值合成列表；sensitive 的也打原值
+        #[test]
+        fn single_and_multiple_values() {
+            let mut h = HeaderMap::new();
+            let mut auth = value(b"Bearer t");
+            auth.set_sensitive(true);
+            h.insert("authorization", auth);
+            h.append("x-a", value(b"1"));
+            h.append("x-a", value(b"2"));
+            assert_eq!(headers_text(&h), "{authorization: Bearer t, x-a: [1, 2]}");
+        }
+
+        /// UTF-8 的值原样显示，不是 UTF-8 的只给字节数，制表符换成空格
+        #[test]
+        fn non_ascii_values() {
+            let mut h = HeaderMap::new();
+            h.insert("x-zh", value("中文".as_bytes()));
+            h.insert("x-bin", value(&[0xff, 0xfe]));
+            h.insert("x-tab", value(b"a\tb"));
+            assert_eq!(
+                headers_text(&h),
+                "{x-zh: 中文, x-bin: <2 bytes>, x-tab: a b}"
             );
         }
     }

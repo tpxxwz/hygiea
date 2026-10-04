@@ -7,7 +7,7 @@
 //! | 函数 | 位置 | 管什么 |
 //! |---|---|---|
 //! | `send(sender)` | send.rs，pub | 唯一入口，原样转给 `sender.send_request(self)` |
-//! | `IntoSender::send_request` | retry.rs | 按 `sender` 的类型分派：`&Client` 发一次，`(&Client, RetryCtx)` 带重试 |
+//! | `IntoSender::send_request` | retry.rs | 按 `sender` 的类型分派：`&ReqwestClient` 发一次，`(&ReqwestClient, RetryCtx)` 带重试 |
 //! | `send_once` | send.rs | 发一次，响应按 [`FromBody`] 取（可以是流），失败只要 `HyErr` |
 //! | `send_once_bytes` | send.rs | 发一次，响应读完按 [`FromBytes`] 解码，失败带 [`SendFailure`]（原始响应），给重试用 |
 //! | `dispatch` | send.rs | 两条路共用的前半段：发出之前逐项检查、构建、打 start 日志、发出去拿到响应头 |
@@ -19,7 +19,7 @@
 //! cfg.send(sender)
 //!  └─ sender.send_request(cfg)                            IntoSender，retry.rs：按 sender 的类型二选一
 //!      │
-//!      ├─ &Client ──────────────────────────────────────── 不重试
+//!      ├─ &ReqwestClient ────────────────────────────────────── 不重试
 //!      │   └─ send_once::<Decoder: FromBody>
 //!      │       ├─ dispatch ───────────────────────────────┐ 共用的前半段（见下）
 //!      │       ├─ 非 2xx → read_status_failure → Err(NonSuccessStatus)
@@ -28,7 +28,7 @@
 //!      │       │           └─ BodyStream：into_stream，不读 body
 //!      │       └─ 成功   → SendCtx::succeeded（打 success 日志）
 //!      │
-//!      └─ (&Client, RetryCtx) ───────────────────────────── 带重试，要求 Params / Req: Clone、Decoder: FromBytes
+//!      └─ (&ReqwestClient, RetryCtx) ─────────────────────────── 带重试，要求 Params / Req: Clone、Decoder: FromBytes
 //!          └─ loop {
 //!               kept = cfg.clone()                        发出去的那份会被消费，先留一份
 //!               send_once_bytes::<Decoder: FromBytes>
@@ -54,7 +54,15 @@
 //! 重试时失败要把原始响应交给 `Retry`，body 必须先整个读进内存，所以只接受 `FromBytes`，失败带 `SendFailure`。
 //! 两条路的前半段（`dispatch`）、非 2xx 处理、日志都是同一套，行为一致。
 //!
-//! 日志和打码的细节（预览怎么生成、哪些字段打码）见 text.rs 开头的调用链
+//! 日志和打码的细节（预览怎么生成、哪些字段打码）见 text.rs 开头的调用链。
+//!
+//! ## debug 日志（`debug-log` feature）
+//!
+//! [`ReqwestConfig::debug`](super::ReqwestConfig) 打开时，日志条数、消息、级别都不变，只是：
+//! start / success 无视 `enable_logging` 强制打；url、req 换成原文（params 和 body 不打码）；
+//! 多 `req_headers`（请求自己的头补上 client 默认头）和 `resp_headers`；成功时 resp 打 body 原文
+//! （`BodyStream` 不读 body，没有）。这些值在 `dispatch` 里算好放进 `SendCtx::debug`，
+//! 打日志时经 `SendCtx` 的几个取值方法拿，不是 debug 时取值方法给的就是原来的打码值和 `None`
 
 use std::future::Future;
 use std::time::Instant;
@@ -69,13 +77,15 @@ use super::error::{
     request_failed,
 };
 use super::logging::{
-    FailedLogLevel, Failure, Start, log_decode_failed, log_failed, log_resp_success, log_start,
-    log_status_failed,
+    FailedLogLevel, Failure, ReqFields, Start, log_decode_failed, log_failed, log_resp_success,
+    log_start, log_status_failed,
 };
 use super::request::{HttpResponse, RequestConfig};
 use super::response::{BodyStream, FromBody, FromBytes};
+#[cfg(feature = "debug-log")]
+use super::text::headers_text;
 use super::text::{body_preview, body_text, to_one_line};
-use super::{Bytes, Client, HeaderMap, Method, StatusCode, Url};
+use super::{Bytes, HeaderMap, Method, ReqwestClient, StatusCode, Url};
 
 impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
     /// 发请求，2xx 时按 `Decoder` 把 body 变成 `Decoder::Output`（见 [`FromBody`]），否则返回
@@ -121,7 +131,7 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
     /// 发一次，不重试
     pub(super) async fn send_once<Decoder: FromBody>(
         self,
-        client: &Client,
+        client: &ReqwestClient,
     ) -> Result<HttpResponse<Decoder::Output>, HyErr> {
         let (ctx, resp) = match self.dispatch(client).await? {
             Ok(sent) => sent,
@@ -139,7 +149,7 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
     /// 发一次，body 读完再解码；发出之后的失败带上重试判断要用的信息。重试时用
     pub(super) async fn send_once_bytes<Decoder: FromBytes>(
         self,
-        client: &Client,
+        client: &ReqwestClient,
     ) -> Result<Result<HttpResponse<Decoder::Output>, SendFailure>, HyErr> {
         let (ctx, resp) = match self.dispatch(client).await? {
             Ok(sent) => sent,
@@ -159,7 +169,7 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
     /// 外层 `Err` 是发出之前的错误（调用方参数的问题，不打失败日志）；内层 `Err` 是发送失败
     async fn dispatch(
         self,
-        client: &Client,
+        client: &ReqwestClient,
     ) -> Result<Result<(SendCtx, reqwest::Response), SendFailure>, HyErr> {
         // into_request 会消费 self，日志要用的东西先取出来
         let (enable_logging, failed_log_level) = (self.enable_logging, self.failed_log_level);
@@ -189,12 +199,15 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
             }
             format!("[{}]", parts.join(", "))
         };
+        // debug 时同样格式的原文，into_request 会消费 self，先算好
+        #[cfg(feature = "debug-log")]
+        let debug_req = client.debug.then(|| self.debug_req_preview());
 
         // 日志、错误和 HttpResponse.url 用的地址：和真实请求一样由 reqwest 拼 query，只是在 redact 的
         // 日志模式下拼，所以编码方式、字段顺序都和真实请求一致，params 里标了的字段打码或不出现。
         // URL 已经验证过，这里拼不出来就只可能是 params 编码不了，报 InvalidParams
         // （错误里是调用方写的 url 字符串，不含 params）
-        let url = redact::scope(|| client.get(&self.url).query(&self.params).build())
+        let url = redact::scope(|| client.inner.get(&self.url).query(&self.params).build())
             .map(|req| req.url().clone())
             .map_err(|e| invalid_params(&self.method, &self.url, e))?;
 
@@ -203,17 +216,9 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
         // build 再失败，能确定的只有「没构建出来」，报 RequestBuildFailed，具体原因在 source 里
         // （最常见的是 Form body 没法 urlencoded 编码）
         let request = self
-            .into_request(client)?
+            .into_request(&client.inner)?
             .build()
             .map_err(|e| request_build_failed(&method, url.as_str(), e))?;
-
-        if enable_logging {
-            log_start(&Start {
-                method: &method,
-                url: url.as_str(),
-                req: &req_preview,
-            });
-        }
 
         // 发出之后的失败（发送、读 body、解码）都要打日志，要用的东西放进 ctx，交给 RespBody。
         // sent_at 是请求发出的时刻：从这里算到 body 交给调用方，就是网络上实际花掉的时间
@@ -223,12 +228,40 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
             req_preview,
             enable_logging,
             failed_log_level,
+            #[cfg(feature = "debug-log")]
+            debug: debug_req.map(|req| DebugCtx::new(req, &request, &client.default_headers)),
             sent_at: Instant::now(),
         };
-        Ok(match client.execute(request).await {
+        if ctx.logging_on() {
+            log_start(&Start {
+                method: &ctx.method,
+                req: ctx.req_fields(),
+            });
+        }
+        Ok(match client.inner.execute(request).await {
             Ok(resp) => Ok((ctx, resp)),
             Err(e) => Err(ctx.transport_failed(e, None)),
         })
+    }
+}
+
+#[cfg(feature = "debug-log")]
+impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
+    /// debug 日志里的 req：格式和 req_preview 一样，params 和 body 不打码。
+    /// 打码的那份已经序列化成功了，这里再失败也不影响发送，只在日志里写明
+    fn debug_req_preview(&self) -> String {
+        let mut parts = Vec::new();
+        match serde_json::to_string(&self.params) {
+            Ok(params) if params == "null" => {}
+            Ok(params) => parts.push(format!("params:{params}")),
+            Err(e) => parts.push(format!("params:<debug preview failed: {e}>")),
+        }
+        match self.body.debug_preview() {
+            Ok(None) => {}
+            Ok(Some(body)) => parts.push(format!("body:{body}")),
+            Err(e) => parts.push(format!("body:<debug preview failed: {e}>")),
+        }
+        format!("[{}]", parts.join(", "))
     }
 }
 
@@ -294,8 +327,8 @@ pub enum FailStage {
 // 都是这个套路。命名跟本 crate 的 `IntoBody`、`IntoHeaders` 一致：`IntoSender` 表示「能当发送方的东西」。
 // 方法叫 `send_request` 而不是 `into_sender`：它不做类型转换，直接把请求发出去
 //
-// 用 trait 还有一个好处：每个实现可以有自己的约束。`&Client` 的实现只要求 `Decoder: FromBody`；
-// `(&Client, RetryCtx)` 的实现额外要求 `Params: Clone`、`Req: Clone`、`Decoder: FromBytes`。
+// 用 trait 还有一个好处：每个实现可以有自己的约束。`&ReqwestClient` 的实现只要求 `Decoder: FromBody`；
+// `(&ReqwestClient, RetryCtx)` 的实现额外要求 `Params: Clone`、`Req: Clone`、`Decoder: FromBytes`。
 // 所以不重试时流式 body / `BodyStream` 照常能用，开重试时才要求能重发，编译期检查。
 //
 // 考虑过的其他写法：
@@ -307,9 +340,9 @@ pub(super) mod sealed {
     pub trait Sealed {}
 }
 
-impl sealed::Sealed for &Client {}
+impl sealed::Sealed for &ReqwestClient {}
 
-/// [`RequestConfig::send`] 的第二个参数：`&Client`（发一次）或 `(&Client, RetryCtx<T>)`（带重试）。
+/// [`RequestConfig::send`] 的第二个参数：`&ReqwestClient`（发一次）或 `(&ReqwestClient, RetryCtx<T>)`（带重试）。
 /// `Decoder` 是解码器，见 [`FromBody`]。不需要自己实现。两个实现分别调 `send_once` / `send_once_bytes`，
 /// 整体流程见本文件开头
 pub trait IntoSender<Params, Req, Decoder: FromBody>: sealed::Sealed {
@@ -320,7 +353,7 @@ pub trait IntoSender<Params, Req, Decoder: FromBody>: sealed::Sealed {
     ) -> impl Future<Output = Result<HttpResponse<Decoder::Output>, HyErr>> + Send;
 }
 
-impl<Params, Req, Decoder> IntoSender<Params, Req, Decoder> for &Client
+impl<Params, Req, Decoder> IntoSender<Params, Req, Decoder> for &ReqwestClient
 where
     Params: serde::Serialize + Send,
     Req: IntoBody + Send,
@@ -346,11 +379,105 @@ pub(super) struct SendCtx {
     pub(super) req_preview: String,
     pub(super) enable_logging: bool,
     pub(super) failed_log_level: FailedLogLevel,
+    /// debug 日志要用的原文，debug 没开时是 `None`
+    #[cfg(feature = "debug-log")]
+    debug: Option<DebugCtx>,
     /// 请求发出的时刻，从这里算耗时
     pub(super) sent_at: Instant,
 }
 
+/// debug 日志要用的、一次请求的原文
+#[cfg(feature = "debug-log")]
+struct DebugCtx {
+    /// 真正发出去的地址，params 不打码
+    url: String,
+    /// 格式和 req_preview 一样，params 和 body 不打码
+    req: String,
+    /// 请求自己的头补上 client 默认头（只补请求里没有的名字，和 reqwest 发送时一样），转成一行
+    req_headers: String,
+    /// RespBody 读完 body 后存一份，成功日志打原文用
+    resp_body: std::sync::OnceLock<Bytes>,
+}
+
+#[cfg(feature = "debug-log")]
+impl DebugCtx {
+    fn new(req: String, request: &reqwest::Request, default_headers: &HeaderMap) -> Self {
+        let mut headers = request.headers().clone();
+        for (name, value) in default_headers {
+            if let reqwest::header::Entry::Vacant(entry) = headers.entry(name) {
+                entry.insert(value.clone());
+            }
+        }
+        Self {
+            url: request.url().to_string(),
+            req,
+            req_headers: headers_text(&headers),
+            resp_body: std::sync::OnceLock::new(),
+        }
+    }
+}
+
 impl SendCtx {
+    // ---- 打日志时取值：debug 时给原文，否则给打码值、None。cfg 只出现在这几个方法里 ----
+
+    /// start / success 要不要打：enable_logging 或者 debug
+    fn logging_on(&self) -> bool {
+        #[cfg(feature = "debug-log")]
+        if self.debug.is_some() {
+            return true;
+        }
+        self.enable_logging
+    }
+
+    /// 请求那一侧的字段
+    fn req_fields(&self) -> ReqFields<'_> {
+        #[cfg(feature = "debug-log")]
+        if let Some(debug) = &self.debug {
+            return ReqFields {
+                url: &debug.url,
+                req: &debug.req,
+                headers: Some(&debug.req_headers),
+            };
+        }
+        ReqFields {
+            url: self.url.as_str(),
+            req: &self.req_preview,
+            headers: None,
+        }
+    }
+
+    /// 响应头，只在 debug 时有
+    fn resp_headers(&self, headers: &HeaderMap) -> Option<String> {
+        #[cfg(feature = "debug-log")]
+        if self.debug.is_some() {
+            return Some(headers_text(headers));
+        }
+        #[cfg(not(feature = "debug-log"))]
+        let _ = headers;
+        None
+    }
+
+    /// 成功时的响应原文，只在 debug 且 body 经过 RespBody::read_all 时有
+    fn debug_resp_body(&self, headers: &HeaderMap) -> Option<String> {
+        #[cfg(feature = "debug-log")]
+        if let Some(body) = self.debug.as_ref().and_then(|d| d.resp_body.get()) {
+            return Some(body_preview(headers, body).into_owned());
+        }
+        #[cfg(not(feature = "debug-log"))]
+        let _ = headers;
+        None
+    }
+
+    /// RespBody 读完 body 后调，debug 时存一份给成功日志
+    fn keep_resp_body(&self, body: &Bytes) {
+        #[cfg(feature = "debug-log")]
+        if let Some(debug) = &self.debug {
+            let _ = debug.resp_body.set(body.clone());
+        }
+        #[cfg(not(feature = "debug-log"))]
+        let _ = body;
+    }
+
     /// 拿到了响应时的 `HttpResponse`，耗时算到现在
     fn response<Resp>(
         &self,
@@ -385,7 +512,7 @@ impl SendCtx {
             status,
             elapsed_ms: Some(self.sent_at.elapsed().as_millis()),
             error: Some(&err),
-            ..Failure::new(&self.method, self.url.as_str(), &self.req_preview)
+            ..Failure::new(&self.method, self.req_fields())
         };
         log_failed(self.failed_log_level, "http call failed", &failure);
         SendFailure { err, stage }
@@ -402,8 +529,9 @@ impl SendCtx {
         log_status_failed(
             self.failed_log_level,
             &resp,
-            &self.req_preview,
+            self.req_fields(),
             &body_preview(&resp.headers, &resp.body),
+            self.resp_headers(&resp.headers).as_deref(),
         );
         // 错误里放 body_text：和日志预览一样按 Content-Type / charset 解码，但不转义换行，
         // 调用方拿 err_args["body"] 去解析对方的错误格式时内容和原文一致
@@ -431,9 +559,10 @@ impl SendCtx {
         log_decode_failed(
             self.failed_log_level,
             &resp,
-            &self.req_preview,
+            self.req_fields(),
             &e,
             &body_preview(&resp.headers, &resp.body),
+            self.resp_headers(&resp.headers).as_deref(),
         );
         let err = decode_failed(
             &resp.method,
@@ -448,8 +577,8 @@ impl SendCtx {
         }
     }
 
-    /// 成功：按 enable_logging 打成功日志。`preview` 是类型提供的（打码后的）响应摘要，
-    /// 关了日志时不调用，省得白算
+    /// 成功：按 enable_logging（或 debug）打成功日志。`preview` 是类型提供的（打码后的）响应摘要，
+    /// 关了日志时不调用，省得白算；debug 时优先打 body 原文，没读过 body（`BodyStream`）才用它
     pub(super) fn succeeded<Resp>(
         &self,
         status: StatusCode,
@@ -458,9 +587,16 @@ impl SendCtx {
         preview: impl FnOnce(&Resp) -> Option<String>,
     ) -> HttpResponse<Resp> {
         let resp = self.response(status, headers, body);
-        if self.enable_logging {
-            let resp_preview = preview(&resp.body).map(|p| to_one_line(p.into()).into_owned());
-            log_resp_success(&resp, &self.req_preview, resp_preview.as_deref());
+        if self.logging_on() {
+            let resp_preview = self
+                .debug_resp_body(&resp.headers)
+                .or_else(|| preview(&resp.body).map(|p| to_one_line(p.into()).into_owned()));
+            log_resp_success(
+                &resp,
+                self.req_fields(),
+                resp_preview.as_deref(),
+                self.resp_headers(&resp.headers).as_deref(),
+            );
         }
         resp
     }
@@ -495,10 +631,13 @@ impl<'a> RespBody<'a> {
     pub(super) async fn read_all(self) -> Result<Bytes, SendFailure> {
         let status = self.resp.status();
         let ctx = self.ctx;
-        self.resp
+        let body = self
+            .resp
             .bytes()
             .await
-            .map_err(|e| ctx.transport_failed(e, Some(status)))
+            .map_err(|e| ctx.transport_failed(e, Some(status)))?;
+        ctx.keep_resp_body(&body);
+        Ok(body)
     }
 
     /// 读完 body 并按 [`FromBytes`] 解码。解码失败时打失败日志，报
@@ -530,9 +669,10 @@ impl<'a> RespBody<'a> {
 mod tests {
     use crate::reqwest_client::BaseHttpErr;
     use crate::reqwest_client::headers::Auth;
-    use crate::reqwest_client::{Form, Json};
+    use crate::reqwest_client::{Form, Json, ReqwestConfig};
     use hygiea_core::BaseErr;
     use hygiea_core::redact::redact;
+    use reqwest::Client;
     use serde::Serialize;
     use std::collections::BTreeMap;
     use std::error::Error as _;
@@ -559,6 +699,10 @@ mod tests {
         device_id: "dev-1",
     };
 
+    fn client() -> ReqwestClient {
+        ReqwestConfig::default().build().unwrap()
+    }
+
     /// 构建出最终的 reqwest::Request，看真正要发出去的东西
     fn build<P: Serialize, B: IntoBody>(cfg: RequestConfig<P, B>) -> reqwest::Request {
         cfg.into_request(&Client::new()).unwrap().build().unwrap()
@@ -575,7 +719,7 @@ mod tests {
             kind: BaseHttpErr,
         ) -> HyErr {
             let (out, _guard) = capture();
-            let err = cfg.send::<Bytes>(&Client::new()).await.unwrap_err();
+            let err = cfg.send::<Bytes>(&client()).await.unwrap_err();
             assert!(err.is(kind), "{err:#}");
             assert_eq!(out.text(), "");
             err
@@ -622,7 +766,7 @@ mod tests {
         async fn preview_error_is_json_error() {
             let (out, _guard) = capture();
             let err = RequestConfig::with_params(Method::GET, URL, Unserializable)
-                .send::<Bytes>(&Client::new())
+                .send::<Bytes>(&client())
                 .await
                 .unwrap_err();
             assert!(err.is(BaseErr::JsonError));
@@ -691,7 +835,7 @@ mod tests {
             cfg: RequestConfig<P, B>,
         ) -> (HyErr, String) {
             let (out, _guard) = capture();
-            let err = cfg.send::<Bytes>(&Client::new()).await.unwrap_err();
+            let err = cfg.send::<Bytes>(&client()).await.unwrap_err();
             assert!(err.is(BaseHttpErr::RequestFailed), "{err:#}");
             (err, out.text())
         }
@@ -785,6 +929,98 @@ mod tests {
             let (_, logs) =
                 refused(RequestConfig::with_params(Method::GET, REFUSED, &params)).await;
             assert!(logs.contains(r#"req=[params:{"n":1.5}]"#), "{logs}");
+        }
+    }
+
+    /// debug 打开时（发到拒绝连接的端口，看 start 和传输失败两条日志）：url、req 是原文，带请求头，
+    /// enable_logging 关了也打 start。成功、非 2xx 的日志和服务端收到的头对照在集成测试里
+    #[cfg(feature = "debug-log")]
+    mod debug {
+        use test_support::headers::header_map;
+
+        use super::*;
+
+        const REFUSED: &str = "http://127.0.0.1:1/login";
+
+        fn debug_client() -> ReqwestClient {
+            ReqwestConfig {
+                user_agent: Some("ua".into()),
+                ..ReqwestConfig::default()
+            }
+            .default_headers(header_map(&[("x-default", "d"), ("x-both", "client")]))
+            .unwrap()
+            .debug(true)
+            .build()
+            .unwrap()
+        }
+
+        /// 发一次，返回打出来的日志（start 一行、failed 一行）
+        async fn logs(
+            cfg: RequestConfig<&Login, Json<&Login>>,
+            client: &ReqwestClient,
+        ) -> Vec<String> {
+            let (out, _guard) = capture();
+            cfg.send::<Bytes>(client).await.unwrap_err();
+            out.text().lines().map(str::to_string).collect()
+        }
+
+        fn login() -> RequestConfig<&'static Login, Json<&'static Login>> {
+            RequestConfig::new(Method::POST, REFUSED, &LOGIN, Json(&LOGIN))
+                .headers(header_map(&[("x-both", "request")]))
+                .unwrap()
+                .enable_logging(false)
+        }
+
+        /// enable_logging 关了也打 start；两条日志的 url、req 都是原文，不打码。
+        /// error 字段是返回给调用方的错误，里面的地址仍然打码，不受 debug 影响
+        #[tokio::test]
+        async fn raw_url_and_req() {
+            let lines = logs(login(), &debug_client()).await;
+            assert_eq!(lines.len(), 2, "{lines:?}");
+            assert!(lines[0].contains("http call start"), "{}", lines[0]);
+            assert!(lines[1].contains("http call failed"), "{}", lines[1]);
+            for line in &lines {
+                assert!(
+                    line.contains("url=http://127.0.0.1:1/login?username=alice&password=p%40ss&device_id=dev-1"),
+                    "{line}"
+                );
+                assert!(
+                    line.contains(
+                        r#"body:{"username":"alice","password":"p@ss","device_id":"dev-1"}"#
+                    ),
+                    "{line}"
+                );
+                assert!(!line.contains(r#""password":"***""#), "{line}");
+            }
+        }
+
+        /// 请求头：请求自己的头（含 Json 自动加的 content-type）补上 client 默认头，同名以请求的为准
+        #[tokio::test]
+        async fn req_headers_merge_client_defaults() {
+            let lines = logs(login(), &debug_client()).await;
+            for line in &lines {
+                for part in [
+                    "x-both: request",
+                    "content-type: application/json",
+                    "accept: */*",
+                    "user-agent: ua",
+                    "x-default: d",
+                ] {
+                    assert!(line.contains(part), "{part} missing: {line}");
+                }
+                assert!(!line.contains("x-both: client"), "{line}");
+                // 传输失败没有响应
+                assert!(!line.contains("resp_headers="), "{line}");
+            }
+        }
+
+        /// debug 关时和原来一样：enable_logging 关了只有失败日志，打码，没有请求头
+        #[tokio::test]
+        async fn off_keeps_original_logs() {
+            let lines = logs(login(), &client()).await;
+            assert_eq!(lines.len(), 1, "{lines:?}");
+            assert!(lines[0].contains("password=***"), "{}", lines[0]);
+            assert!(!lines[0].contains("req_headers="), "{}", lines[0]);
         }
     }
 }

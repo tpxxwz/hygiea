@@ -5,7 +5,7 @@ use std::fmt;
 
 use reqwest::header::CONTENT_TYPE;
 
-use hygiea_core::{HyErr, redact};
+use hygiea_core::{BaseErr, HyErr, ResultExt, err, redact};
 
 use super::error::invalid_header;
 use super::text::{decode_charset, is_text_content_type, to_one_line};
@@ -68,6 +68,12 @@ pub trait IntoBody {
     /// 自己用 [`RequestConfig::enable_logging`](super::RequestConfig::enable_logging) 控制要不要打。
     /// 序列化失败时返回 `Err`
     fn preview(&self) -> Result<Option<String>, HyErr>;
+
+    /// debug 日志（`debug-log` feature 下 [`ReqwestConfig::debug`](super::ReqwestConfig) 打开时）用的请求体摘要，
+    /// 不打码。默认和 [`IntoBody::preview`] 相同，只有会打码的类型（[`Json`]、[`Form`]）需要覆盖
+    fn debug_preview(&self) -> Result<Option<String>, HyErr> {
+        self.preview()
+    }
 }
 
 /// 对应 `.json()`，由 reqwest 序列化并自动补 content-type。可以传引用：`Json(&req)`。
@@ -203,6 +209,10 @@ impl<T: serde::Serialize> IntoBody for Json<T> {
     fn preview(&self) -> Result<Option<String>, HyErr> {
         redact::to_redacted_json(&self.0).map(Some)
     }
+
+    fn debug_preview(&self) -> Result<Option<String>, HyErr> {
+        plain_json(&self.0).map(Some)
+    }
 }
 
 impl<T: serde::Serialize> IntoBody for Form<T> {
@@ -213,6 +223,16 @@ impl<T: serde::Serialize> IntoBody for Form<T> {
     fn preview(&self) -> Result<Option<String>, HyErr> {
         redact::to_redacted_json(&self.0).map(Some)
     }
+
+    fn debug_preview(&self) -> Result<Option<String>, HyErr> {
+        plain_json(&self.0).map(Some)
+    }
+}
+
+/// 不打码的 JSON，debug 日志用
+fn plain_json<T: serde::Serialize>(value: &T) -> Result<String, HyErr> {
+    serde_json::to_string(value)
+        .wrap_err(|| err!(BaseErr::JsonError, "serialize body for debug log failed"))
 }
 
 impl IntoBody for Raw {
@@ -298,9 +318,9 @@ impl IntoBody for multipart::Form {
 
 #[cfg(test)]
 mod tests {
-    use crate::reqwest_client::Client;
     use hygiea_core::BaseErr;
     use hygiea_core::redact::redact;
+    use reqwest::Client;
     use serde::Serialize;
     use serde_json::{Value, json};
     use test_support::Unserializable;
@@ -532,6 +552,40 @@ mod tests {
         fn multipart_shows_marker() {
             let preview = multipart::Form::new().text("k", "v").preview().unwrap();
             assert_eq!(preview.as_deref(), Some("<multipart>"));
+        }
+    }
+
+    /// `debug_preview()`：debug 日志里打的摘要，不打码
+    mod debug_preview {
+        use super::*;
+
+        /// `Json` / `Form` 不打码，是实际发送的字段值
+        #[test]
+        fn json_and_form_are_not_masked() {
+            for preview in [
+                Json(&LOGIN).debug_preview().unwrap(),
+                Form(&LOGIN).debug_preview().unwrap(),
+            ] {
+                assert_eq!(
+                    serde_json::from_str::<Value>(&preview.unwrap()).unwrap(),
+                    json!({"user":"alice","password":"p@ss"})
+                );
+            }
+        }
+
+        /// 序列化失败时返回 `Err`
+        #[test]
+        fn serialize_error_is_err() {
+            let err = Json(Unserializable).debug_preview().unwrap_err();
+            assert!(err.is(BaseErr::JsonError));
+        }
+
+        /// 不打码的类型用默认实现，和 `preview()` 相同
+        #[test]
+        fn others_fall_back_to_preview() {
+            let raw = Raw::new(ContentType::Csv, "a,b\nc,d");
+            assert_eq!(raw.debug_preview().unwrap(), raw.preview().unwrap());
+            assert_eq!(().debug_preview().unwrap(), None);
         }
     }
 }

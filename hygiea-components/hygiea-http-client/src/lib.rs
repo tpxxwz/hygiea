@@ -2,7 +2,10 @@
 //!
 //! | feature | 模块 | 组件 | 放进 Resources 的资源 |
 //! |---|---|---|---|
-//! | `reqwest` | [`reqwest_client`] | [`ReqwestComponent`](reqwest_client::ReqwestComponent) | `reqwest::Client` |
+//! | `reqwest` | [`reqwest_client`] | [`ReqwestComponent`](reqwest_client::ReqwestComponent) | [`ReqwestClient`](reqwest_client::ReqwestClient) |
+//!
+//! `debug-log`（带上 `reqwest`）：[`ReqwestConfig`](reqwest_client::ReqwestConfig) 多一个 `debug` 开关，打开后日志带原文和请求头、响应头。
+//! 只给测试用，放在 dev-dependencies 里开
 //!
 //! 每种实现单独一个模块，不在 crate 根上再导出，以后加别的实现时名字不会撞：
 //! `hygiea::http_client::reqwest_client::{ReqwestConfig, RequestConfig, …}`。

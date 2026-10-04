@@ -2,7 +2,7 @@
 //!
 //! | 文件 | 内容 |
 //! |---|---|
-//! | client.rs | [`ReqwestConfig`]：client 级配置，造出长期持有、共享连接池的 [`Client`]；应用组件 [`ReqwestComponent`] |
+//! | client.rs | [`ReqwestConfig`]：client 级配置，造出长期持有、共享连接池的 [`ReqwestClient`]；应用组件 [`ReqwestComponent`] |
 //! | config.rs | 配置文件里用的类型：[`HeaderMapConfig`]、[`ProxyConfig`] 等 |
 //! | request.rs | [`RequestConfig`]：单次请求的配置（纯数据）；[`HttpResponse`]：结果 |
 //! | headers.rs | 请求头 [`IntoHeaders`] 及保留字段校验、认证 [`Auth`] |
@@ -33,7 +33,7 @@ mod send;
 mod text;
 
 pub use body::{ContentType, Form, IntoBody, Json, Multipart, MultipartPart, Raw, RawStream};
-pub use client::{ReqwestComponent, ReqwestConfig};
+pub use client::{ReqwestClient, ReqwestComponent, ReqwestConfig};
 pub use config::{
     HeaderBytes, HeaderMapConfig, HeaderText, HeaderValueConfig, ProxyBasicAuth, ProxyConfig,
     ProxyKind,
@@ -48,18 +48,15 @@ pub use send::{FailStage, IntoSender, RespBody, SendFailure};
 
 // ---------------------------- 再导出 ----------------------------
 
-/// reqwest 整个再导出。本模块刻意没收的配置（mTLS 的 `Certificate` / `Identity`、
-/// `retry::Builder`、自定义 `redirect::Policy` 等）都从这里取，调用方不必自己依赖 reqwest，
-/// 也就不会撞上两个版本的同名类型对不上的问题
+/// reqwest 整个再导出：`multipart`、从错误的 source 里 downcast 用的 `reqwest::Error` 等从这里取，
+/// 调用方不必自己依赖 reqwest，也就不会撞上两个版本的同名类型对不上的问题。
+/// reqwest 原生的 `Client` / `ClientBuilder` 不经过本模块的 API，`send` 只收 [`ReqwestClient`]
 pub use reqwest;
 
 /// 日常最常用的几个，给个短路径
 pub use bytes::Bytes;
 pub use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-pub use reqwest::{
-    Body, Client, ClientBuilder, Method, Proxy, RequestBuilder, Response, StatusCode, Url,
-    multipart,
-};
+pub use reqwest::{Body, Method, Proxy, RequestBuilder, Response, StatusCode, Url, multipart};
 
 /// [`FailedLogLevel`] 转换的目标类型
 pub use tracing::Level;

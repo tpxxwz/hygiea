@@ -9,7 +9,7 @@ use hygiea_http_client::reqwest_client::*;
 use crate::support::*;
 
 /// 发一个 GET 到回显服务，拿回服务端看到的请求
-async fn echo_via(client: &Client, url: String) -> serde_json::Value {
+async fn echo_via(client: &ReqwestClient, url: String) -> serde_json::Value {
     RequestConfig::plain(Method::GET, url)
         .send::<Json<serde_json::Value>>(client)
         .await
@@ -156,7 +156,7 @@ mod cookies {
         .await
     }
 
-    async fn cookie_seen_after_login(client: &Client, base: &str) -> serde_json::Value {
+    async fn cookie_seen_after_login(client: &ReqwestClient, base: &str) -> serde_json::Value {
         RequestConfig::plain(Method::GET, format!("{base}/login"))
             .send::<Bytes>(client)
             .await

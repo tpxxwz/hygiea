@@ -30,7 +30,7 @@ use std::future::Future;
 
 use hygiea_core::HyErr;
 
-use super::Client;
+use super::ReqwestClient;
 use super::body::IntoBody;
 use super::request::{HttpResponse, RequestConfig};
 use super::response::FromBytes;
@@ -104,9 +104,9 @@ impl<T> RetryCtx<T> {
     }
 }
 
-impl<T> super::send::sealed::Sealed for (&Client, RetryCtx<T>) {}
+impl<T> super::send::sealed::Sealed for (&ReqwestClient, RetryCtx<T>) {}
 
-impl<Params, Req, Decoder, T> IntoSender<Params, Req, Decoder> for (&Client, RetryCtx<T>)
+impl<Params, Req, Decoder, T> IntoSender<Params, Req, Decoder> for (&ReqwestClient, RetryCtx<T>)
 where
     Params: serde::Serialize + Clone + Send,
     Req: IntoBody + Clone + Send,

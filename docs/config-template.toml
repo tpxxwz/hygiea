@@ -237,6 +237,9 @@ proxies = []
 # 默认不覆盖 DNS；要指定域名解析，替换下一行的空数组
 resolve = []
 # resolve = [["example.com", ["127.0.0.1:80"]]]
+# debug 日志（url、params、body、响应原文和请求头、响应头，无视 enable_logging）：
+# 需要 feature http-client-reqwest-debug-log，只给测试用；没开这个 feature 时写了会报错
+# debug = false
 # 代理示例：取消注释时先删除上面的 proxies = []。每加一个 [[http_client.proxies]] 就追加一个代理
 # [[http_client.proxies]]
 # kind = "all" # all / http / https；不写默认 all

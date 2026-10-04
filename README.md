@@ -63,7 +63,8 @@
 | `db-seaorm-postgres` | `hygiea-db`（`seaorm` + `postgres`） | `hygiea::db::SeaOrmPgComponent` / `SeaOrmPgPool` |
 | `redis-fred` | `hygiea-redis`（`fred`） | `hygiea::redis::RedisComponent` / `FredRedisPool` |
 | `http-axum` | `hygiea-http`（`axum`） | `hygiea::http::AxumComponent` |
-| `http-client-reqwest` | `hygiea-http-client`（`reqwest`） | `hygiea::http_client::reqwest_client::ReqwestComponent` / `ReqwestConfig`，请求 API 也在这个模块；在 `Resources` 中提供 `Client` |
+| `http-client-reqwest` | `hygiea-http-client`（`reqwest`） | `hygiea::http_client::reqwest_client::ReqwestComponent` / `ReqwestConfig`，请求 API 也在这个模块；在 `Resources` 中提供 `ReqwestClient` |
+| `http-client-reqwest-debug-log` | `hygiea-http-client`（`debug-log`，带上 `reqwest`） | `ReqwestConfig::debug`：日志带原文和请求头、响应头，只在 dev-dependencies 里开 |
 | `grpc-tonic` | `hygiea-grpc`（`tonic`） | `hygiea::grpc::TonicComponent` |
 | `aws-s3` | `hygiea-aws`（`s3`） | `hygiea::aws::AwsComponent` / `AwsConfig`；在 `Resources` 中提供 `SdkConfig` 和 `aws_sdk_s3::Client` |
 
@@ -207,7 +208,7 @@ fn main() {
 
 ```rust
 use hygiea::HyErr;
-use hygiea::http_client::reqwest_client::{Client, ReqwestConfig, Json, Method, RequestConfig};
+use hygiea::http_client::reqwest_client::{Json, Method, ReqwestClient, ReqwestConfig, RequestConfig};
 use hygiea::redact::redact;
 use serde::{Deserialize, Serialize};
 
@@ -227,7 +228,7 @@ struct LoginResp {
     token: String,
 }
 
-async fn login(client: &Client) -> Result<String, HyErr> {
+async fn login(client: &ReqwestClient) -> Result<String, HyErr> {
     let req = LoginReq { user: "alice".into(), password: "p@ss".into() };
     // 请求体 Json(..) 表示按 JSON 编码；send::<Json<LoginResp>> 表示按 JSON 解码，resp.body 是 LoginResp
     let resp = RequestConfig::with_body(Method::POST, "https://api.example.com/login", Json(req))
@@ -284,6 +285,16 @@ let resp = RequestConfig::plain(Method::GET, url)
     })))
     .await?;
 ```
+
+#### debug 日志
+
+测试里排查问题时，开 `http-client-reqwest-debug-log` feature（只放在 dev-dependencies 里），给 client 打开 `debug`：
+
+```rust
+let client = ReqwestConfig::default().debug(true).build()?; // 配置文件里是 debug = true
+```
+
+打开后日志条数、消息、级别不变，只是 start / success 无视 `enable_logging` 强制打；`url`、`req`（params 和 body）、`resp` 换成原文，不再打码；多 `req_headers`（请求自己的头补上 client 默认头）和 `resp_headers` 两个字段，敏感头也是原值。返回给调用方的错误和 `HttpResponse.url` 仍是打码的。请求头是照 reqwest 的规则算的，发送时才加的 `Host`、`Content-Length`、`Accept-Encoding`、cookie、代理认证头不在里面；`BodyStream` 成功时没有 `resp`。
 
 ## 架构
 

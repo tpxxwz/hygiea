@@ -1,4 +1,4 @@
-//! `ReqwestComponent` 经 Registry 启动：按组件名提供 `Client`，配置在启动时生效
+//! `ReqwestComponent` 经 Registry 启动：按组件名提供 `ReqwestClient`，配置在启动时生效
 //!
 //! 运行：`cargo test -p hygiea-http-client --features reqwest --test component`
 
@@ -7,7 +7,7 @@ use std::error::Error as _;
 use hygiea_core::HyErr;
 use hygiea_core::app::{BaseAppErr, Component, Name, Registry, ResourceId, Resources};
 use hygiea_http_client::reqwest_client::{
-    Client, Json, Method, RequestConfig, ReqwestComponent, ReqwestConfig,
+    Json, Method, RequestConfig, ReqwestClient, ReqwestComponent, ReqwestConfig,
 };
 use test_support::http_server::{echo, serve};
 
@@ -19,13 +19,13 @@ fn local_config() -> ReqwestConfig {
     }
 }
 
-/// 按配置构造：按组件名声明 Client 资源
+/// 按配置构造：按组件名声明 ReqwestClient 资源
 #[test]
 fn build_declares_named_client() {
     let component = ReqwestComponent::build(Name::from("moji"), local_config());
     assert_eq!(
         component.provides(),
-        vec![ResourceId::named::<Client>("moji")]
+        vec![ResourceId::named::<ReqwestClient>("moji")]
     );
 }
 
@@ -50,14 +50,14 @@ async fn with_resources<T: Send + 'static>(
     result
 }
 
-/// 具名添加：Client 注册在组件名下，不占匿名位置
+/// 具名添加：ReqwestClient 注册在组件名下，不占匿名位置
 #[tokio::test]
 async fn named_component_provides_named_client() {
     let registry = Registry::new().add_named::<ReqwestComponent>("moji", local_config());
     let (named, anonymous) = with_resources(registry, |res| {
         (
-            res.get_named::<Client>("moji").is_some(),
-            res.get::<Client>().is_some(),
+            res.get_named::<ReqwestClient>("moji").is_some(),
+            res.get::<ReqwestClient>().is_some(),
         )
     })
     .await;
@@ -65,11 +65,11 @@ async fn named_component_provides_named_client() {
     assert!(!anonymous);
 }
 
-/// 匿名添加：`resources.get::<Client>()` 就能取到
+/// 匿名添加：`resources.get::<ReqwestClient>()` 就能取到
 #[tokio::test]
 async fn anonymous_component_provides_client() {
     let registry = Registry::new().add::<ReqwestComponent>(local_config());
-    assert!(with_resources(registry, |res| res.get::<Client>().is_some()).await);
+    assert!(with_resources(registry, |res| res.get::<ReqwestClient>().is_some()).await);
 }
 
 /// 同类型多个实例各用各的配置
@@ -84,7 +84,10 @@ async fn each_named_client_uses_its_own_config() {
         .add_named::<ReqwestComponent>("a", config("ua-a"))
         .add_named::<ReqwestComponent>("b", config("ua-b"));
     let (a, b) = with_resources(registry, |res| {
-        (res.get_named::<Client>("a"), res.get_named::<Client>("b"))
+        (
+            res.get_named::<ReqwestClient>("a"),
+            res.get_named::<ReqwestClient>("b"),
+        )
     })
     .await;
     for (client, ua) in [(a.unwrap(), "ua-a"), (b.unwrap(), "ua-b")] {
@@ -97,7 +100,7 @@ async fn each_named_client_uses_its_own_config() {
     }
 }
 
-/// 配置建不出 Client 时启动失败：Registry 报 ComponentStartFailed，
+/// 配置建不出 ReqwestClient 时启动失败：Registry 报 ComponentStartFailed，
 /// source 是组件报的 BaseAppErr::InvalidConfig；业务回调不会执行
 #[tokio::test]
 async fn invalid_config_fails_startup() {

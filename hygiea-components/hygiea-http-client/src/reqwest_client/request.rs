@@ -10,7 +10,8 @@ use hygiea_core::HyErr;
 use super::body::IntoBody;
 use super::headers::{Auth, IntoHeaders, auth_value, checked_headers};
 use super::logging::FailedLogLevel;
-use super::{Bytes, Client, HeaderMap, Method, RequestBuilder, StatusCode, Url};
+use super::{Bytes, HeaderMap, Method, RequestBuilder, StatusCode, Url};
+use reqwest::Client;
 
 /// `RequestBuilder` 的纯数据镜像，字段顺序与方法声明顺序一致；本模块自己加的开关放在最后一段。
 ///
@@ -128,7 +129,7 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
     /// 认证头的值在这里构造，值里有换行之类的非法字符时返回 [`InvalidHeader`](super::BaseHttpErr::InvalidHeader)；
     /// body 构造失败时返回 [`IntoBody::apply`] 报的错。
     /// URL、params、body 的错误和 reqwest 一样，要到 `build()` 时才暴露；`send` 会在那之前逐项检查
-    pub fn into_request(self, client: &Client) -> Result<RequestBuilder, HyErr> {
+    pub(super) fn into_request(self, client: &Client) -> Result<RequestBuilder, HyErr> {
         let mut req = client.request(self.method, &self.url).headers(self.headers);
         if let Some(auth) = self.auth {
             req = match auth {

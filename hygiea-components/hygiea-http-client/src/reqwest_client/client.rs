@@ -1,6 +1,8 @@
 //! reqwest 的客户端配置 [`ReqwestConfig`] 和应用组件 [`ReqwestComponent`]。
 
 use std::net::SocketAddr;
+#[cfg(feature = "debug-log")]
+use std::sync::Arc;
 use std::time::Duration;
 
 use reqwest::redirect::Policy;
@@ -11,16 +13,17 @@ use hygiea_core::app::{
 };
 use hygiea_core::{HyErr, ResultExt, err};
 
+use super::HeaderMap;
 use super::config::{HeaderMapConfig, ProxyConfig};
 use super::error::{client_build_failed, invalid_header};
 use super::headers::{IntoHeaders, checked_headers};
-use super::{Client, ClientBuilder, HeaderMap};
+use reqwest::{Client, ClientBuilder};
 
 // ---------------------------- 客户端配置 ----------------------------
 
 /// `ClientBuilder` 的纯数据镜像：一个字段对一个 `ClientBuilder` 方法，字段顺序与方法声明顺序一致。
 ///
-/// 用 [`ReqwestConfig::build`] 造出的 `Client` 内部是 `Arc`，连接池挂在它身上，
+/// 用 [`ReqwestConfig::build`] 造出的 [`ReqwestClient`] 内部是 `Arc`，连接池挂在它身上，
 /// 所以要长期持有并共享（clone 很廉价）；在请求路径上反复构造等于池子永远是空的，每次都重新建连和握手。
 ///
 /// `hygiea-http-client` crate 已经把 reqwest 的 feature 集固定成
@@ -34,7 +37,7 @@ use super::{Client, ClientBuilder, HeaderMap};
 ///
 /// reqwest 的 `gzip` / `brotli` / `zstd` / `deflate` 合成一个
 /// [`ReqwestConfig::transparent_compression`]，按算法单独开关没有真实场景，
-/// 而且以后新增算法只需在 `TryFrom<ReqwestConfig> for ClientBuilder` 里多接一行，对外 API 不变。
+/// 而且以后新增算法只需在 `client_builder` 里多接一行，对外 API 不变。
 ///
 /// ## 不收 `retry`
 ///
@@ -44,7 +47,7 @@ use super::{Client, ClientBuilder, HeaderMap};
 /// 反而让人误以为重试已经配好了。另外 `retry::Builder` 是含闭包的 scoped 策略，本来也做不成纯数据。
 ///
 /// 注意：**不配 `retry` 不等于关掉重试**。reqwest 在没有显式策略时跑的就是上面那套默认 nack 重试，
-/// 这层仍然生效。真要覆盖它就 `ClientBuilder::try_from(config)?.retry(...)`。
+/// 这层仍然生效，目前没有覆盖它的入口。
 ///
 /// ## 默认值够用而不收
 ///
@@ -72,7 +75,7 @@ use super::{Client, ClientBuilder, HeaderMap};
 /// reqwest + rustls 走的是 `rustls_platform_verifier`，也就是**操作系统的信任库**——
 /// 公司私有 CA、自签 CA 只要装进容器的信任库（`/usr/local/share/ca-certificates/` +
 /// `update-ca-certificates`，或 k8s 里挂 ConfigMap 到 `/etc/ssl/certs`），代码里什么都不用配。
-/// 真需要 mTLS 客户端证书或临时放宽校验时，用 `ClientBuilder::try_from(config)` 拿到原生 builder 再接着链。
+/// mTLS 客户端证书、临时放宽校验目前不支持，要用时再加进配置。
 ///
 /// ## 不收 `local_address` / `interface`
 ///
@@ -109,9 +112,8 @@ use super::{Client, ClientBuilder, HeaderMap};
 ///   非 Linux 系平台上这个方法根本不存在。
 /// - `unix_socket` / `windows_named_pipe`：让整个 `Client` 改走本机 IPC 而不是 TCP，
 ///   用于对话 Docker daemon 这类本地守护进程，和调远程 REST 接口无关。
-/// - 以下是 trait 对象或含闭包，塞不进纯数据结构，需要时用 `ClientBuilder::try_from(config)` 拿到原生 builder
-///   再接着链：`cookie_provider`、`redirect` 的自定义 `Policy`、`dns_resolver`、
-///   `connector_layer`、`tls_backend_*`（TLS 后端由 feature 选定）。
+/// - 以下是 trait 对象或含闭包，塞不进纯数据结构，目前不支持：`cookie_provider`、`redirect` 的自定义 `Policy`、
+///   `dns_resolver`、`connector_layer`、`tls_backend_*`（TLS 后端由 feature 选定）。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ReqwestConfig {
@@ -160,6 +162,13 @@ pub struct ReqwestConfig {
     /// 写死的域名解析结果，绕过系统 DNS，相当于进程内 hosts。同一域名可给多个地址按顺序尝试。
     /// 端口只是占位，实际用 URL 里的端口
     pub resolve: Vec<(String, Vec<SocketAddr>)>,
+
+    // ---- 以下是 reqwest 没有、本模块自己加的 ----
+    /// 强制打开完整日志：url、params、body 原文，请求头和响应头，无视
+    /// [`RequestConfig::enable_logging`](super::RequestConfig::enable_logging)。
+    /// 只在 `debug-log` feature 下存在，用于测试排查。在 build 时定下，之后不能改
+    #[cfg(feature = "debug-log")]
+    pub debug: bool,
 }
 
 impl Default for ReqwestConfig {
@@ -177,6 +186,8 @@ impl Default for ReqwestConfig {
             read_timeout: None,
             connect_timeout: None,
             resolve: Vec::new(),
+            #[cfg(feature = "debug-log")]
+            debug: false,
         }
     }
 }
@@ -204,63 +215,120 @@ impl ReqwestConfig {
         self
     }
 
-    /// 造出 `Client`。请求头无效时返回 `InvalidConfig`；代理 URL 或 reqwest 构建失败时返回
+    /// 打开或关闭 debug 日志，见 [`ReqwestConfig::debug`](#structfield.debug)
+    #[cfg(feature = "debug-log")]
+    pub fn debug(mut self, on: bool) -> Self {
+        self.debug = on;
+        self
+    }
+
+    /// 造出 [`ReqwestClient`]。请求头无效时返回 `InvalidConfig`；代理 URL 或 reqwest 构建失败时返回
     /// [`ClientBuildFailed`](super::BaseHttpErr::ClientBuildFailed)，reqwest 错误保留在 source 上
-    pub fn build(self) -> Result<Client, HyErr> {
-        ClientBuilder::try_from(self)?
-            .build()
-            .map_err(client_build_failed)
+    pub fn build(self) -> Result<ReqwestClient, HyErr> {
+        #[cfg(feature = "debug-log")]
+        let (debug, user_agent, default_headers) = (
+            self.debug,
+            self.user_agent.clone(),
+            self.default_headers.clone(),
+        );
+        let inner = client_builder(self)?.build().map_err(client_build_failed)?;
+        Ok(ReqwestClient {
+            inner,
+            #[cfg(feature = "debug-log")]
+            default_headers: Arc::new(client_default_headers(user_agent, default_headers)?),
+            #[cfg(feature = "debug-log")]
+            debug,
+        })
     }
 }
 
-impl TryFrom<ReqwestConfig> for ClientBuilder {
-    type Error = HyErr;
+/// 照 reqwest（0.13）`ClientBuilder` 的规则算出 client 级默认头，和交给 reqwest 的是同一份配置：
+/// `ClientBuilder::new` 先放 `Accept: */*`，`user_agent` 再 insert `User-Agent`，
+/// `default_headers` 最后逐个 insert——同名的覆盖前面的，同名多值只剩最后一个。
+/// reqwest 没有读回默认头的接口，只能照抄；它的规则变了由集成测试里的对照（日志里的请求头 vs 服务端收到的）发现
+#[cfg(feature = "debug-log")]
+fn client_default_headers(
+    user_agent: Option<String>,
+    default_headers: HeaderMapConfig,
+) -> Result<HeaderMap, HyErr> {
+    use reqwest::header::{ACCEPT, HeaderValue, USER_AGENT};
 
-    fn try_from(config: ReqwestConfig) -> Result<Self, Self::Error> {
-        let mut builder = Client::builder();
-        if config.cookie_store {
-            builder = builder.cookie_store(true);
-        }
-        if !config.transparent_compression {
-            builder = builder.gzip(false).brotli(false).zstd(false).deflate(false);
-        }
-        if config.max_redirects == 0 {
-            builder = builder.redirect(Policy::none());
-        } else if config.max_redirects != 10 {
-            builder = builder.redirect(Policy::limited(config.max_redirects));
-        }
-        if !config.referer {
-            builder = builder.referer(false);
-        }
-
-        if let Some(ua) = config.user_agent {
-            builder = builder.user_agent(ua);
-        }
-        let headers = HeaderMap::try_from(config.default_headers)
-            .map_err(|e| err!(BaseAppErr::InvalidConfig, format!("default headers: {e}")))?;
-        if !headers.is_empty() {
-            builder = builder.default_headers(headers);
-        }
-        for proxy in config.proxies {
-            builder = builder.proxy(proxy.try_into()?);
-        }
-        if config.no_proxy {
-            builder = builder.no_proxy();
-        }
-        if let Some(t) = config.timeout {
-            builder = builder.timeout(t);
-        }
-        if let Some(t) = config.read_timeout {
-            builder = builder.read_timeout(t);
-        }
-        if let Some(t) = config.connect_timeout {
-            builder = builder.connect_timeout(t);
-        }
-        for (domain, addrs) in config.resolve {
-            builder = builder.resolve_to_addrs(&domain, &addrs);
-        }
-        Ok(builder)
+    let mut headers = HeaderMap::new();
+    headers.insert(ACCEPT, HeaderValue::from_static("*/*"));
+    if let Some(ua) = user_agent {
+        let ua = HeaderValue::try_from(ua)
+            .map_err(|e| err!(BaseAppErr::InvalidConfig, format!("user agent: {e}")))?;
+        headers.insert(USER_AGENT, ua);
     }
+    let configured = HeaderMap::try_from(default_headers)
+        .map_err(|e| err!(BaseAppErr::InvalidConfig, format!("default headers: {e}")))?;
+    for (name, value) in &configured {
+        headers.insert(name.clone(), value.clone());
+    }
+    Ok(headers)
+}
+
+// ---------------------------- 客户端 ----------------------------
+
+/// 组件提供的 HTTP 客户端，用 [`ReqwestConfig::build`] 造出来，传给
+/// [`RequestConfig::send`](super::RequestConfig::send) 发请求。内部是 `Arc`，clone 很便宜，要长期持有并共享
+#[derive(Debug, Clone)]
+pub struct ReqwestClient {
+    pub(super) inner: Client,
+    /// 建立时交给 reqwest 的 client 级默认头（`Accept: */*` → user_agent → default_headers 合并后），之后不会变。
+    /// 目前只在 debug 日志里用来补全请求头
+    #[cfg(feature = "debug-log")]
+    pub(super) default_headers: Arc<HeaderMap>,
+    /// 来自 `ReqwestConfig` 的 `debug` 字段
+    #[cfg(feature = "debug-log")]
+    pub(super) debug: bool,
+}
+
+/// 把配置铺到 reqwest 原生的 `ClientBuilder` 上。不对外：原生的 `Client` 用不了本模块的 `send`
+fn client_builder(config: ReqwestConfig) -> Result<ClientBuilder, HyErr> {
+    let mut builder = Client::builder();
+    if config.cookie_store {
+        builder = builder.cookie_store(true);
+    }
+    if !config.transparent_compression {
+        builder = builder.gzip(false).brotli(false).zstd(false).deflate(false);
+    }
+    if config.max_redirects == 0 {
+        builder = builder.redirect(Policy::none());
+    } else if config.max_redirects != 10 {
+        builder = builder.redirect(Policy::limited(config.max_redirects));
+    }
+    if !config.referer {
+        builder = builder.referer(false);
+    }
+
+    if let Some(ua) = config.user_agent {
+        builder = builder.user_agent(ua);
+    }
+    let headers = HeaderMap::try_from(config.default_headers)
+        .map_err(|e| err!(BaseAppErr::InvalidConfig, format!("default headers: {e}")))?;
+    if !headers.is_empty() {
+        builder = builder.default_headers(headers);
+    }
+    for proxy in config.proxies {
+        builder = builder.proxy(proxy.try_into()?);
+    }
+    if config.no_proxy {
+        builder = builder.no_proxy();
+    }
+    if let Some(t) = config.timeout {
+        builder = builder.timeout(t);
+    }
+    if let Some(t) = config.read_timeout {
+        builder = builder.read_timeout(t);
+    }
+    if let Some(t) = config.connect_timeout {
+        builder = builder.connect_timeout(t);
+    }
+    for (domain, addrs) in config.resolve {
+        builder = builder.resolve_to_addrs(&domain, &addrs);
+    }
+    Ok(builder)
 }
 
 // ---------------------------- 应用组件 ----------------------------
@@ -280,7 +348,7 @@ impl ImmediateComponent for ReqwestComponent {
     }
 
     fn provides(&self) -> Vec<ResourceId> {
-        vec![ResourceId::named::<Client>(self.name.clone())]
+        vec![ResourceId::named::<ReqwestClient>(self.name.clone())]
     }
 
     async fn startup(
@@ -326,6 +394,8 @@ mod tests {
             assert_eq!(c.read_timeout, None);
             assert_eq!(c.connect_timeout, None);
             assert!(c.resolve.is_empty());
+            #[cfg(feature = "debug-log")]
+            assert!(!c.debug);
         }
     }
 
@@ -410,7 +480,7 @@ mod tests {
         }
     }
 
-    /// `build()` / `TryFrom<ReqwestConfig> for ClientBuilder`：各个字段都能铺到 builder 上。
+    /// `build()` / `client_builder()`：各个字段都能铺到 builder 上。
     /// 行为层面（UA 有没有发出去、重定向跟不跟）在集成测试 tests/reqwest_client/client_config.rs 里验证
     mod build {
         use super::*;
@@ -438,19 +508,11 @@ mod tests {
                 read_timeout: None,
                 connect_timeout: None,
                 resolve: vec![("a.test".into(), vec![addr])],
+                #[cfg(feature = "debug-log")]
+                debug: true,
             }
             .build()
             .unwrap();
-        }
-
-        /// 拿到原生 builder 后还能接着链 reqwest 的其他方法
-        #[test]
-        fn converts_into_native_builder() {
-            ClientBuilder::try_from(ReqwestConfig::default())
-                .unwrap()
-                .https_only(false)
-                .build()
-                .unwrap();
         }
 
         /// reqwest 在构建 Client 时校验 User-Agent，错误保留为 source
@@ -464,6 +526,60 @@ mod tests {
             .unwrap_err();
             assert!(err.is(BaseHttpErr::ClientBuildFailed));
             assert!(err.source().is_some());
+        }
+    }
+
+    /// `debug`：开关和 client 级默认头（debug 日志补全请求头用）
+    #[cfg(feature = "debug-log")]
+    mod debug {
+        use super::*;
+
+        /// 默认关，`.debug(true)` 打开，build 后带到 ReqwestClient 上
+        #[test]
+        fn switch_reaches_client() {
+            assert!(!ReqwestConfig::default().build().unwrap().debug);
+            assert!(ReqwestConfig::default().debug(true).build().unwrap().debug);
+        }
+
+        /// 配置文件里写 `debug = true`
+        #[test]
+        fn parsed_from_config_file() {
+            let config: ReqwestConfig = toml::from_str("debug = true").unwrap();
+            assert!(config.debug);
+        }
+
+        /// 什么都不配时只有 reqwest 默认的 `Accept: */*`
+        #[test]
+        fn default_headers_start_with_accept() {
+            let client = ReqwestConfig::default().build().unwrap();
+            assert_eq!(*client.default_headers, header_map(&[("accept", "*/*")]));
+        }
+
+        /// UA 和 default_headers 都算进来；default_headers 里的同名头覆盖 Accept 和 UA，同名多值只剩最后一个
+        #[test]
+        fn default_headers_follow_reqwest_rules() {
+            let mut configured = header_map(&[("accept", "text/plain"), ("x-a", "1")]);
+            configured.append("x-a", "2".parse().unwrap());
+            let client = ReqwestConfig {
+                user_agent: Some("ua".into()),
+                default_headers: configured.into(),
+                ..ReqwestConfig::default()
+            }
+            .build()
+            .unwrap();
+            assert_eq!(
+                *client.default_headers,
+                header_map(&[("accept", "text/plain"), ("user-agent", "ua"), ("x-a", "2")])
+            );
+
+            let client = ReqwestConfig {
+                user_agent: Some("ua".into()),
+                default_headers: header_map(&[("user-agent", "override")]).into(),
+                ..ReqwestConfig::default()
+            }
+            .build()
+            .unwrap();
+            assert_eq!(client.default_headers["user-agent"], "override");
         }
     }
 
