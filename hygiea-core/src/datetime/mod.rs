@@ -63,12 +63,33 @@
 //! - 可能失败的（越界、解析失败）返回 [`Result<_>`](crate::Result)（错误是 `HyErr`），错误码是 `BaseErr::DateError`；
 //! - 有多种可能结果的（本地钟面时间对应 0/1/2 个时刻）原样返回 `OffsetResult`。
 //!
+//! # serde
+//!
+//! 外部接口常用 RFC 3339（`2026-10-05T12:57:24.719Z`），time 给 `UtcDateTime` 默认的 serde 格式却是
+//! `2026-10-05 12:57:24.719`，读不了。字段上用 [`rfc3339_utc`]：解析时带 `Z` 或任意 offset 都换算成 UTC，
+//! 输出带 `Z`；`Option` 字段用 `rfc3339_utc::option`，字段可能缺失时再加 `#[serde(default)]`：
+//!
+//! ```ignore
+//! #[derive(Serialize, Deserialize)]
+//! struct Card {
+//!     #[serde(with = "hygiea::datetime::rfc3339_utc")]
+//!     created_time: UtcDateTime,
+//!     #[serde(default, with = "hygiea::datetime::rfc3339_utc::option")]
+//!     expire_time: Option<UtcDateTime>,
+//! }
+//! ```
+//!
 //! # 格式名
 //!
 //! [`DateTimeFormatter`] 可以从配置里的名字解析（`FromStr` / serde），名字就是 `类别.变体`，
 //! 比如 `WithOffset.YmdTHMS3F`、`WithoutOffset.YmdHMS`；[`WithoutOffsetParser`] 也能直接当格式用。
 
-use time::{OffsetDateTime, UtcDateTime};
+use time::format_description::well_known::Rfc3339;
+
+/// 公开接口里用到了 time 的类型，再导出 time，下游不用自己加依赖，也不会和这里的版本对不上。
+/// 两个主类型直接放在这里：`hygiea::datetime::UtcDateTime`，其余经 `hygiea::datetime::time::..`
+pub use time;
+pub use time::{OffsetDateTime, UtcDateTime};
 
 mod layout;
 mod utc;
@@ -91,6 +112,9 @@ pub use time_tz::OffsetResult;
 
 #[cfg(feature = "datetime-chrono")]
 pub use chrono_bridge::*;
+
+// serde 用的 RFC 3339 读写模块 `rfc3339_utc` 和 `rfc3339_utc::option`，说明见模块文档「serde」
+time::serde::format_description!(pub rfc3339_utc, UtcDateTime, Rfc3339);
 
 /// 当前 UTC 时刻。
 pub fn now_utc() -> UtcDateTime {
@@ -116,5 +140,45 @@ mod tests {
         let real = UtcDateTime::now();
         assert!((now_utc() - real).whole_seconds().abs() < 60);
         assert_eq!(now().offset(), UtcOffset::UTC);
+    }
+
+    // ---- serde ---------------------------------------------------------------
+
+    #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+    struct Rfc3339Fields {
+        #[serde(with = "rfc3339_utc")]
+        at: UtcDateTime,
+        #[serde(default, with = "rfc3339_utc::option")]
+        maybe: Option<UtcDateTime>,
+    }
+
+    #[test]
+    fn rfc3339_utc_reads_z_and_offset_as_utc() {
+        let fields: Rfc3339Fields = serde_json::from_str(
+            r#"{"at":"2026-10-05T12:57:24.719Z","maybe":"2026-10-05T20:57:24.719+08:00"}"#,
+        )
+        .unwrap();
+        let expected = time::macros::utc_datetime!(2026-10-05 12:57:24.719);
+        assert_eq!(fields.at, expected);
+        assert_eq!(fields.maybe, Some(expected));
+    }
+
+    #[test]
+    fn rfc3339_utc_writes_z() {
+        let fields = Rfc3339Fields {
+            at: time::macros::utc_datetime!(2026-10-05 12:57:24.719),
+            maybe: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&fields).unwrap(),
+            r#"{"at":"2026-10-05T12:57:24.719Z","maybe":null}"#
+        );
+    }
+
+    #[test]
+    fn rfc3339_utc_option_missing_is_none() {
+        let fields: Rfc3339Fields =
+            serde_json::from_str(r#"{"at":"2026-10-05T12:57:24Z"}"#).unwrap();
+        assert_eq!(fields.maybe, None);
     }
 }

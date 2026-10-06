@@ -1,7 +1,7 @@
 //! 日期时间：格式化 / 解析、日 / 周 / 月边界、系统本地时区。
 //!
-//! 这里用到的 `OffsetDateTime` / `UtcDateTime`都是 `time` crate 自己的类型，hygiea 只通过
-//! `HygieaDateTimeExt` / `HygieaUtcDateTimeExt` / `HygieaOffsetDateTimeExt` 给它们扩展了方法。
+//! 这里用到的 `OffsetDateTime` / `UtcDateTime` 是 `time` crate 自己的类型，经 `hygiea::datetime` 再导出，
+//! 不用另外依赖 time；hygiea 通过 `HygieaDateTimeExt` / `HygieaUtcDateTimeExt` / `HygieaOffsetDateTimeExt` 给它们扩展了方法。
 //!
 //! ```bash
 //! cargo run -p hygiea-examples --example datetime_basic
@@ -9,11 +9,10 @@
 
 use hygiea::Result;
 use hygiea::datetime::{
-    HygieaDateTimeExt, HygieaOffsetDateTimeExt, HygieaUtcDateTimeExt, OffsetResult,
-    WithOffsetFormatter, WithOffsetParser, WithoutOffsetFormatter, WithoutOffsetParser, now_local,
-    now_utc,
+    HygieaDateTimeExt, HygieaOffsetDateTimeExt, HygieaUtcDateTimeExt, OffsetDateTime, OffsetResult,
+    UtcDateTime, WithOffsetFormatter, WithOffsetParser, WithoutOffsetFormatter,
+    WithoutOffsetParser, now_local, now_utc,
 };
-use time::{OffsetDateTime, UtcDateTime};
 
 /// `_local` 系列返回 `OffsetResult`：夏令时切换时钟面时间可能不存在或出现两次，库不替调用方选，
 /// 原样返回。这里为了打印简单，歧义取较早的一个，实际业务按场景处理（见 `datetime` 模块文档）

@@ -26,8 +26,6 @@ sqlx = { workspace = true, features = ["sqlite"] }
 serde = { workspace = true, features = ["derive"] }
 # redact_basic 对比普通序列化
 serde_json = { workspace = true }
-# datetime_basic 里给 UtcDateTime / OffsetDateTime 命名类型（hygiea 只扩展方法，不重导出这两个类型）
-time = { workspace = true }
 
 # 示例按主题分目录，Cargo 只自动发现 examples/*.rs 和 examples/*/main.rs，所以逐个声明
 [[example]]

@@ -32,6 +32,7 @@ serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
+serde_json = { workspace = true }
 tempfile = { workspace = true }
 # #[container] 和启动容器。hygiea-test 只依赖 core，cargo publish --workspace 会把它排在组件前面发布，
 # 所以可以带版本号

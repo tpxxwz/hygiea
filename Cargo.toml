@@ -113,7 +113,7 @@ aws-sdk-s3 = "1.151"
 
 # Time
 chrono = { version = "0.4", features = ["serde"] }
-time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
+time = { version = "0.3", features = ["formatting", "parsing", "macros", "serde"] }
 time-tz = { version = "2.0", features = ["system"] }
 
 # 测试依赖

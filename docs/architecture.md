@@ -48,7 +48,7 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 
 | crate | 框架 feature | 其他 feature | facade 的 feature | facade 的路径 |
 |---|---|---|---|---|
-| `hygiea-db` | `sqlx`、`seaorm` | `postgres`、`sqlite` | `db-sqlx-postgres`、`db-sqlx-sqlite`、`db-seaorm-postgres` | `hygiea::db` |
+| `hygiea-db` | `sqlx`、`seaorm` | `postgres`、`sqlite` | `db-sqlx`、`db-seaorm`（只开框架）；`db-sqlx-postgres`、`db-sqlx-sqlite`、`db-seaorm-postgres`（组合，依赖前两个） | `hygiea::db` |
 | `hygiea-redis` | `fred` | | `redis-fred` | `hygiea::redis` |
 | `hygiea-http` | `axum` | | `http-axum` | `hygiea::http` |
 | `hygiea-http-client` | `reqwest` | | `http-client-reqwest` | `hygiea::http_client`（实现在 `reqwest_client` 子模块） |
@@ -58,6 +58,7 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 | 文件 | 内容 |
 |---|---|
 | `hygiea-db/src/sqlx_postgres.rs`、`sqlx_sqlite.rs`、`seaorm_postgres.rs` | 各框架与数据库组合的连接池组件，以及对应的锁实现（PostgreSQL 用 advisory lock，SQLite 用进程内锁） |
+| `hygiea-db/src/seaorm_datetime.rs`、`sqlx_datetime.rs` | `SeaOrmUtcDateTime`、`SqlxUtcDateTime`：给 `UtcDateTime` 包一层，让 SeaORM、sqlx 能读写（经 `OffsetDateTime` 转换，对应 `timestamptz`），只依赖框架 feature |
 | `hygiea-db/src/pg_advisory.rs` | 字符串 key 转 advisory lock 的 i64 key，sqlx 和 SeaORM 共用 |
 | `hygiea-redis/src/fred_pool.rs` | 连接池组件；锁实现为 SET NX + token + 看门狗续期，释放用 Lua |
 | `hygiea-http/src/axum_server.rs` | HTTP 服务组件 |

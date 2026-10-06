@@ -58,6 +58,8 @@
 
 | facade feature | crate | 提供 |
 |---|---|---|
+| `db-sqlx` | `hygiea-db`（`sqlx`） | `hygiea::db::SqlxUtcDateTime`；下面两个 sqlx 组合都包含它 |
+| `db-seaorm` | `hygiea-db`（`seaorm`） | `hygiea::db::SeaOrmUtcDateTime`；`db-seaorm-postgres` 包含它 |
 | `db-sqlx-postgres` | `hygiea-db`（`sqlx` + `postgres`） | `hygiea::db::SqlxPgComponent` / `SqlxPgPool` |
 | `db-sqlx-sqlite` | `hygiea-db`（`sqlx` + `sqlite`） | `hygiea::db::SqlxSqliteComponent` / `SqlxSqlitePool` |
 | `db-seaorm-postgres` | `hygiea-db`（`seaorm` + `postgres`） | `hygiea::db::SeaOrmPgComponent` / `SeaOrmPgPool` |
