@@ -12,11 +12,13 @@ use hygiea_test::container;
 #[container]
 mod postgres {
     use hygiea_core::app::{Registry, Resources};
+    use hygiea_core::datetime::{HygieaDateTimeExt, UtcDateTime};
+    use hygiea_db::HyUtcDateTime;
     use hygiea_db::{
         SeaOrmPgComponent, SeaOrmPgConfig, SeaOrmPgPool, SqlxPgComponent, SqlxPgConfig, SqlxPgPool,
     };
     use hygiea_test::container::{ContainerSpec, RunningContainer};
-    use sea_orm::{ConnectionTrait, DbBackend, Statement};
+    use sea_orm::{ActiveModelTrait, ConnectionTrait, DbBackend, EntityTrait, Set, Statement};
 
     const USER: &str = "postgres";
     const PASSWORD: &str = "hygiea-test";
@@ -219,5 +221,115 @@ mod postgres {
 
         let row = pool.query_one_raw(sql("SELECT 1")).await.unwrap().unwrap();
         assert_eq!(row.try_get_by_index::<i32>(0).unwrap(), 1);
+    }
+
+    // ---- HyUtcDateTime ------------------------------------------------------
+
+    /// 存 `HyUtcDateTime` 的表：一个必填列、一个可空列，都是 `timestamptz`
+    const CREATE_RECORD: &str = "CREATE TABLE record (\
+        id BIGINT PRIMARY KEY, \
+        create_at TIMESTAMPTZ NOT NULL, \
+        delete_at TIMESTAMPTZ)";
+
+    fn utc(s: &str) -> UtcDateTime {
+        UtcDateTime::parse_ext_rfc3339(s).unwrap()
+    }
+
+    /// SeaORM 实体，字段直接用 `HyUtcDateTime`
+    mod record {
+        use hygiea_db::HyUtcDateTime;
+        use sea_orm::entity::prelude::*;
+
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+        #[sea_orm(table_name = "record")]
+        pub struct Model {
+            #[sea_orm(primary_key, auto_increment = false)]
+            pub id: i64,
+            pub create_at: HyUtcDateTime,
+            pub delete_at: Option<HyUtcDateTime>,
+        }
+
+        #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+        pub enum Relation {}
+
+        impl ActiveModelBehavior for ActiveModel {}
+    }
+
+    /// sqlx 往 timestamptz 列写入再读回，可空列写 NULL 读回 None；
+    /// 库里按 +08:00 写的值读出来换算成 UTC
+    #[tokio::test]
+    async fn sqlx_hy_utc_datetime_round_trip() {
+        let server = start().await;
+        let pool = SqlxPgPool::connect(sqlx_config(&server)).await.unwrap();
+        sqlx::query(CREATE_RECORD).execute(&*pool).await.unwrap();
+
+        let at = HyUtcDateTime(utc("2026-10-05T12:57:24.719Z"));
+        sqlx::query(
+            "INSERT INTO record (id, create_at, delete_at) VALUES ($1, $2, $3), ($4, $5, $6)",
+        )
+        .bind(1_i64)
+        .bind(at)
+        .bind(Some(at))
+        .bind(2_i64)
+        .bind(at)
+        .bind(None::<HyUtcDateTime>)
+        .execute(&*pool)
+        .await
+        .unwrap();
+
+        let rows: Vec<(i64, HyUtcDateTime, Option<HyUtcDateTime>)> =
+            sqlx::query_as("SELECT id, create_at, delete_at FROM record ORDER BY id")
+                .fetch_all(&*pool)
+                .await
+                .unwrap();
+        assert_eq!(rows, vec![(1, at, Some(at)), (2, at, None)]);
+
+        let shanghai: HyUtcDateTime =
+            sqlx::query_scalar("SELECT '2026-10-05 20:57:24.719+08'::timestamptz")
+                .fetch_one(&*pool)
+                .await
+                .unwrap();
+        assert_eq!(shanghai, at);
+    }
+
+    /// SeaORM 实体字段用 `HyUtcDateTime`，插入再按主键查回，可空字段 None 对应 NULL；
+    /// 库里按 +08:00 写的值读出来换算成 UTC
+    #[tokio::test]
+    async fn seaorm_hy_utc_datetime_round_trip() {
+        let server = start().await;
+        let pool = SeaOrmPgPool::connect(seaorm_config(&server)).await.unwrap();
+        pool.execute_unprepared(CREATE_RECORD).await.unwrap();
+
+        let at = HyUtcDateTime(utc("2026-10-05T12:57:24.719Z"));
+        for (id, delete_at) in [(1, Some(at)), (2, None)] {
+            record::ActiveModel {
+                id: Set(id),
+                create_at: Set(at),
+                delete_at: Set(delete_at),
+            }
+            .insert(&*pool)
+            .await
+            .unwrap();
+        }
+
+        let rows = record::Entity::find().all(&*pool).await.unwrap();
+        let mut rows: Vec<_> = rows
+            .into_iter()
+            .map(|m| (m.id, m.create_at, m.delete_at))
+            .collect();
+        rows.sort_by_key(|r| r.0);
+        assert_eq!(rows, vec![(1, at, Some(at)), (2, at, None)]);
+
+        pool.execute_unprepared(
+            "INSERT INTO record (id, create_at) VALUES (3, '2026-10-05 20:57:24.719+08')",
+        )
+        .await
+        .unwrap();
+        let shanghai = record::Entity::find_by_id(3_i64)
+            .one(&*pool)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(shanghai.create_at, at);
     }
 }

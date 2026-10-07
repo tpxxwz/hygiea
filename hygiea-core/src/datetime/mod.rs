@@ -181,4 +181,29 @@ mod tests {
             serde_json::from_str(r#"{"at":"2026-10-05T12:57:24Z"}"#).unwrap();
         assert_eq!(fields.maybe, None);
     }
+
+    #[test]
+    fn rfc3339_utc_option_some_writes_z() {
+        let at = time::macros::utc_datetime!(2026-10-05 12:57:24);
+        let fields = Rfc3339Fields {
+            at,
+            maybe: Some(at),
+        };
+        assert_eq!(
+            serde_json::to_string(&fields).unwrap(),
+            r#"{"at":"2026-10-05T12:57:24Z","maybe":"2026-10-05T12:57:24Z"}"#
+        );
+    }
+
+    #[test]
+    fn rfc3339_utc_rejects_missing_offset() {
+        // 没有 offset 不知道是哪个时区的时刻，不能当成 UTC 读
+        for at in [r#""2026-10-05T12:57:24""#, r#""2026-10-05 12:57:24.719""#] {
+            let json = format!(r#"{{"at":{at}}}"#);
+            assert!(
+                serde_json::from_str::<Rfc3339Fields>(&json).is_err(),
+                "{json}"
+            );
+        }
+    }
 }

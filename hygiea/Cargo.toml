@@ -42,7 +42,7 @@ datetime-chrono = ["hygiea-core/datetime-chrono"]
 full = ["hygiea-core/full"]
 
 # ---- 组件：hygiea::db / redis / http / grpc / aws。组件 crate 自己依赖 core 的 app ----
-# 只开框架：和数据库无关的部分（SqlxUtcDateTime / SeaOrmUtcDateTime），组合 feature 依赖它们
+# 只开框架：和数据库无关的部分（HyUtcDateTime），组合 feature 依赖它们
 db-sqlx = ["dep:hygiea-db", "hygiea-db/sqlx"]
 db-seaorm = ["dep:hygiea-db", "hygiea-db/seaorm"]
 db-sqlx-postgres = ["db-sqlx", "hygiea-db/postgres"]
