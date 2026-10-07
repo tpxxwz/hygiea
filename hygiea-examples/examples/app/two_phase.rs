@@ -1,11 +1,12 @@
 //! 两阶段启动：`before_activate` 在 HTTP 开始接请求之前执行，适合建表、预热、初始化全局状态。
 //!
 //! 1. 第一阶段：SQLite 连接池建好；HTTP 只绑端口，不接请求
-//! 2. `before_activate`：建表、写入初始数据，把连接池收进全局 `AppState`
-//! 3. 第二阶段：HTTP 开始接请求，handler 从 `AppState` 取连接池
+//! 2. `before_activate`：建表、写入初始数据，用连接池组装 `AppState`，放进 Resources
+//! 3. 第二阶段：HTTP 调 router 函数，从 Resources 取出 `AppState` 交给 `with_state`，开始接请求；
+//!    handler 用 `arity0_state` 拿到它
 //! 4. `on_ready`：服务已经在接请求，适合注册到注册中心、打"已就绪"的点
 //!
-//! 请求进来时 `AppState` 一定已经初始化好了，handler 里不会遇到"还没初始化"。
+//! router 在资源都就绪后才建，所以不需要全局变量，handler 拿到的 state 一定是初始化好的。
 //!
 //! ```bash
 //! cargo run -p hygiea-examples --example app_two_phase
@@ -14,37 +15,19 @@
 //!
 //! 启动后按 Ctrl+C 退出，日志里能看到顺序：SQLite 启动 → HTTP 绑端口 → before_activate → HTTP 开始服务 → on_ready。
 
-use std::sync::OnceLock;
+use std::sync::Arc;
 
 use axum::Router;
 use axum::routing::get;
 use hygiea::app::Registry;
 use hygiea::db::{SqlxSqliteComponent, SqlxSqliteConfig, SqlxSqlitePool};
-use hygiea::http::{AxumComponent, AxumConfig, arity0};
+use hygiea::http::{AxumComponent, AxumConfig, arity0_state};
 use hygiea::{BaseErr, Result, ResultExt, err};
 
-// ---- 全局状态 ----
+// ---- 应用状态：handler 用到的资源 ----
 
 pub struct AppState {
     pub db: SqlxSqlitePool,
-}
-
-static APP_STATE: OnceLock<AppState> = OnceLock::new();
-
-impl AppState {
-    /// 只在 before_activate 里调一次
-    fn init(state: AppState) -> Result<()> {
-        APP_STATE.set(state).map_err(|_| {
-            err!(BaseErr::SysErr).with_source(std::io::Error::other("AppState already initialized"))
-        })
-    }
-
-    /// 没初始化就返回错误，不 panic
-    pub fn get() -> Result<&'static AppState> {
-        APP_STATE.get().ok_or_else(|| {
-            err!(BaseErr::SysErr).with_source(std::io::Error::other("AppState not initialized"))
-        })
-    }
 }
 
 // ---- before_activate 里做的初始化 ----
@@ -65,10 +48,10 @@ async fn migrate(db: &SqlxSqlitePool) -> Result<()> {
     Ok(())
 }
 
-// ---- handler：从全局状态取连接池 ----
+// ---- handler：从 router 的 state 取连接池 ----
 
-async fn list_users() -> Result<Vec<String>> {
-    let db = &AppState::get()?.db;
+async fn list_users(state: Arc<AppState>) -> Result<Vec<String>> {
+    let db = &state.db;
     let names: Vec<(String,)> = sqlx::query_as("SELECT name FROM users ORDER BY id")
         .fetch_all(&db.inner)
         .await
@@ -88,8 +71,13 @@ async fn main() -> Result<()> {
     let http = AxumConfig {
         host: "127.0.0.1".to_string(),
         port: 8081,
-        // router 在 add 之前就写好，handler 用到的资源到请求进来时再从 AppState 取
-        router: Some(Router::new().route("/users", get(arity0(list_users)))),
+        // activate 时才调用：before_activate 已经把 AppState 放进 Resources 了
+        router: Some(Box::new(|resources| {
+            let state = resources.require::<Arc<AppState>>()?;
+            Ok(Router::new()
+                .route("/users", get(arity0_state(list_users)))
+                .with_state(state))
+        })),
         ..Default::default()
     };
 
@@ -100,7 +88,7 @@ async fn main() -> Result<()> {
             // 这时 SQLite 已经连上、HTTP 已经绑好端口，但还没开始接请求
             let db = resources.require::<SqlxSqlitePool>()?;
             migrate(&db).await?;
-            AppState::init(AppState { db })?;
+            resources.insert(Arc::new(AppState { db }));
             tracing::info!("init done, HTTP starts serving next");
             Ok(())
         })

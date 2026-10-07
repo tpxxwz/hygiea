@@ -8,11 +8,11 @@ use crate::hy_err;
 /// 组件直接用这里的变体，底层原因用 `wrap_err` / `with_source` 挂上：
 ///
 /// ```ignore
-/// TcpListener::bind(&addr).await.wrap_err(|| err!(BaseAppErr::BindFailed, &addr))?;
+/// TcpListener::bind(&addr).await.wrap_err(|| err!(AppErr::BindFailed, &addr))?;
 /// ```
 #[derive(hy_err)]
 #[err_code_internal_module_prefix = "001"]
-pub enum BaseAppErr {
+pub enum AppErr {
     // ---- 通用 ----
     /// 通用错误：现有变体都不合适时用，cause 写清楚是哪一步、什么问题，底层原因用 `wrap_err` 挂在 source 上。
     /// 外部组件不用等这里加专门的变体就能用；某类错误用多了，再加专门的变体。

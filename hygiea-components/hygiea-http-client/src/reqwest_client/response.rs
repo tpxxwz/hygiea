@@ -30,7 +30,7 @@ use super::{Bytes, HeaderMap};
 /// 要求解码器实现它：body 整个在内存里，失败时原始响应才留得住，交给重试判断。
 ///
 /// `from_bytes` 返回 `Err` 就算这次没拿到想要的结果：`send` 把它包成
-/// [`DecodeFailed`](super::BaseHttpErr::DecodeFailed)（原错误在 source 上）并打一条带原文的失败日志；
+/// [`DecodeFailed`](super::HttpClientErr::DecodeFailed)（原错误在 source 上）并打一条带原文的失败日志；
 /// 带重试时交给重试判断。比如 `{code, msg, data}` 外壳在 `code` 不是成功时返回 `Err`，业务失败也能触发重试
 pub trait FromBytes {
     /// 解码结果，也就是 `HttpResponse.body` 的类型
@@ -118,7 +118,7 @@ impl FromBytes for () {
 
 /// 反序列化成 `T`，`HttpResponse.body` 是 `T`。
 ///
-/// 反序列化失败报 `JsonError`，`send` 再包成 [`DecodeFailed`](super::BaseHttpErr::DecodeFailed)，
+/// 反序列化失败报 `JsonError`，`send` 再包成 [`DecodeFailed`](super::HttpClientErr::DecodeFailed)，
 /// body 原文在 `DecodeFailed` 的 err_args 里；响应体和预期结构对不上时，光看 serde 的报错很难定位，排查时看它和失败日志。
 ///
 /// `T` 要同时实现 `Serialize`，日志打的是解码后重新序列化的结果：没在 `T` 里定义的字段不会出现，
@@ -163,7 +163,7 @@ impl BodyStream {
     /// 把剩下的 body 一块块写进 `writer`（文件、`Vec<u8>`、TCP 连接……任何 tokio `AsyncWrite`），
     /// 写完 flush，返回写入的总字节数。
     ///
-    /// 读失败报 `RequestFailed`；写失败报 [`WriteFailed`](super::BaseHttpErr::WriteFailed)，io 错误在 source 上。
+    /// 读失败报 `RequestFailed`；写失败报 [`WriteFailed`](super::HttpClientErr::WriteFailed)，io 错误在 source 上。
     /// 中途失败时 writer 里已经写了一部分，要不要删文件由调用方决定
     pub async fn write_to<W: AsyncWrite + Unpin>(mut self, mut writer: W) -> Result<u64> {
         let mut written = 0u64;
@@ -202,7 +202,7 @@ impl FromBody for BodyStream {
 
 #[cfg(test)]
 mod tests {
-    use crate::reqwest_client::BaseHttpErr;
+    use crate::reqwest_client::HttpClientErr;
     use crate::reqwest_client::HeaderValue;
     use hygiea_core::redact::redact;
     use serde::{Deserialize, Serialize};
@@ -351,7 +351,7 @@ mod tests {
         async fn write_error_is_write_failed() {
             let stream = one_chunk(b"x");
             let err = stream.write_to(Broken).await.unwrap_err();
-            assert!(err.is(BaseHttpErr::WriteFailed));
+            assert!(err.is(HttpClientErr::WriteFailed));
             assert!(format!("{err:#}").contains("disk full"), "{err:#}");
         }
     }

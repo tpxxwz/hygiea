@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use super::component::ComponentEntry;
 use super::signal::{ShutdownSignals, force_exit};
-use super::{BaseAppErr, Component, Name, RegistryConfig, ResourceId, Resources};
+use super::{AppErr, Component, Name, RegistryConfig, ResourceId, Resources};
 use crate::log::{BaseLogErr, LogGuard};
 use crate::{HyErr, Result, err};
 
@@ -180,14 +180,14 @@ impl Registry {
     ///    这条主要给本地开发：关闭卡住时再按一次 Ctrl+C 就能退出。
     ///
     /// 运行中如果某个组件的后台任务自己结束了（panic 或提前退出），同样关闭所有组件，
-    /// 返回 [`BaseAppErr::TaskExited`]，让进程非 0 退出、由 k8s / systemd 重启。
+    /// 返回 [`AppErr::TaskExited`]，让进程非 0 退出、由 k8s / systemd 重启。
     ///
     /// 启动完成后会打出最长关闭时间（delay + 各组件超时之和）。部署到 k8s 时，
     /// `terminationGracePeriodSeconds` 要比它大，否则关到一半会被 SIGKILL。
     ///
     /// 返回 `(结果, 日志 guard)`：
-    /// - 结果：组件第一阶段失败时是 [`BaseAppErr::ComponentStartFailed`]，第二阶段失败时是
-    ///   [`BaseAppErr::ComponentActivateFailed`]，`before_activate` / `on_ready` 的回调失败时是它们返回的错误。
+    /// - 结果：组件第一阶段失败时是 [`AppErr::ComponentStartFailed`]，第二阶段失败时是
+    ///   [`AppErr::ComponentActivateFailed`]，`before_activate` / `on_ready` 的回调失败时是它们返回的错误。
     ///   这时错误已经打过日志，调用方只需要决定怎么退出（比如 `main` 直接返回这个 `Err`，
     ///   退出码非 0），不用再打一遍；
     /// - 日志 guard：**要持有到 `main` 结束**。日志写文件靠它背后的线程，guard 一丢，
@@ -279,9 +279,9 @@ impl Registry {
     ///
     /// - Immediate 组件 A 依赖的资源由 B 提供，B 就排在 A 前面；没有依赖关系的保持 `add` 的先后
     /// - Deferred 组件的依赖只在第二阶段读，那时第一阶段都完成了，所以只检查有没有组件提供，不参与排序
-    /// - 依赖的资源没有组件提供：[`BaseAppErr::ResourceMissing`]
-    /// - 同一个资源两个组件都提供：[`BaseAppErr::DuplicateProvider`]
-    /// - 依赖成环：[`BaseAppErr::DependencyCycle`]，报出环上的组件
+    /// - 依赖的资源没有组件提供：[`AppErr::ResourceMissing`]
+    /// - 同一个资源两个组件都提供：[`AppErr::DuplicateProvider`]
+    /// - 依赖成环：[`AppErr::DependencyCycle`]，报出环上的组件
     ///
     /// 关闭按启动的逆序，所以排好之后关闭顺序也自然是对的
     fn sort_by_dependencies(&mut self) -> Result<()> {
@@ -297,7 +297,7 @@ impl Registry {
         for idx in 0..n {
             for id in self.components[idx].provides.iter().cloned() {
                 if let Some(&first) = provider.get(&id) {
-                    return Err(err!(BaseAppErr::DuplicateProvider, {
+                    return Err(err!(AppErr::DuplicateProvider, {
                         "resource": id.to_string(),
                         "first": label(first),
                         "second": label(idx),
@@ -319,7 +319,7 @@ impl Registry {
                     Some(&dep) => deps.push(dep),
                     None => {
                         return Err(err!(
-                            BaseAppErr::ResourceMissing,
+                            AppErr::ResourceMissing,
                             format!("{id}, needed by {}; no component provides it", label(idx))
                         ));
                     }
@@ -354,7 +354,7 @@ impl Registry {
                 .map(label)
                 .collect::<Vec<_>>()
                 .join(" -> ");
-            return Err(err!(BaseAppErr::DependencyCycle, cycle));
+            return Err(err!(AppErr::DependencyCycle, cycle));
         }
 
         if order.iter().enumerate().any(|(pos, &idx)| pos != idx) {
@@ -391,10 +391,10 @@ impl Registry {
                     let missing = entry.provides.iter().find(|id| !self.state.contains_id(id));
                     if let Some(id) = missing {
                         let cause = err!(
-                            BaseAppErr::ResourceMissing,
+                            AppErr::ResourceMissing,
                             format!("{id}, declared in provides() but not inserted by startup")
                         );
-                        return Err(err!(BaseAppErr::ComponentStartFailed, {
+                        return Err(err!(AppErr::ComponentStartFailed, {
                             "index": idx,
                             "type_name": type_name,
                             "name": name,
@@ -409,7 +409,7 @@ impl Registry {
                 }
                 // 这里不打日志、不关组件，由 run 统一处理，避免同一个错误记两次
                 Err(e) => {
-                    return Err(err!(BaseAppErr::ComponentStartFailed, {
+                    return Err(err!(AppErr::ComponentStartFailed, {
                         "index": idx,
                         "type_name": type_name,
                         "name": name,
@@ -449,7 +449,7 @@ impl Registry {
                     entry.handle = handle;
                 }
                 Err(e) => {
-                    return Err(err!(BaseAppErr::ComponentActivateFailed, {
+                    return Err(err!(AppErr::ComponentActivateFailed, {
                         "index": idx,
                         "type_name": type_name,
                         "name": name,
@@ -486,7 +486,7 @@ impl Registry {
             Err(e) if e.is_panic() => "panicked",
             Err(_) => "was cancelled",
         };
-        let err = err!(BaseAppErr::TaskExited, {
+        let err = err!(AppErr::TaskExited, {
             "type_name": entry.type_name,
             "name": entry.name,
             "reason": reason,

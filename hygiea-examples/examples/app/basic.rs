@@ -36,7 +36,7 @@ async fn main() -> Result<()> {
     let args = ConfigArgs::from_cli()
         .default_config_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/config/app_basic"));
     let (registry, mut config) = Registry::load_config::<AppConfig>(&args);
-    config.http.router = Some(Router::new().route("/hello", get(|| async { "hello\n" })));
+    config.http.router = Some(Box::new(|_| Ok(Router::new().route("/hello", get(|| async { "hello\n" })))));
 
     let (result, _log_guard) = registry
         .add::<SqlxSqliteComponent>(config.db)

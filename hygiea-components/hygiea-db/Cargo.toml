@@ -8,6 +8,10 @@ repository.workspace = true
 rust-version.workspace = true
 description = "Database components for hygiea: connection pools for PostgreSQL and SQLite"
 
+# 框架内置错误（HyDbErr）用项目前缀 999
+[package.metadata.hygiea]
+err_code_project_prefix = "999"
+
 # 两个维度分开选：框架（sqlx / seaorm）和数据库（postgres / sqlite / mysql），
 # 同时打开的组合才会编译，比如 ["sqlx", "postgres"] 得到 SqlxPgComponent。默认什么都不开
 [features]

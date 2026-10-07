@@ -3,7 +3,7 @@
 use fred::prelude::*;
 use fred::types::config::ClusterDiscoveryPolicy;
 use hygiea_core::app::{
-    BaseAppErr, CancellationToken, ImmediateComponent, Name, ResourceId, Resources, component,
+    AppErr, CancellationToken, ImmediateComponent, Name, ResourceId, Resources, component,
 };
 use hygiea_core::{Result, ResultExt, err};
 use serde::Deserialize;
@@ -130,10 +130,10 @@ impl FredRedisPool {
             Some(policy),
             config.pool_size,
         )
-        .wrap_err(|| err!(BaseAppErr::InvalidConfig, "create Redis pool failed"))?;
+        .wrap_err(|| err!(AppErr::InvalidConfig, "create Redis pool failed"))?;
         pool.init().await.wrap_err(|| {
             err!(
-                BaseAppErr::ConnectFailed,
+                AppErr::ConnectFailed,
                 format!("redis ({})", config.mode)
             )
         })?;
@@ -200,7 +200,7 @@ impl ImmediateComponent for RedisComponent {
             // 发 QUIT 正常断开所有连接
             pool.quit()
                 .await
-                .wrap_err(|| err!(BaseAppErr::StopFailed, "quit redis connections"))?;
+                .wrap_err(|| err!(AppErr::StopFailed, "quit redis connections"))?;
             tracing::info!("Redis connection pool closed");
         }
         Ok(())
@@ -224,7 +224,7 @@ fn build_fred_config(config: &RedisConfig) -> Result<Config> {
                 .collect();
             if hosts.is_empty() {
                 return Err(err!(
-                    BaseAppErr::InvalidConfig,
+                    AppErr::InvalidConfig,
                     "cluster mode requires at least one node in 'nodes'"
                 ));
             }
@@ -241,7 +241,7 @@ fn build_fred_config(config: &RedisConfig) -> Result<Config> {
                 .collect();
             if hosts.is_empty() {
                 return Err(err!(
-                    BaseAppErr::InvalidConfig,
+                    AppErr::InvalidConfig,
                     "sentinel mode requires at least one node in 'nodes'"
                 ));
             }
@@ -262,7 +262,7 @@ fn build_fred_config(config: &RedisConfig) -> Result<Config> {
         }
         other => {
             return Err(err!(
-                BaseAppErr::InvalidConfig,
+                AppErr::InvalidConfig,
                 format!("invalid redis mode '{other}', expected: standalone, cluster, sentinel")
             ));
         }

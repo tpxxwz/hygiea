@@ -170,7 +170,7 @@ mod decoding {
         let err = fetch::<Vec<AddressInfo>>(&base, "/bad-data")
             .await
             .unwrap_err();
-        assert!(err.is(BaseHttpErr::DecodeFailed), "{err:#}");
+        assert!(err.is(HttpClientErr::DecodeFailed), "{err:#}");
         let source = err
             .source()
             .and_then(|e| e.downcast_ref::<HyErr>())
@@ -186,7 +186,7 @@ mod decoding {
         let err = fetch::<Vec<AddressInfo>>(&base, "/server-err")
             .await
             .unwrap_err();
-        assert!(err.is(BaseHttpErr::NonSuccessStatus));
+        assert!(err.is(HttpClientErr::NonSuccessStatus));
         assert_eq!(err.err_args()["status"], 500);
     }
 }

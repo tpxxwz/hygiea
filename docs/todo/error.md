@@ -23,9 +23,9 @@ hygiea 的目标是企业级服务端架构：一套系统对外输出的错误�
 - 做法：`#[derive(hy_err)]` 给每个 enum 额外生成 `fn from_err_code(code: &str) -> Option<Self>`（编译期写好的 `match`，
   不查表），HyErr 加 `err.kind::<E>() -> Option<E>`，内部就是 `E::from_err_code(self.err_code())`。拿到 enum 后 `match`：
   ```rust
-  match err.kind::<BaseHttpErr>() {
-      Some(BaseHttpErr::NonSuccessStatus) => …,
-      Some(BaseHttpErr::RequestFailed) => …,
+  match err.kind::<HttpClientErr>() {
+      Some(HttpClientErr::NonSuccessStatus) => …,
+      Some(HttpClientErr::RequestFailed) => …,
       _ => …,
   }
   ```

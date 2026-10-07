@@ -303,7 +303,7 @@ pub mod __private {
 /// ```ignore
 /// err!(BaseErr::SysErr)                                  // 模板没有变量
 /// err!(BaseErr::DateError, "parse failed")               // 模板正好一个变量，直接给值，key 从模板里取
-/// err!(BaseHttpErr::RequestFailed, { "method": m, "url": u })    // 显式写出每个 key
+/// err!(HttpClientErr::RequestFailed, { "method": m, "url": u })    // 显式写出每个 key
 /// ```
 ///
 /// 写法和模板对不上（没变量却传了参数、有变量却没传、多变量却用了单值简写）在编译期报错。
@@ -413,9 +413,9 @@ macro_rules! bail {
 }
 
 /// 框架内置错误：默认启用的模块（错误处理、datetime、string 等）和 redact 用到的都在这里。
-/// 需要开 feature 的模块各有自己的错误 enum，比如 http 的 `hygiea::http_client::reqwest_client::BaseHttpErr`。
+/// 需要开 feature 的模块各有自己的错误 enum，比如 http 的 `hygiea::http_client::reqwest_client::HttpClientErr`。
 /// 它们共用项目前缀 999（配在 hygiea-core 的 Cargo.toml）。`BaseErr` 不带模块前缀，5 位业务码随意分配，
-/// 兜底的 `SysErr` 是 99999；`BaseHttpErr` 用模块前缀 01。是否撞码由 `init()` 的全局查重保证
+/// 兜底的 `SysErr` 是 99999；`HttpClientErr` 用内部模块前缀 101。是否撞码由 `init()` 的全局查重保证
 #[derive(hy_err)]
 pub enum BaseErr {
     /// Generic system error. 对外只说 "System Error"，内部原因用 `with_source` 挂上

@@ -101,7 +101,7 @@ mod attempts {
             .unwrap_err();
         assert_eq!(count.load(Ordering::SeqCst), 3);
         assert_eq!(recorder.attempts(), [1, 2]);
-        assert!(err.is(BaseHttpErr::NonSuccessStatus));
+        assert!(err.is(HttpClientErr::NonSuccessStatus));
         assert_eq!(err.err_args()["body"], r#"{"n":3}"#);
     }
 
@@ -117,7 +117,7 @@ mod attempts {
             ))
             .await
             .unwrap_err();
-        assert!(err.is(BaseHttpErr::NonSuccessStatus));
+        assert!(err.is(HttpClientErr::NonSuccessStatus));
         assert_eq!(count.load(Ordering::SeqCst), 1);
         assert!(recorder.attempts().is_empty());
     }
@@ -196,7 +196,7 @@ mod stages {
                 RetryCtx::new(1, move |_: usize, cfg: RequestConfig, f: SendFailure| {
                     let record = record.clone();
                     async move {
-                        assert!(f.err.is(BaseHttpErr::DecodeFailed), "{:#}", f.err);
+                        assert!(f.err.is(HttpClientErr::DecodeFailed), "{:#}", f.err);
                         let FailStage::Decode(resp) = f.stage else {
                             return RetryDecision::Stop(f.err);
                         };
@@ -239,7 +239,7 @@ mod stages {
             ))
             .await
             .unwrap_err();
-        assert!(err.is(BaseHttpErr::RequestFailed));
+        assert!(err.is(HttpClientErr::RequestFailed));
         assert_eq!(*seen.lock().unwrap(), Some((false, true, None)));
     }
 
@@ -282,7 +282,7 @@ mod decisions {
             ))
             .await
             .unwrap_err();
-        assert!(err.is(BaseHttpErr::NonSuccessStatus));
+        assert!(err.is(HttpClientErr::NonSuccessStatus));
         assert_eq!(count.load(Ordering::SeqCst), 1);
     }
 
@@ -345,7 +345,7 @@ mod decisions {
             ))
             .await
             .unwrap_err();
-        assert!(err.is(BaseHttpErr::NonSuccessStatus));
+        assert!(err.is(HttpClientErr::NonSuccessStatus));
         assert_eq!(count.load(Ordering::SeqCst), 4);
     }
 
@@ -360,7 +360,7 @@ mod decisions {
             ))
             .await
             .unwrap_err();
-        assert!(err.is(BaseHttpErr::InvalidUrl));
+        assert!(err.is(HttpClientErr::InvalidUrl));
         assert!(recorder.attempts().is_empty());
     }
 }

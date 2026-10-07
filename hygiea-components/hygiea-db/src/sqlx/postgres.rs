@@ -8,7 +8,7 @@ use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
 
 use hygiea_core::app::{
-    BaseAppErr, CancellationToken, ImmediateComponent, Name, ResourceId, Resources, component,
+    AppErr, CancellationToken, ImmediateComponent, Name, ResourceId, Resources, component,
 };
 use hygiea_core::{Result, ResultExt, err};
 
@@ -132,7 +132,7 @@ impl SqlxPgPool {
         }
         .wrap_err(|| {
             err!(
-                BaseAppErr::ConnectFailed,
+                AppErr::ConnectFailed,
                 format!(
                     "postgres {}:{}/{}",
                     config.host, config.port, config.database

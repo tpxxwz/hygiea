@@ -4,7 +4,7 @@
 
 use std::error::Error as _;
 
-use hygiea_core::app::{BaseAppErr, Component, Name, Registry, ResourceId, Resources};
+use hygiea_core::app::{AppErr, Component, Name, Registry, ResourceId, Resources};
 use hygiea_core::{HyErr, Result};
 use hygiea_http_client::reqwest_client::{
     Json, Method, RequestConfig, ReqwestClient, ReqwestComponent, ReqwestConfig,
@@ -101,7 +101,7 @@ async fn each_named_client_uses_its_own_config() {
 }
 
 /// 配置建不出 ReqwestClient 时启动失败：Registry 报 ComponentStartFailed，
-/// source 是组件报的 BaseAppErr::InvalidConfig；业务回调不会执行
+/// source 是组件报的 AppErr::InvalidConfig；业务回调不会执行
 #[tokio::test]
 async fn invalid_config_fails_startup() {
     let config = ReqwestConfig {
@@ -114,10 +114,10 @@ async fn invalid_config_fails_startup() {
         .run()
         .await;
     let err = result.unwrap_err();
-    assert!(err.is(BaseAppErr::ComponentStartFailed), "{err:#}");
+    assert!(err.is(AppErr::ComponentStartFailed), "{err:#}");
     let source = err
         .source()
         .and_then(|e| e.downcast_ref::<HyErr>())
         .unwrap();
-    assert!(source.is(BaseAppErr::InvalidConfig), "{err:#}");
+    assert!(source.is(AppErr::InvalidConfig), "{err:#}");
 }

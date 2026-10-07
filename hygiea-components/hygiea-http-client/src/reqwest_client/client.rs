@@ -7,7 +7,7 @@ use reqwest::redirect::Policy;
 use serde::Deserialize;
 
 use hygiea_core::app::{
-    BaseAppErr, CancellationToken, ImmediateComponent, Name, ResourceId, Resources, component,
+    AppErr, CancellationToken, ImmediateComponent, Name, ResourceId, Resources, component,
 };
 use hygiea_core::{Result, ResultExt, err};
 
@@ -215,7 +215,7 @@ impl ReqwestConfig {
     }
 
     /// 造出 [`ReqwestClient`]。请求头无效时返回 `InvalidConfig`；代理 URL 或 reqwest 构建失败时返回
-    /// [`ClientBuildFailed`](super::BaseHttpErr::ClientBuildFailed)，reqwest 错误保留在 source 上
+    /// [`ClientBuildFailed`](super::HttpClientErr::ClientBuildFailed)，reqwest 错误保留在 source 上
     pub fn build(self) -> Result<ReqwestClient> {
         // debug 状态要用的配置先取出来；reqwest 先校验（UA 不合法时报 ClientBuildFailed），再算 debug 状态
         #[cfg(feature = "debug-log")]
@@ -267,7 +267,7 @@ fn client_builder(config: ReqwestConfig) -> Result<ClientBuilder> {
         builder = builder.user_agent(ua);
     }
     let headers = HeaderMap::try_from(config.default_headers)
-        .map_err(|e| err!(BaseAppErr::InvalidConfig, format!("default headers: {e}")))?;
+        .map_err(|e| err!(AppErr::InvalidConfig, format!("default headers: {e}")))?;
     if !headers.is_empty() {
         builder = builder.default_headers(headers);
     }
@@ -321,7 +321,7 @@ impl ImmediateComponent for ReqwestComponent {
             .config
             .clone()
             .build()
-            .wrap_err(|| err!(BaseAppErr::InvalidConfig, "build HTTP client"))?;
+            .wrap_err(|| err!(AppErr::InvalidConfig, "build HTTP client"))?;
         resources.insert_named(self.name.clone(), client);
         Ok(None)
     }
@@ -329,7 +329,7 @@ impl ImmediateComponent for ReqwestComponent {
 
 #[cfg(test)]
 mod tests {
-    use crate::reqwest_client::error::BaseHttpErr;
+    use crate::reqwest_client::error::HttpClientErr;
     use std::error::Error as _;
     use test_support::headers::header_map;
 
@@ -388,7 +388,7 @@ mod tests {
                 let err = ReqwestConfig::default()
                     .default_headers(header_map(&[(name, "x")]))
                     .unwrap_err();
-                assert!(err.is(BaseHttpErr::InvalidHeader), "{name}");
+                assert!(err.is(HttpClientErr::InvalidHeader), "{name}");
             }
         }
 
@@ -485,7 +485,7 @@ mod tests {
             }
             .build()
             .unwrap_err();
-            assert!(err.is(BaseHttpErr::ClientBuildFailed));
+            assert!(err.is(HttpClientErr::ClientBuildFailed));
             assert!(err.source().is_some());
         }
     }

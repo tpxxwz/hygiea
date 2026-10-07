@@ -1,4 +1,4 @@
-//! http 模块的错误。和 [`BaseErr`](crate::BaseErr) 共用项目前缀 999，模块前缀是 01，错误码全局唯一
+//! http 模块的错误。和 [`BaseErr`](crate::BaseErr) 共用项目前缀 999，内部模块前缀是 101，错误码全局唯一
 
 use hygiea_core::{HyErr, err, hy_err};
 
@@ -17,8 +17,8 @@ use super::{Method, StatusCode};
 /// 原始错误挂在 source 上，要判断超时、连接失败之类决定重试时直接 downcast：
 /// `err.source().and_then(|e| e.downcast_ref::<reqwest::Error>())`
 #[derive(hy_err)]
-#[err_code_internal_module_prefix = "100"]
-pub enum BaseHttpErr {
+#[err_code_internal_module_prefix = "101"]
+pub enum HttpClientErr {
     // ---- 建 client ----
     /// `ReqwestConfig::build` 失败，比如 TLS 后端初始化失败、代理配置不合法；原始错误挂在 source 上
     #[error(err_code = "01", err_tpl = "Http client build failed")]
@@ -79,23 +79,23 @@ pub enum BaseHttpErr {
 
 /// URL 不能用。解析失败时调用方再 `.with_source(e)` 挂上解析错误
 pub(super) fn invalid_url(url: &str) -> HyErr {
-    err!(BaseHttpErr::InvalidUrl, url)
+    err!(HttpClientErr::InvalidUrl, url)
 }
 
 /// query params 编码不了。`url` 是调用方写的 url 字符串（不含 params）
 pub(super) fn invalid_params(method: &Method, url: &str, e: reqwest::Error) -> HyErr {
-    err!(BaseHttpErr::InvalidParams, { "method": method.as_str(), "url": url })
+    err!(HttpClientErr::InvalidParams, { "method": method.as_str(), "url": url })
         .with_source(e.without_url())
 }
 
 /// 请求头不合法。`cause` 会渲染进对外消息，不要放凭据之类的原文
 pub(super) fn invalid_header(cause: impl Into<String>) -> HyErr {
-    err!(BaseHttpErr::InvalidHeader, cause.into())
+    err!(HttpClientErr::InvalidHeader, cause.into())
 }
 
 /// 前面几项都验证通过、reqwest 构建请求时仍然失败
 pub(super) fn request_build_failed(method: &Method, url: &str, e: reqwest::Error) -> HyErr {
-    err!(BaseHttpErr::RequestBuildFailed, { "method": method.as_str(), "url": url })
+    err!(HttpClientErr::RequestBuildFailed, { "method": method.as_str(), "url": url })
         .with_source(e.without_url())
 }
 
@@ -106,7 +106,7 @@ pub(super) fn request_failed(
     status: Option<StatusCode>,
     e: reqwest::Error,
 ) -> HyErr {
-    err!(BaseHttpErr::RequestFailed, {
+    err!(HttpClientErr::RequestFailed, {
         "method": method.as_str(),
         "url": url,
         "status": status.map(|s| s.as_u16()),
@@ -117,12 +117,12 @@ pub(super) fn request_failed(
 /// 非 2xx。`body` 放在 err_args 里，打日志可见，不渲染进对外消息
 /// `ReqwestConfig::build` 失败
 pub(super) fn client_build_failed(e: reqwest::Error) -> HyErr {
-    err!(BaseHttpErr::ClientBuildFailed).with_source(e)
+    err!(HttpClientErr::ClientBuildFailed).with_source(e)
 }
 
 /// 写 writer 失败，io 错误挂在 source 上
 pub(super) fn write_failed(e: std::io::Error) -> HyErr {
-    err!(BaseHttpErr::WriteFailed).with_source(e)
+    err!(HttpClientErr::WriteFailed).with_source(e)
 }
 
 pub(super) fn non_success_status(
@@ -131,7 +131,7 @@ pub(super) fn non_success_status(
     url: &str,
     body: &str,
 ) -> HyErr {
-    err!(BaseHttpErr::NonSuccessStatus, {
+    err!(HttpClientErr::NonSuccessStatus, {
         "status": status.as_u16(),
         "method": method.as_str(),
         "url": url,
@@ -147,7 +147,7 @@ pub(super) fn decode_failed(
     body: &str,
     source: HyErr,
 ) -> HyErr {
-    err!(BaseHttpErr::DecodeFailed, {
+    err!(HttpClientErr::DecodeFailed, {
         "method": method.as_str(),
         "url": url,
         "status": status.as_u16(),
@@ -170,21 +170,21 @@ mod tests {
         #[test]
         fn invalid_url_carries_url_arg() {
             let err = invalid_url("not a url");
-            assert!(err.is(BaseHttpErr::InvalidUrl));
+            assert!(err.is(HttpClientErr::InvalidUrl));
             assert_eq!(err.err_args()["url"], "not a url");
         }
 
         #[test]
         fn invalid_header_carries_cause() {
             let err = invalid_header("bad value");
-            assert!(err.is(BaseHttpErr::InvalidHeader));
+            assert!(err.is(HttpClientErr::InvalidHeader));
             assert_eq!(err.err_args()["cause"], "bad value");
         }
 
         #[test]
         fn write_failed_has_io_source() {
             let err = write_failed(std::io::Error::other("disk full"));
-            assert!(err.is(BaseHttpErr::WriteFailed));
+            assert!(err.is(HttpClientErr::WriteFailed));
             assert!(
                 err.source()
                     .and_then(|e| e.downcast_ref::<std::io::Error>())
@@ -196,7 +196,7 @@ mod tests {
         fn non_success_status_carries_status_method_url_body() {
             let err =
                 non_success_status(&Method::POST, StatusCode::BAD_GATEWAY, "http://h/x", "body");
-            assert!(err.is(BaseHttpErr::NonSuccessStatus));
+            assert!(err.is(HttpClientErr::NonSuccessStatus));
             assert_eq!(err.err_args()["status"], 502);
             assert_eq!(err.err_args()["method"], "POST");
             assert_eq!(err.err_args()["url"], "http://h/x");
@@ -208,7 +208,7 @@ mod tests {
         fn decode_failed_carries_fields_and_source() {
             let inner = err!(hygiea_core::BaseErr::JsonError, "bad json");
             let err = decode_failed(&Method::GET, StatusCode::OK, "http://h/x", "{", inner);
-            assert!(err.is(BaseHttpErr::DecodeFailed));
+            assert!(err.is(HttpClientErr::DecodeFailed));
             assert_eq!(err.err_args()["status"], 200);
             assert_eq!(err.err_args()["method"], "GET");
             assert_eq!(err.err_args()["url"], "http://h/x");
@@ -247,7 +247,7 @@ mod tests {
         async fn invalid_params() {
             let e = reqwest_error_with_query().await;
             let err = super::invalid_params(&Method::GET, "http://h/x", e);
-            assert!(err.is(BaseHttpErr::InvalidParams));
+            assert!(err.is(HttpClientErr::InvalidParams));
             let rendered = format!("{err:#}");
             assert!(!rendered.contains("token=secret"), "{rendered}");
         }
@@ -256,7 +256,7 @@ mod tests {
         async fn request_build_failed() {
             let e = reqwest_error_with_query().await;
             let err = super::request_build_failed(&Method::GET, "http://h/x", e);
-            assert!(err.is(BaseHttpErr::RequestBuildFailed));
+            assert!(err.is(HttpClientErr::RequestBuildFailed));
             let rendered = format!("{err:#}");
             assert!(!rendered.contains("token=secret"), "{rendered}");
         }
@@ -265,7 +265,7 @@ mod tests {
         async fn request_failed() {
             let e = reqwest_error_with_query().await;
             let err = super::request_failed(&Method::GET, "http://h/x", None, e);
-            assert!(err.is(BaseHttpErr::RequestFailed));
+            assert!(err.is(HttpClientErr::RequestFailed));
             let rendered = format!("{err:#}");
             assert!(!rendered.contains("token=secret"), "{rendered}");
         }
@@ -278,7 +278,7 @@ mod tests {
         let base = closed_port_url().await;
         let e = reqwest::get(base).await.unwrap_err();
         let err = client_build_failed(e);
-        assert!(err.is(BaseHttpErr::ClientBuildFailed));
+        assert!(err.is(HttpClientErr::ClientBuildFailed));
         assert!(err.source().is_some());
     }
 }

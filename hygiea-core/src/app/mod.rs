@@ -163,7 +163,7 @@ mod signal;
 
 pub use component::{Component, Deferred, DeferredComponent, Immediate, ImmediateComponent};
 pub use config::{ConfigArgs, IntoRegistryConfig, RegistryConfig};
-pub use error::BaseAppErr;
+pub use error::AppErr;
 /// 标在 `impl ImmediateComponent for ..` / `impl DeferredComponent for ..` 上，把 [`Component`] 的项
 /// （`Config`、`build`、`provides`、`depends_on`、`stop`、`shutdown_timeout`）和启动方法写在一个 impl 块里，
 /// 展开成 `impl Component`（按 trait 填好 `Kind`）和启动 trait 的 impl 两个，都带上 `#[async_trait]`。

@@ -126,7 +126,7 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
 
     /// 把本配置铺到 reqwest 的 `RequestBuilder` 上。
     ///
-    /// 认证头的值在这里构造，值里有换行之类的非法字符时返回 [`InvalidHeader`](super::BaseHttpErr::InvalidHeader)；
+    /// 认证头的值在这里构造，值里有换行之类的非法字符时返回 [`InvalidHeader`](super::HttpClientErr::InvalidHeader)；
     /// body 构造失败时返回 [`IntoBody::apply`] 报的错。
     /// URL、params、body 的错误和 reqwest 一样，要到 `build()` 时才暴露；`send` 会在那之前逐项检查
     pub(super) fn into_request(self, client: &Client) -> Result<RequestBuilder> {
@@ -195,7 +195,7 @@ impl<Resp> HttpResponse<Resp> {
 
 #[cfg(test)]
 mod tests {
-    use crate::reqwest_client::BaseHttpErr;
+    use crate::reqwest_client::HttpClientErr;
     use crate::reqwest_client::{HeaderValue, Json};
     use hygiea_core::redact::redact;
     use serde::Serialize;
@@ -456,7 +456,7 @@ mod tests {
                     .auth(auth)
                     .into_request(&Client::new())
                     .unwrap_err();
-                assert!(err.is(BaseHttpErr::InvalidHeader));
+                assert!(err.is(HttpClientErr::InvalidHeader));
                 let msg = format!("{err:#}");
                 assert!(!msg.contains("secret"), "{msg}");
             }

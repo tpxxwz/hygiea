@@ -19,7 +19,7 @@ use reqwest::header::{ACCEPT, Entry, HeaderValue, USER_AGENT};
 use serde::Serialize;
 use serde_json::Value;
 
-use hygiea_core::app::BaseAppErr;
+use hygiea_core::app::AppErr;
 use hygiea_core::{BaseErr, HyErr, Result, ResultExt, err};
 
 use super::body::IntoBody;
@@ -106,11 +106,11 @@ fn client_default_headers(
     headers.insert(ACCEPT, HeaderValue::from_static("*/*"));
     if let Some(ua) = user_agent {
         let ua = HeaderValue::try_from(ua)
-            .map_err(|e| err!(BaseAppErr::InvalidConfig, format!("user agent: {e}")))?;
+            .map_err(|e| err!(AppErr::InvalidConfig, format!("user agent: {e}")))?;
         headers.insert(USER_AGENT, ua);
     }
     let configured = HeaderMap::try_from(default_headers)
-        .map_err(|e| err!(BaseAppErr::InvalidConfig, format!("default headers: {e}")))?;
+        .map_err(|e| err!(AppErr::InvalidConfig, format!("default headers: {e}")))?;
     for (name, value) in &configured {
         headers.insert(name.clone(), value.clone());
     }

@@ -3,7 +3,7 @@
 
 use serde::Deserialize;
 
-use hygiea_core::app::BaseAppErr;
+use hygiea_core::app::AppErr;
 use hygiea_core::{HyErr, err};
 
 use super::error::client_build_failed;
@@ -215,12 +215,12 @@ impl TryFrom<ProxyConfig> for Proxy {
         }
         if let Some(value) = config.custom_http_auth {
             let value = HeaderValue::try_from(value)
-                .map_err(|e| err!(BaseAppErr::InvalidConfig, format!("proxy auth: {e}")))?;
+                .map_err(|e| err!(AppErr::InvalidConfig, format!("proxy auth: {e}")))?;
             proxy = proxy.custom_http_auth(value);
         }
         if let Some(headers) = config.headers {
             let headers = HeaderMap::try_from(headers)
-                .map_err(|e| err!(BaseAppErr::InvalidConfig, format!("proxy headers: {e}")))?;
+                .map_err(|e| err!(AppErr::InvalidConfig, format!("proxy headers: {e}")))?;
             proxy = proxy.headers(headers);
         }
         if let Some(no_proxy) = config.no_proxy {

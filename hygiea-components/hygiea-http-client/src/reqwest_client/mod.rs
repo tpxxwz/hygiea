@@ -13,7 +13,7 @@
 //! | logging.rs | 日志：[`FailedLogLevel`]，start / success / failed 三种日志 |
 //! | text.rs | 字节转成日志 / 错误里的文本（charset、控制字符），调用链在它开头 |
 //! | debug.rs | debug 日志（`debug-log` feature，整个模块在这个 feature 下）：开关、两条 JSON 日志的结构和拼法 |
-//! | error.rs | [`BaseHttpErr`]：各阶段的错误 |
+//! | error.rs | [`HttpClientErr`]：各阶段的错误 |
 //!
 //! 依赖方向：`retry → send → request / headers / body / response / logging / text / error`，`client → config`。
 //! `send` 和 `response` 互相引用：`FromBody::from_body` 的参数 [`RespBody`] 绑定着正在进行的那次发送。
@@ -41,7 +41,7 @@ pub use config::{
     HeaderBytes, HeaderMapConfig, HeaderText, HeaderValueConfig, ProxyBasicAuth, ProxyConfig,
     ProxyKind,
 };
-pub use error::BaseHttpErr;
+pub use error::HttpClientErr;
 pub use headers::{Auth, IntoHeaders};
 pub use logging::FailedLogLevel;
 pub use request::{HttpResponse, RequestConfig};

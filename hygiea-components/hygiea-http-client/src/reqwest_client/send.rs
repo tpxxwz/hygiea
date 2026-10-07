@@ -94,7 +94,7 @@ use super::{Bytes, HeaderMap, Method, ReqwestClient, StatusCode, Url};
 
 impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
     /// 发请求，2xx 时按 `Decoder` 把 body 变成 `Decoder::Output`（见 [`FromBody`]），否则返回
-    /// `BaseHttpErr::NonSuccessStatus`。要原样的字节就用 [`Bytes`](super::Bytes)（整个读进内存）；
+    /// `HttpClientErr::NonSuccessStatus`。要原样的字节就用 [`Bytes`](super::Bytes)（整个读进内存）；
     /// 大文件用 [`BodyStream`](super::BodyStream) 流式读，或者 `write_to` 直接写进文件。
     /// 解码器写在 turbofish 里（同一个 `Output` 可能来自不同解码器，没法从接收处的类型推断）：
     ///
@@ -111,14 +111,14 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
     ///
     /// 失败时按阶段返回不同的错误：
     /// - 发出之前按 URL → 日志预览 → params → 认证头 → body 的顺序逐项检查，报第一个有问题的：
-    ///   [`InvalidUrl`](super::BaseHttpErr::InvalidUrl)、`JsonError`（预览序列化不了）、
-    ///   [`InvalidParams`](super::BaseHttpErr::InvalidParams)、[`InvalidHeader`](super::BaseHttpErr::InvalidHeader)、
-    ///   最后构建失败是 [`RequestBuildFailed`](super::BaseHttpErr::RequestBuildFailed)。请求不发出去，也不打失败日志；
+    ///   [`InvalidUrl`](super::HttpClientErr::InvalidUrl)、`JsonError`（预览序列化不了）、
+    ///   [`InvalidParams`](super::HttpClientErr::InvalidParams)、[`InvalidHeader`](super::HttpClientErr::InvalidHeader)、
+    ///   最后构建失败是 [`RequestBuildFailed`](super::HttpClientErr::RequestBuildFailed)。请求不发出去，也不打失败日志；
     ///   带重试时也直接返回，不交给重试判断
     /// - 发出之后的传输失败（超时、连不上、TLS 握手失败、读 body 中断）是
-    ///   [`RequestFailed`](super::BaseHttpErr::RequestFailed)，并打一条失败日志
-    /// - 非 2xx 是 [`NonSuccessStatus`](super::BaseHttpErr::NonSuccessStatus)；2xx 但 [`FromBytes::from_bytes`](super::FromBytes::from_bytes)
-    ///   失败是 [`DecodeFailed`](super::BaseHttpErr::DecodeFailed)。状态码和 body 原文在 `err_args` 里
+    ///   [`RequestFailed`](super::HttpClientErr::RequestFailed)，并打一条失败日志
+    /// - 非 2xx 是 [`NonSuccessStatus`](super::HttpClientErr::NonSuccessStatus)；2xx 但 [`FromBytes::from_bytes`](super::FromBytes::from_bytes)
+    ///   失败是 [`DecodeFailed`](super::HttpClientErr::DecodeFailed)。状态码和 body 原文在 `err_args` 里
     ///   （打日志可见，不渲染进对外消息）
     ///
     /// 响应日志：非 2xx 和解码失败打原文，排查问题要看对方到底回了什么；
@@ -277,7 +277,7 @@ pub struct SendFailure {
 #[derive(Debug)]
 pub enum FailStage {
     /// 没拿到完整响应：发送失败（连不上、超时、TLS 握手失败），或者读 body 时中断。
-    /// 读 body 中断时 `status` 有值。`err` 是 [`RequestFailed`](super::BaseHttpErr::RequestFailed)
+    /// 读 body 中断时 `status` 有值。`err` 是 [`RequestFailed`](super::HttpClientErr::RequestFailed)
     Transport {
         /// reqwest 报的超时（client 或本次请求的 timeout、read_timeout、connect_timeout）
         timeout: bool,
@@ -286,10 +286,10 @@ pub enum FailStage {
         status: Option<StatusCode>,
     },
     /// 非 2xx，原始的 status、headers、body 字节都在这里（`Retry-After` 之类的头可以直接读）。
-    /// `err` 是 [`NonSuccessStatus`](super::BaseHttpErr::NonSuccessStatus)
+    /// `err` 是 [`NonSuccessStatus`](super::HttpClientErr::NonSuccessStatus)
     Status(Box<HttpResponse<Bytes>>),
     /// 2xx 但 [`FromBytes::from_bytes`] 失败，原始响应同样保留。
-    /// `err` 是 [`DecodeFailed`](super::BaseHttpErr::DecodeFailed)，`from_bytes` 报的错在它的 source 上
+    /// `err` 是 [`DecodeFailed`](super::HttpClientErr::DecodeFailed)，`from_bytes` 报的错在它的 source 上
     Decode(Box<HttpResponse<Bytes>>),
 }
 
@@ -448,7 +448,7 @@ impl SendCtx {
         }
     }
 
-    /// 发出之后的传输失败（发送、读 body）：包成 BaseHttpErr::RequestFailed、打一条失败日志。
+    /// 发出之后的传输失败（发送、读 body）：包成 HttpClientErr::RequestFailed、打一条失败日志。
     /// 读 body 时已经有状态码，发送失败时没有
     pub(super) fn transport_failed(
         &self,
@@ -568,7 +568,7 @@ impl SendCtx {
 }
 
 /// 还没读的响应体，交给 [`FromBody::from_body`]：读完用 [`RespBody::bytes`]，流式接过去用
-/// [`RespBody::into_stream`]。读的过程中失败报 [`RequestFailed`](super::BaseHttpErr::RequestFailed)，并打失败日志
+/// [`RespBody::into_stream`]。读的过程中失败报 [`RequestFailed`](super::HttpClientErr::RequestFailed)，并打失败日志
 pub struct RespBody<'a> {
     resp: reqwest::Response,
     ctx: &'a SendCtx,
@@ -606,7 +606,7 @@ impl<'a> RespBody<'a> {
     }
 
     /// 读完 body 并按 [`FromBytes`] 解码。解码失败时打失败日志，报
-    /// [`DecodeFailed`](super::BaseHttpErr::DecodeFailed)，原始响应留在 [`FailStage::Decode`](super::FailStage::Decode) 里。
+    /// [`DecodeFailed`](super::HttpClientErr::DecodeFailed)，原始响应留在 [`FailStage::Decode`](super::FailStage::Decode) 里。
     /// 外层 `Err` 是打日志失败
     pub(super) async fn decode<Decoder: FromBytes>(
         self,
@@ -638,7 +638,7 @@ impl<'a> RespBody<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::reqwest_client::BaseHttpErr;
+    use crate::reqwest_client::HttpClientErr;
     use crate::reqwest_client::headers::Auth;
     use crate::reqwest_client::{Form, Json, ReqwestConfig};
     use hygiea_core::BaseErr;
@@ -687,7 +687,7 @@ mod tests {
         /// 发请求并断言：报的是 `kind`、没有打任何日志，返回错误方便继续检查
         async fn send_err<P: Serialize + Send, B: IntoBody + Send>(
             cfg: RequestConfig<P, B>,
-            kind: BaseHttpErr,
+            kind: HttpClientErr,
         ) -> HyErr {
             let (out, _guard) = capture();
             let err = cfg.send::<Bytes>(&client()).await.unwrap_err();
@@ -701,7 +701,7 @@ mod tests {
         async fn invalid_url() {
             let err = send_err(
                 RequestConfig::plain(Method::GET, "not a url"),
-                BaseHttpErr::InvalidUrl,
+                HttpClientErr::InvalidUrl,
             )
             .await;
             assert_eq!(err.err_args()["url"], "not a url");
@@ -716,7 +716,7 @@ mod tests {
             for url in ["ftp://127.0.0.1/f", "mailto:a@example.com", "file:///tmp/x"] {
                 send_err(
                     RequestConfig::plain(Method::GET, url),
-                    BaseHttpErr::InvalidUrl,
+                    HttpClientErr::InvalidUrl,
                 )
                 .await;
             }
@@ -727,7 +727,7 @@ mod tests {
         async fn url_is_checked_first() {
             send_err(
                 RequestConfig::with_params(Method::GET, "not a url", Unserializable),
-                BaseHttpErr::InvalidUrl,
+                HttpClientErr::InvalidUrl,
             )
             .await;
         }
@@ -749,7 +749,7 @@ mod tests {
         async fn unencodable_params() {
             let err = send_err(
                 RequestConfig::with_params(Method::GET, URL, [("a", [1, 2])]),
-                BaseHttpErr::InvalidParams,
+                HttpClientErr::InvalidParams,
             )
             .await;
             assert_eq!(err.err_args()["url"], URL);
@@ -765,7 +765,7 @@ mod tests {
                 scheme: "X".into(),
                 credentials: "secret\nvalue".into(),
             });
-            let err = send_err(cfg, BaseHttpErr::InvalidHeader).await;
+            let err = send_err(cfg, HttpClientErr::InvalidHeader).await;
             assert!(!format!("{err:#}").contains("secret"));
         }
 
@@ -777,7 +777,7 @@ mod tests {
             let body =
                 Multipart::new().part("avatar", MultipartPart::bytes("x").mime("not a mime"));
             let cfg = RequestConfig::with_body(Method::POST, URL, body);
-            let err = send_err(cfg, BaseHttpErr::InvalidHeader).await;
+            let err = send_err(cfg, HttpClientErr::InvalidHeader).await;
             assert!(format!("{err}").contains("avatar"), "{err}");
         }
 
@@ -785,7 +785,7 @@ mod tests {
         #[tokio::test]
         async fn unencodable_body() {
             let cfg = RequestConfig::new(Method::POST, URL, &LOGIN, Form([("a", [1, 2])]));
-            let err = send_err(cfg, BaseHttpErr::RequestBuildFailed).await;
+            let err = send_err(cfg, HttpClientErr::RequestBuildFailed).await;
             assert_eq!(
                 err.err_args()["url"],
                 "http://127.0.0.1/login?username=alice&password=***"
@@ -807,7 +807,7 @@ mod tests {
         ) -> (HyErr, String) {
             let (out, _guard) = capture();
             let err = cfg.send::<Bytes>(&client()).await.unwrap_err();
-            assert!(err.is(BaseHttpErr::RequestFailed), "{err:#}");
+            assert!(err.is(HttpClientErr::RequestFailed), "{err:#}");
             (err, out.text())
         }
 

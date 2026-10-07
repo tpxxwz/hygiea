@@ -107,7 +107,7 @@ pub trait ImmediateComponent: Component {
     ///
     /// 可能失败的初始化都放在这里（连数据库等）。从 `state` 读依赖，
     /// 把自己的资源放进去给后面的组件用。需要后台任务就 spawn 并返回它的 handle，否则返回 `None`。
-    /// 返回错误时，前面已经启动的组件会自动关闭。错误用 [`BaseAppErr`](super::BaseAppErr) 的变体，底层原因挂在 source 上。
+    /// 返回错误时，前面已经启动的组件会自动关闭。错误用 [`AppErr`](super::AppErr) 的变体，底层原因挂在 source 上。
     ///
     /// `shutdown` 是这个组件自己的退出信号，关闭时触发。后台任务里 `shutdown.cancelled().await` 等它，
     /// 收到后做完收尾就退出；在超时（[`Component::shutdown_timeout`]）内没退出的任务会被 abort

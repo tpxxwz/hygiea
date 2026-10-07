@@ -163,7 +163,7 @@ pub(super) fn auth_value(raw: String) -> Result<HeaderValue> {
 
 #[cfg(test)]
 mod tests {
-    use crate::reqwest_client::BaseHttpErr;
+    use crate::reqwest_client::HttpClientErr;
     use test_support::headers::header_map;
 
     use super::*;
@@ -224,7 +224,7 @@ mod tests {
             let base = header_map(&[("x-a", "1")]);
             let bad = header_map(&[("content-type", "text/plain")]);
             let err = checked_headers([&base, &bad]).unwrap_err();
-            assert!(err.is(BaseHttpErr::InvalidHeader));
+            assert!(err.is(HttpClientErr::InvalidHeader));
         }
     }
 
@@ -232,7 +232,7 @@ mod tests {
     mod reserved_headers {
         use super::*;
 
-        /// 五个保留字段逐个拒绝，报 BaseHttpErr::InvalidHeader，大小写不影响
+        /// 五个保留字段逐个拒绝，报 HttpClientErr::InvalidHeader，大小写不影响
         #[test]
         fn every_reserved_header_is_rejected() {
             for name in [
@@ -243,7 +243,7 @@ mod tests {
                 "connection",
             ] {
                 let err = checked_headers(header_map(&[(name, "x")])).unwrap_err();
-                assert!(err.is(BaseHttpErr::InvalidHeader), "{name}");
+                assert!(err.is(HttpClientErr::InvalidHeader), "{name}");
             }
         }
 

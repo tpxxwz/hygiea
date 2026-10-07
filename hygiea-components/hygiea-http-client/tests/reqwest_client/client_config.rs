@@ -120,11 +120,11 @@ mod redirects {
             .send::<Bytes>(&client)
             .await
             .unwrap_err();
-        assert!(err.is(BaseHttpErr::NonSuccessStatus), "{err:#}");
+        assert!(err.is(HttpClientErr::NonSuccessStatus), "{err:#}");
         assert_eq!(err.err_args()["status"], 302);
     }
 
-    /// 超过上限报 BaseHttpErr::RequestFailed，原因是 reqwest 的重定向错误
+    /// 超过上限报 HttpClientErr::RequestFailed，原因是 reqwest 的重定向错误
     #[tokio::test]
     async fn exceeding_limit_is_error() {
         let base = redirect_server().await;
@@ -138,7 +138,7 @@ mod redirects {
             .send::<Bytes>(&client)
             .await
             .unwrap_err();
-        assert!(err.is(BaseHttpErr::RequestFailed));
+        assert!(err.is(HttpClientErr::RequestFailed));
         let source = err.source().unwrap().downcast_ref::<reqwest::Error>();
         assert!(source.unwrap().is_redirect());
     }
@@ -216,7 +216,7 @@ mod timeouts {
         serve(|req| echo(req).delay(Duration::from_secs(2))).await
     }
 
-    /// client 的整体超时生效，报 BaseHttpErr::RequestFailed，原因是 reqwest 的超时
+    /// client 的整体超时生效，报 HttpClientErr::RequestFailed，原因是 reqwest 的超时
     #[tokio::test]
     async fn client_timeout_applies() {
         let base = slow_server().await;
@@ -230,7 +230,7 @@ mod timeouts {
             .send::<Bytes>(&client)
             .await
             .unwrap_err();
-        assert!(err.is(BaseHttpErr::RequestFailed));
+        assert!(err.is(HttpClientErr::RequestFailed));
         assert!(is_timeout(&err));
     }
 
@@ -281,7 +281,7 @@ mod timeouts {
             .send::<Bytes>(&client)
             .await
             .unwrap_err();
-        assert!(err.is(BaseHttpErr::RequestFailed));
+        assert!(err.is(HttpClientErr::RequestFailed));
         assert!(is_timeout(&err));
     }
 
@@ -301,7 +301,7 @@ mod timeouts {
             .send::<Bytes>(&client)
             .await
             .unwrap_err();
-        assert!(err.is(BaseHttpErr::RequestFailed));
+        assert!(err.is(HttpClientErr::RequestFailed));
         assert!(reqwest_source(&err).is_connect(), "{err:?}");
         assert!(is_timeout(&err));
     }

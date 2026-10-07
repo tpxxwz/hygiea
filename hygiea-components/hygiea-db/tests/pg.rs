@@ -332,4 +332,91 @@ mod postgres {
             .unwrap();
         assert_eq!(shanghai.create_at, at);
     }
+
+    /// sqlx::transaction：闭包 Ok 就提交；Err 就回滚，闭包的错误原样返回
+    #[tokio::test]
+    async fn sqlx_transaction_commits_or_rolls_back() {
+        use hygiea_core::{ResultExt, err};
+        use hygiea_db::RepoErr;
+
+        let server = start().await;
+        let pool = SqlxPgPool::connect(sqlx_config(&server)).await.unwrap();
+        sqlx::query("CREATE TABLE item (id INT PRIMARY KEY)")
+            .execute(&*pool)
+            .await
+            .unwrap();
+        let insert = async |tx: &mut sqlx::Transaction<'static, sqlx::Postgres>, id: i32| {
+            sqlx::query("INSERT INTO item VALUES ($1)")
+                .bind(id)
+                .execute(&mut **tx)
+                .await
+                .wrap_err(|| err!(RepoErr::InsertFailed, "insert item"))
+        };
+
+        hygiea_db::sqlx::transaction(&pool, "save item", async |tx| {
+            insert(tx, 1).await?;
+            insert(tx, 2).await?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        // 第二条主键冲突：整个事务回滚，第一条也不留
+        let e = hygiea_db::sqlx::transaction(&pool, "save item", async |tx| {
+            insert(tx, 3).await?;
+            insert(tx, 1).await?;
+            Ok(())
+        })
+        .await
+        .unwrap_err();
+        assert!(e.is(RepoErr::InsertFailed), "{e:#}");
+
+        let ids: Vec<i32> = sqlx::query_scalar("SELECT id FROM item ORDER BY id")
+            .fetch_all(&*pool)
+            .await
+            .unwrap();
+        assert_eq!(ids, vec![1, 2]);
+    }
+
+    /// seaorm::transaction：闭包 Ok 就提交；Err 就回滚，闭包的错误原样返回
+    #[tokio::test]
+    async fn seaorm_transaction_commits_or_rolls_back() {
+        use hygiea_core::{ResultExt, err};
+        use hygiea_db::RepoErr;
+
+        let server = start().await;
+        let pool = SeaOrmPgPool::connect(seaorm_config(&server)).await.unwrap();
+        pool.execute_unprepared("CREATE TABLE item (id INT PRIMARY KEY)")
+            .await
+            .unwrap();
+        let insert = async |txn: &sea_orm::DatabaseTransaction, id: i32| {
+            txn.execute_unprepared(&format!("INSERT INTO item VALUES ({id})"))
+                .await
+                .wrap_err(|| err!(RepoErr::InsertFailed, "insert item"))
+        };
+
+        hygiea_db::seaorm::transaction(&*pool, "save item", async |txn| {
+            insert(txn, 1).await?;
+            insert(txn, 2).await?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        let e = hygiea_db::seaorm::transaction(&*pool, "save item", async |txn| {
+            insert(txn, 3).await?;
+            insert(txn, 1).await?;
+            Ok(())
+        })
+        .await
+        .unwrap_err();
+        assert!(e.is(RepoErr::InsertFailed), "{e:#}");
+
+        let rows = pool
+            .query_all_raw(sql("SELECT id FROM item ORDER BY id"))
+            .await
+            .unwrap();
+        let ids: Vec<i32> = rows.iter().map(|r| r.try_get("", "id").unwrap()).collect();
+        assert_eq!(ids, vec![1, 2]);
+    }
 }

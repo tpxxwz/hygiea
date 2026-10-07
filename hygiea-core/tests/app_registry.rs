@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use hygiea_core::app::{
-    BaseAppErr, CancellationToken, DeferredComponent, ImmediateComponent, Name, ReadyResources,
+    AppErr, CancellationToken, DeferredComponent, ImmediateComponent, Name, ReadyResources,
     Registry, RegistryConfig, ResourceId, ResourceSink, Resources, component,
 };
 use hygiea_core::{Result, err};
@@ -175,7 +175,7 @@ impl ImmediateComponent for TestComponent {
 
         if self.behavior.fail_startup {
             return Err(err!(
-                BaseAppErr::ComponentError,
+                AppErr::ComponentError,
                 "test startup failure".to_string()
             ));
         }
@@ -218,7 +218,7 @@ impl ImmediateComponent for TestComponent {
             .push(format!("{}:stop", self.name));
         if self.behavior.stop_err {
             return Err(err!(
-                BaseAppErr::ComponentError,
+                AppErr::ComponentError,
                 "test stop failure".to_string()
             ));
         }
@@ -229,7 +229,7 @@ impl ImmediateComponent for TestComponent {
 /// `on_ready` 的回调故意返回错误，让 `run` 在启动完成后立刻进入关闭流程，不用等 OS 信号
 async fn force_shutdown(_state: Resources) -> Result<()> {
     Err(err!(
-        BaseAppErr::ComponentError,
+        AppErr::ComponentError,
         "forced shutdown for test".to_string()
     ))
 }
@@ -283,7 +283,7 @@ async fn missing_dependency_reports_resource_missing_before_any_startup() {
         .await;
 
     let err = result.unwrap_err();
-    assert!(err.is(BaseAppErr::ResourceMissing));
+    assert!(err.is(AppErr::ResourceMissing));
     assert!(format!("{err:#}").contains("missing-resource"));
     assert!(snapshot(&events).is_empty());
 }
@@ -303,7 +303,7 @@ async fn duplicate_provider_reports_duplicate_provider_before_any_startup() {
         .await;
 
     let err = result.unwrap_err();
-    assert!(err.is(BaseAppErr::DuplicateProvider));
+    assert!(err.is(AppErr::DuplicateProvider));
     let msg = format!("{err:#}");
     assert!(msg.contains("p1") && msg.contains("p2"), "{msg}");
     assert!(snapshot(&events).is_empty());
@@ -330,7 +330,7 @@ async fn dependency_cycle_reports_cycle_path_before_any_startup() {
         .await;
 
     let err = result.unwrap_err();
-    assert!(err.is(BaseAppErr::DependencyCycle));
+    assert!(err.is(AppErr::DependencyCycle));
     let msg = format!("{err:#}");
     assert!(
         msg.contains("a") && msg.contains("b") && msg.contains("->"),
@@ -357,7 +357,7 @@ async fn start_failure_stops_already_started_components_in_reverse() {
         .await;
 
     let err = result.unwrap_err();
-    assert!(err.is(BaseAppErr::ComponentStartFailed));
+    assert!(err.is(AppErr::ComponentStartFailed));
     // bad 自己的 startup 返回 Err 这条路径不会把它标记为"已启动"，所以它自己不会被 stop
     assert_eq!(
         snapshot(&events),
@@ -389,7 +389,7 @@ async fn declared_but_not_inserted_resource_fails_and_stops_itself() {
         .await;
 
     let err = result.unwrap_err();
-    assert!(err.is(BaseAppErr::ComponentStartFailed));
+    assert!(err.is(AppErr::ComponentStartFailed));
     assert!(format!("{err:#}").contains("ghost-res"));
     // 和 start_failure 那条不同：这里 startup 本身返回了 Ok，只是校验 provides 时发现缺失，
     // 所以这个组件已经被记为"已启动"，会被 stop
@@ -408,7 +408,7 @@ async fn app_init_failure_shuts_down_all_components_in_reverse() {
     let (result, _guard) = registry.on_ready(force_shutdown).run().await;
 
     let err = result.unwrap_err();
-    assert!(err.is(BaseAppErr::ComponentError));
+    assert!(err.is(AppErr::ComponentError));
     assert_eq!(
         snapshot(&events),
         vec!["a:startup", "b:startup", "b:stop", "a:stop"]
@@ -438,7 +438,7 @@ async fn background_task_exit_reports_task_exited_and_shuts_down() {
         .await;
 
     let err = result.unwrap_err();
-    assert!(err.is(BaseAppErr::TaskExited));
+    assert!(err.is(AppErr::TaskExited));
     assert_eq!(
         snapshot(&events),
         vec![
@@ -470,7 +470,7 @@ async fn background_task_panic_reports_task_exited_and_shuts_down() {
         .await;
 
     let err = result.unwrap_err();
-    assert!(err.is(BaseAppErr::TaskExited));
+    assert!(err.is(AppErr::TaskExited));
     assert_eq!(
         snapshot(&events),
         vec![
@@ -561,7 +561,7 @@ async fn stop_error_only_warns_and_does_not_block_later_components() {
 
     let err = result.unwrap_err();
     // run 的结果是回调的错误，不会变成 StopFailed：stop 失败只打 WARN
-    assert!(err.is(BaseAppErr::ComponentError));
+    assert!(err.is(AppErr::ComponentError));
     assert_eq!(
         snapshot(&events),
         vec!["b:startup", "a:startup", "a:stop", "b:stop"]
@@ -679,7 +679,7 @@ impl DeferredComponent for TestDeferred {
             .push(format!("{}:activate[{}]", self.name, read.join(",")));
         if self.behavior.fail_activate {
             return Err(err!(
-                BaseAppErr::ComponentError,
+                AppErr::ComponentError,
                 "test activate failure".to_string()
             ));
         }
@@ -774,7 +774,7 @@ async fn before_activate_failure_stops_all_without_activate() {
         .add_named::<TestDeferred>("api", deferred_config(&events, DeferredBehavior::default()))
         .before_activate(|_state| async {
             Err(err!(
-                BaseAppErr::ComponentError,
+                AppErr::ComponentError,
                 "test before_activate failure".to_string()
             ))
         });
@@ -786,7 +786,7 @@ async fn before_activate_failure_stops_all_without_activate() {
         .run()
         .await;
     let err = result.expect_err("before_activate 失败应该返回它的错误");
-    assert!(err.is(BaseAppErr::ComponentError), "{err:#}");
+    assert!(err.is(AppErr::ComponentError), "{err:#}");
     // api 没有 activate，但 prepare 过，照样要关
     assert_eq!(
         snapshot(&events),
@@ -827,7 +827,7 @@ async fn deferred_dependency_does_not_form_startup_cycle() {
 
     let (result, _guard) = registry.run().await;
     let err = result.expect_err("api 的后台任务结束，应该以 TaskExited 返回");
-    assert!(err.is(BaseAppErr::TaskExited), "{err:#}");
+    assert!(err.is(AppErr::TaskExited), "{err:#}");
     assert_eq!(
         snapshot(&events),
         [
@@ -862,7 +862,7 @@ async fn deferred_missing_dependency_reports_before_any_startup() {
         .run()
         .await;
     let err = result.expect_err("Deferred 的依赖没有提供者，应该启动前就失败");
-    assert!(err.is(BaseAppErr::ResourceMissing), "{err:#}");
+    assert!(err.is(AppErr::ResourceMissing), "{err:#}");
     assert!(snapshot(&events).is_empty());
 }
 
@@ -886,7 +886,7 @@ async fn activate_failure_shuts_down_deferred_first_then_immediate_in_reverse() 
 
     let (result, _guard) = registry.run().await;
     let err = result.expect_err("activate 失败应该返回错误");
-    assert!(err.is(BaseAppErr::ComponentActivateFailed), "{err:#}");
+    assert!(err.is(AppErr::ComponentActivateFailed), "{err:#}");
     assert_eq!(
         snapshot(&events),
         [

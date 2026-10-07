@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 
-use super::{BaseAppErr, Name};
+use super::{AppErr, Name};
 use crate::{Result, err};
 
 #[derive(Hash, PartialEq, Eq)]
@@ -159,17 +159,17 @@ impl Resources {
             .and_then(|entry| (**entry).downcast_ref::<T>().cloned())
     }
 
-    /// 取匿名资源，没有时返回 [`BaseAppErr::ResourceMissing`]。组件在 `startup` 里取依赖用这个，
+    /// 取匿名资源，没有时返回 [`AppErr::ResourceMissing`]。组件在 `startup` 里取依赖用这个，
     /// 缺了就是启动失败，不要 `get().unwrap()`
     pub fn require<T: Resource>(&self) -> Result<T> {
         self.require_named("")
     }
 
-    /// 取具名资源，没有时返回 [`BaseAppErr::ResourceMissing`]，错误里写明缺的是哪个类型、哪个名字
+    /// 取具名资源，没有时返回 [`AppErr::ResourceMissing`]，错误里写明缺的是哪个类型、哪个名字
     pub fn require_named<T: Resource>(&self, name: &str) -> Result<T> {
         self.get_named(name).ok_or_else(|| {
             err!(
-                BaseAppErr::ResourceMissing,
+                AppErr::ResourceMissing,
                 ResourceId::named::<T>(name.to_owned()).to_string()
             )
         })
@@ -325,7 +325,7 @@ mod tests {
     fn require_missing_returns_resource_missing_with_type_and_name() {
         let resources = Resources::new();
         let err = resources.require_named::<i32>("primary").unwrap_err();
-        assert!(err.is(BaseAppErr::ResourceMissing));
+        assert!(err.is(AppErr::ResourceMissing));
         let msg = err.to_string();
         assert!(msg.contains("i32"), "{msg}");
         assert!(msg.contains("primary"), "{msg}");
@@ -335,7 +335,7 @@ mod tests {
     fn require_anonymous_missing_returns_resource_missing() {
         let resources = Resources::new();
         let err = resources.require::<i32>().unwrap_err();
-        assert!(err.is(BaseAppErr::ResourceMissing));
+        assert!(err.is(AppErr::ResourceMissing));
     }
 
     #[test]

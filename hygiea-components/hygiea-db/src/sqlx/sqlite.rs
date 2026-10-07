@@ -9,7 +9,7 @@ use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 
 use hygiea_core::app::{
-    BaseAppErr, CancellationToken, ImmediateComponent, Name, ResourceId, Resources, component,
+    AppErr, CancellationToken, ImmediateComponent, Name, ResourceId, Resources, component,
 };
 use hygiea_core::{Result, ResultExt, err};
 
@@ -89,7 +89,7 @@ impl SqlxSqliteConfig {
         let mut options = SqliteConnectOptions::from_str(&self.url())
             .wrap_err(|| {
                 err!(
-                    BaseAppErr::InvalidConfig,
+                    AppErr::InvalidConfig,
                     format!("invalid SQLite database URL: {}", self.url())
                 )
             })?
@@ -147,7 +147,7 @@ where
 {
     value.parse().wrap_err(|| {
         err!(
-            BaseAppErr::InvalidConfig,
+            AppErr::InvalidConfig,
             format!("invalid SQLite {name}: {value}")
         )
     })
@@ -179,12 +179,7 @@ impl SqlxSqlitePool {
                 .pool_options()
                 .connect_with(connect_options)
                 .await
-                .wrap_err(|| {
-                    err!(
-                        BaseAppErr::ConnectFailed,
-                        format!("sqlite {}", config.database)
-                    )
-                })?
+                .wrap_err(|| err!(AppErr::ConnectFailed, format!("sqlite {}", config.database)))?
         };
         Ok(Self::new(pool, Arc::new(config)))
     }

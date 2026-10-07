@@ -7,7 +7,7 @@ use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 use serde::Deserialize;
 
 use hygiea_core::app::{
-    BaseAppErr, CancellationToken, ImmediateComponent, Name, ResourceId, Resources, component,
+    AppErr, CancellationToken, ImmediateComponent, Name, ResourceId, Resources, component,
 };
 use hygiea_core::{Result, ResultExt, err};
 
@@ -165,7 +165,7 @@ impl SeaOrmPgPool {
                 .await
                 .wrap_err(|| {
                     err!(
-                        BaseAppErr::ConnectFailed,
+                        AppErr::ConnectFailed,
                         format!(
                             "postgres {}:{}/{}",
                             config.host, config.port, config.database
@@ -237,7 +237,7 @@ impl ImmediateComponent for SeaOrmPgComponent {
             pool.inner
                 .close()
                 .await
-                .wrap_err(|| err!(BaseAppErr::StopFailed, "close database connection"))?;
+                .wrap_err(|| err!(AppErr::StopFailed, "close database connection"))?;
             tracing::info!("Database connection pool closed");
         }
         Ok(())

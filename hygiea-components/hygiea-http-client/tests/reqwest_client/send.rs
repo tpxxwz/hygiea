@@ -244,7 +244,7 @@ mod responses {
             .send::<BodyStream>(&local_config().build().unwrap())
             .await
             .unwrap_err();
-        assert!(err.is(BaseHttpErr::NonSuccessStatus));
+        assert!(err.is(HttpClientErr::NonSuccessStatus));
         assert_eq!(err.err_args()["body"], r#"{"error":"boom"}"#);
     }
 
@@ -303,7 +303,7 @@ mod responses {
         assert_eq!(b.body, s.body.as_bytes());
     }
 
-    /// send 遇到非 2xx 报 BaseHttpErr::NonSuccessStatus，状态码、方法、地址、原文都在 err_args 里
+    /// send 遇到非 2xx 报 HttpClientErr::NonSuccessStatus，状态码、方法、地址、原文都在 err_args 里
     #[tokio::test]
     async fn send_non_2xx_is_status_error() {
         let base = serve_routes(ROUTES).await;
@@ -311,7 +311,7 @@ mod responses {
             .send::<Json<Login>>(&local_config().build().unwrap())
             .await
             .unwrap_err();
-        assert!(err.is(BaseHttpErr::NonSuccessStatus));
+        assert!(err.is(HttpClientErr::NonSuccessStatus));
         assert_eq!(err.err_args()["status"], 500);
         assert_eq!(err.err_args()["method"], "GET");
         assert_eq!(err.err_args()["url"], format!("{base}/fail"));
@@ -345,7 +345,7 @@ mod responses {
     }
 }
 
-/// 传输层失败：都报 BaseHttpErr::RequestFailed，原始 reqwest 错误挂在 source 上
+/// 传输层失败：都报 HttpClientErr::RequestFailed，原始 reqwest 错误挂在 source 上
 mod transport_errors {
     use super::*;
 
@@ -357,7 +357,7 @@ mod transport_errors {
             .send::<Bytes>(&local_config().build().unwrap())
             .await
             .unwrap_err();
-        assert!(err.is(BaseHttpErr::RequestFailed));
+        assert!(err.is(HttpClientErr::RequestFailed));
         assert_eq!(err.err_args()["url"], format!("{base}/x"));
         assert!(err.err_args()["status"].is_null());
         assert!(reqwest_source(&err).is_connect());
@@ -378,10 +378,10 @@ mod transport_errors {
                 break;
             }
         }
-        assert!(failed.unwrap().is(BaseHttpErr::RequestFailed));
+        assert!(failed.unwrap().is(HttpClientErr::RequestFailed));
     }
 
-    /// 响应头到了、body 读到一半断开：同样是 BaseHttpErr::RequestFailed，拿不到半截响应
+    /// 响应头到了、body 读到一半断开：同样是 HttpClientErr::RequestFailed，拿不到半截响应
     #[tokio::test]
     async fn body_read_interrupted() {
         let base = serve(|_| Reply::json(200, "{\"a\":").truncated(50)).await;
@@ -389,7 +389,7 @@ mod transport_errors {
             .send::<Bytes>(&local_config().build().unwrap())
             .await
             .unwrap_err();
-        assert!(err.is(BaseHttpErr::RequestFailed));
+        assert!(err.is(HttpClientErr::RequestFailed));
         assert!(reqwest_source(&err).is_body() || reqwest_source(&err).is_decode());
         // 响应头已经到了，status 有值；发送失败时是 null（见 connect_failure）
         assert_eq!(err.err_args()["status"], 200);

@@ -20,7 +20,7 @@
 | 能力 | 说明 |
 |---|---|
 | 组件注册 | 在 `impl ImmediateComponent`（立即启动）或 `impl DeferredComponent`（延迟启动）上标 `#[component]`，`Registry::add` / `add_named` 注册；同一种组件可以按名字注册多个实例（比如主库和从库） |
-| 两阶段启动 | 第一阶段启动所有组件（连接池连上、HTTP / gRPC 只绑端口），然后调用 `before_activate` 的回调（建表、初始化全局状态），第二阶段 Deferred 组件才开始对外服务，最后调用 `on_ready` 的回调（注册中心、已就绪打点）；Deferred 组件第一阶段在类型上就读不到资源 |
+| 两阶段启动 | 第一阶段启动所有组件（连接池连上、HTTP / gRPC 只绑端口），然后调用 `before_activate` 的回调（建表、组装应用状态放进 Resources），第二阶段 Deferred 组件才开始对外服务（HTTP / gRPC 这时才调用建 router 的函数，能取到前面放进去的状态），最后调用 `on_ready` 的回调（注册中心、已就绪打点）；Deferred 组件第一阶段在类型上就读不到资源 |
 | 依赖排序 | 组件声明 `provides` / `depends_on`，Registry 做拓扑排序决定第一阶段的启动顺序，跟 `add` 的顺序无关；缺依赖、依赖成环、重复提供都在启动任何组件之前报错 |
 | 资源共享 | 先启动的组件把资源放进 `Resources`，后启动的组件和业务代码按类型和名字取出来 |
 | 配置加载 | 环境配置文件 → 额外配置文件 → 环境变量 → 命令行，后面的覆盖前面的；环境用 `--env` 或 `HYGIEA_ENV` 选 |
@@ -143,7 +143,7 @@ impl IntoRegistryConfig for AppConfig {
 async fn main() -> Result<()> {
     // 读 config/<env>.toml（默认 dev），再叠加 -f 指定的文件、HYGIEA__ 环境变量、--set
     let (registry, mut config) = Registry::load_config::<AppConfig>(&ConfigArgs::from_cli());
-    config.http.router = Some(Router::new().route("/hello", get(|| async { "hello\n" })));
+    config.http.router = Some(Box::new(|_| Ok(Router::new().route("/hello", get(|| async { "hello\n" })))));
 
     let (result, _log_guard) = registry
         .add::<SqlxSqliteComponent>(config.db)
@@ -389,7 +389,7 @@ pub enum LegacyErrors {
   | `000`、`999` | `BaseErr`：不需要 feature 的模块，没有模块前缀，5 位编号。只用 `000xx`，兜底的 `SysErr` 是 `99999`；别的 5 位码会落进其他模块的区间 |
   | `001`～`089` | core：app `001`、log `002` |
   | `090`～`099` | core 的测试（`hygiea-core/tests/` 里自定义的错误 enum） |
-  | `100`～`799` | components：http-client（`BaseHttpErr`）`100` |
+  | `100`～`799` | components：db（`RepoErr`）`100`、http-client（`HttpClientErr`）`101` |
   | `800`～`998` | hygiea-test：http_mock `800`（构建）、`801`（运行时） |
 
 - 同一模块内重复会编译报错；跨模块或跨 crate 的重复在启动时检查（进程打印重复的错误码后以状态码 1 退出）。
@@ -402,15 +402,21 @@ pub enum LegacyErrors {
 | `99900003` | `BaseErr::JsonError` | JSON error: {{ cause }} |
 | `99900004` | `BaseErr::TemplateError` | Template error: {{ cause }} |
 | `99900005` | `BaseErr::EnvError` | Environment variable not set: {{ name }} |
-| `99910001` | `BaseHttpErr::ClientBuildFailed` | Http client build failed |
-| `99910011` | `BaseHttpErr::InvalidUrl` | Invalid url: {{ url }} |
-| `99910012` | `BaseHttpErr::InvalidParams` | Invalid query params: {{ method }} {{ url }} |
-| `99910013` | `BaseHttpErr::InvalidHeader` | Invalid header: {{ cause }} |
-| `99910014` | `BaseHttpErr::RequestBuildFailed` | Http request build failed: {{ method }} {{ url }} |
-| `99910021` | `BaseHttpErr::RequestFailed` | Http request failed: {{ method }} {{ url }} |
-| `99910022` | `BaseHttpErr::NonSuccessStatus` | Http {{ status }}: {{ method }} {{ url }} |
-| `99910023` | `BaseHttpErr::WriteFailed` | Write response body failed |
-| `99910024` | `BaseHttpErr::DecodeFailed` | Http response decode failed: {{ method }} {{ url }} |
+| `99910001` | `RepoErr::TransactionFailed` | Db transaction failed: {{ op }} |
+| `99910002` | `RepoErr::QueryFailed` | Db query failed: {{ op }} |
+| `99910003` | `RepoErr::InsertFailed` | Db insert failed: {{ op }} |
+| `99910004` | `RepoErr::UpdateFailed` | Db update failed: {{ op }} |
+| `99910005` | `RepoErr::DeleteFailed` | Db delete failed: {{ op }} |
+| `99910006` | `RepoErr::ExecFailed` | Db exec failed: {{ op }} |
+| `99910101` | `HttpClientErr::ClientBuildFailed` | Http client build failed |
+| `99910111` | `HttpClientErr::InvalidUrl` | Invalid url: {{ url }} |
+| `99910112` | `HttpClientErr::InvalidParams` | Invalid query params: {{ method }} {{ url }} |
+| `99910113` | `HttpClientErr::InvalidHeader` | Invalid header: {{ cause }} |
+| `99910114` | `HttpClientErr::RequestBuildFailed` | Http request build failed: {{ method }} {{ url }} |
+| `99910121` | `HttpClientErr::RequestFailed` | Http request failed: {{ method }} {{ url }} |
+| `99910122` | `HttpClientErr::NonSuccessStatus` | Http {{ status }}: {{ method }} {{ url }} |
+| `99910123` | `HttpClientErr::WriteFailed` | Write response body failed |
+| `99910124` | `HttpClientErr::DecodeFailed` | Http response decode failed: {{ method }} {{ url }} |
 | `99999999` | `BaseErr::SysErr` | System Error |
 
 ## 示例
@@ -423,7 +429,7 @@ pub enum LegacyErrors {
 | `app_dependencies` | 自己实现组件；`provides` / `depends_on` 决定启动顺序，缺依赖时启动前就报错 |
 | `app_named_instances` | 同一种组件注册多个实例（主库、从库），按名字取 |
 | `app_global_state` | 启动后把资源收进全局 `AppState`，业务代码直接取 |
-| `app_two_phase` | 两阶段启动：`before_activate` 在 HTTP 开始接请求之前建表、初始化全局 `AppState`，handler 从 `AppState` 取连接池 |
+| `app_two_phase` | 两阶段启动：`before_activate` 在 HTTP 开始接请求之前建表、把 `AppState` 放进 Resources，router 函数取出它交给 `with_state`，handler 用 `arity0_state` 拿到连接池 |
 | `app_background_task` | 后台任务、优雅关闭、超时强制结束、`stop` 收尾 |
 | `app_config` | 配置文件、`-f`、环境变量、`--set` 的合并，框架参数合进自己的命令行 |
 | `error_basic` | 错误 enum、`err!` 的写法、错误码 |

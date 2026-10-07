@@ -174,7 +174,7 @@ impl MultipartPart {
     }
 
     /// 这一段的 `Content-Type`。发送时才由 reqwest 解析，不合法报
-    /// [`InvalidHeader`](super::BaseHttpErr::InvalidHeader)，请求不发出去
+    /// [`InvalidHeader`](super::HttpClientErr::InvalidHeader)，请求不发出去
     pub fn mime(mut self, mime: impl Into<String>) -> Self {
         self.mime = Some(mime.into());
         self

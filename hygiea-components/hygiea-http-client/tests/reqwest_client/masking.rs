@@ -175,7 +175,7 @@ mod auth {
                 .send::<Bytes>(&client)
                 .await
                 .unwrap_err();
-            assert!(err.is(BaseHttpErr::NonSuccessStatus));
+            assert!(err.is(HttpClientErr::NonSuccessStatus));
             let rendered = format!("{err:#}");
             let log = out.text();
             assert!(!rendered.contains("s3cr3t"), "{rendered}");
@@ -259,7 +259,7 @@ mod response {
             .send::<Bytes>(&local_config().build().unwrap())
             .await
             .unwrap_err();
-        assert!(err.is(BaseHttpErr::NonSuccessStatus));
+        assert!(err.is(HttpClientErr::NonSuccessStatus));
         assert_eq!(err.err_args()["body"], "你好");
     }
 }

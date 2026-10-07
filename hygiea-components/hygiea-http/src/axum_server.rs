@@ -5,7 +5,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use hygiea_core::app::{
-    BaseAppErr, CancellationToken, DeferredComponent, Name, ReadyResources, ResourceSink, component,
+    AppErr, CancellationToken, DeferredComponent, Name, ReadyResources, ResourceSink, component,
 };
 use hygiea_core::{HyErr, Result, ResultExt, err};
 
@@ -27,7 +27,20 @@ pub struct HttpLimits {
     pub max_header_size: Option<usize>,
 }
 
-#[derive(Deserialize, Clone, Debug)]
+/// 建业务 router 的函数，`activate` 时调用。这时所有组件的资源、`Registry::before_activate` 里放进去的东西都已就绪，
+/// 可以从 [`ReadyResources`] 取出连接池、业务 state，交给 `Router::with_state`：
+///
+/// ```ignore
+/// config.http.router = Some(Box::new(|resources| {
+///     let state = resources.require::<Arc<AppState>>()?;
+///     Ok(Router::new().route("/users", get(list_users)).with_state(state))
+/// }));
+/// ```
+///
+/// 不需要资源的写 `Some(Box::new(|_| Ok(router)))`。返回 `Err` 时组件启动失败
+pub type AxumRouterFn = Box<dyn FnOnce(&ReadyResources) -> Result<axum::Router> + Send + 'static>;
+
+#[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AxumConfig {
     pub host: String,
@@ -39,7 +52,22 @@ pub struct AxumConfig {
     /// 有长请求（大文件上传、长轮询）就配长一点
     pub shutdown_timeout_secs: Option<u64>,
     #[serde(skip)]
-    pub router: Option<axum::Router>,
+    pub router: Option<AxumRouterFn>,
+}
+
+/// router 是函数，只显示有没有配
+impl std::fmt::Debug for AxumConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AxumConfig")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("base_path", &self.base_path)
+            .field("timeout", &self.timeout)
+            .field("limits", &self.limits)
+            .field("shutdown_timeout_secs", &self.shutdown_timeout_secs)
+            .field("router", &self.router.as_ref().map(|_| ".."))
+            .finish()
+    }
 }
 
 impl Default for AxumConfig {
@@ -67,8 +95,8 @@ impl AxumConfig {
 /// HTTP 服务组件，Deferred：`prepare` 检查配置、绑定端口，`activate` 才开始接请求
 pub struct AxumComponent {
     config: AxumConfig,
-    /// `prepare` 绑好的端口和取出的 router，`activate` 里交给后台任务
-    prepared: Option<(tokio::net::TcpListener, axum::Router)>,
+    /// `prepare` 绑好的端口和取出的 router 函数，`activate` 里建 router、交给后台任务
+    prepared: Option<(tokio::net::TcpListener, AxumRouterFn)>,
 }
 
 #[component]
@@ -92,11 +120,11 @@ impl DeferredComponent for AxumComponent {
             .config
             .router
             .take()
-            .ok_or_else(|| err!(BaseAppErr::ConfigMissing, "AxumConfig.router"))?;
+            .ok_or_else(|| err!(AppErr::ConfigMissing, "AxumConfig.router"))?;
 
         let listener = tokio::net::TcpListener::bind(&addr)
             .await
-            .wrap_err(|| err!(BaseAppErr::BindFailed, &addr))?;
+            .wrap_err(|| err!(AppErr::BindFailed, &addr))?;
 
         tracing::info!("HTTP server listener bound to {}", addr);
         self.prepared = Some((listener, router));
@@ -105,22 +133,20 @@ impl DeferredComponent for AxumComponent {
 
     async fn activate(
         &mut self,
-        _resources: ReadyResources,
+        resources: ReadyResources,
         shutdown: CancellationToken,
     ) -> Result<Option<tokio::task::JoinHandle<()>>> {
-        let (listener, router) = self.prepared.take().ok_or_else(|| {
+        let (listener, router_fn) = self.prepared.take().ok_or_else(|| {
             err!(
-                BaseAppErr::ComponentError,
+                AppErr::ComponentError,
                 "AxumComponent activated before prepare"
             )
         })?;
+        let router = build_router(router_fn(&resources)?, &self.config);
         let addr = self.config.addr();
-        let config = self.config.clone();
 
         let handle = tokio::spawn(async move {
             tracing::info!("HTTP server serving on {}", addr);
-
-            let router = build_router(router, &config);
 
             let served = axum::serve(listener, router)
                 .with_graceful_shutdown(async move {
@@ -265,6 +291,60 @@ where
         let f = f.clone();
         Box::pin(async move {
             match f(req).await {
+                Ok(resp) => axum::response::Json(AxumHttpResponse::ok(resp)).into_response(),
+                Err(e) => e.into().into_response(),
+            }
+        })
+    }
+}
+
+/// 同 [`arity0`]，函数多收一个 router 的 state：`(S) -> Result<R, E>`。
+/// state 是 `Router::with_state` 传进去的那个类型（或经 `FromRef` 能从它取出的类型）
+pub fn arity0_state<F, Fut, S, R, E>(
+    f: F,
+) -> impl Fn(
+    axum::extract::State<S>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = axum::response::Response> + Send>>
++ Clone
+where
+    F: Fn(S) -> Fut + Clone + Send + 'static,
+    Fut: std::future::Future<Output = Result<R, E>> + Send + 'static,
+    S: Send + 'static,
+    R: serde::Serialize + Send + 'static,
+    E: Into<AxumHttpError> + Send + 'static,
+{
+    move |axum::extract::State(state)| {
+        let f = f.clone();
+        Box::pin(async move {
+            match f(state).await {
+                Ok(resp) => axum::response::Json(AxumHttpResponse::ok(resp)).into_response(),
+                Err(e) => e.into().into_response(),
+            }
+        })
+    }
+}
+
+/// 同 [`arity1`]，函数多收一个 router 的 state：`(S, P) -> Result<R, E>`。
+/// state 是 `Router::with_state` 传进去的那个类型（或经 `FromRef` 能从它取出的类型）
+pub fn arity1_state<F, Fut, S, R, P, E>(
+    f: F,
+) -> impl Fn(
+    axum::extract::State<S>,
+    axum::extract::Json<P>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = axum::response::Response> + Send>>
++ Clone
+where
+    F: Fn(S, P) -> Fut + Clone + Send + 'static,
+    Fut: std::future::Future<Output = Result<R, E>> + Send + 'static,
+    S: Send + 'static,
+    P: Send + 'static,
+    R: serde::Serialize + Send + 'static,
+    E: Into<AxumHttpError> + Send + 'static,
+{
+    move |axum::extract::State(state), axum::extract::Json(req)| {
+        let f = f.clone();
+        Box::pin(async move {
+            match f(state, req).await {
                 Ok(resp) => axum::response::Json(AxumHttpResponse::ok(resp)).into_response(),
                 Err(e) => e.into().into_response(),
             }

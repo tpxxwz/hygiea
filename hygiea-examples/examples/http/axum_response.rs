@@ -12,7 +12,7 @@ use axum::Router;
 use axum::routing::{get, post};
 use hygiea::http::{AxumConfig, HttpLimits, arity0, arity1, build_router};
 use hygiea::http_client::reqwest_client::{
-    BaseHttpErr, Json, Method, RequestConfig, ReqwestConfig,
+    HttpClientErr, Json, Method, RequestConfig, ReqwestConfig,
 };
 use hygiea::{BaseErr, HyErr, Result, err, hy_err};
 use serde::{Deserialize, Serialize};
@@ -153,7 +153,7 @@ async fn main() -> Result<()> {
     );
 
     // 5. 请求体超过限制：被 build_router 加的 body 大小限制挡在业务代码之前，返回 413，
-    //    客户端这边报 BaseHttpErr::NonSuccessStatus
+    //    客户端这边报 HttpClientErr::NonSuccessStatus
     let big = Echo {
         text: "x".repeat(64),
     };
@@ -164,7 +164,7 @@ async fn main() -> Result<()> {
         Ok(_) => println!("5. POST /echo（超限）-> 意外地成功了"),
         Err(e) => println!(
             "5. POST /echo（超限）-> is(NonSuccessStatus)={}, status={}",
-            e.is(BaseHttpErr::NonSuccessStatus),
+            e.is(HttpClientErr::NonSuccessStatus),
             e.err_args()["status"]
         ),
     }
