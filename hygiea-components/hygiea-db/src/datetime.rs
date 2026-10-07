@@ -28,8 +28,10 @@
 
 use hygiea_core::datetime::{UtcDateTime, rfc3339_utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::ops::{Deref, DerefMut};
 
-/// 数据库里的 UTC 时间，列类型同 `OffsetDateTime`。`.0` 或 `From` 取出 [`UtcDateTime`]
+/// 数据库里的 UTC 时间，列类型同 `OffsetDateTime`。`.0` 或 `From` 取出 [`UtcDateTime`]；
+/// 实现了 `Deref`，`UtcDateTime` 的方法和 hygiea 的扩展方法可以直接调，返回的是 `UtcDateTime`
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct HyUtcDateTime(pub UtcDateTime);
 
@@ -42,6 +44,20 @@ impl From<UtcDateTime> for HyUtcDateTime {
 impl From<HyUtcDateTime> for UtcDateTime {
     fn from(value: HyUtcDateTime) -> Self {
         value.0
+    }
+}
+
+impl Deref for HyUtcDateTime {
+    type Target = UtcDateTime;
+
+    fn deref(&self) -> &UtcDateTime {
+        &self.0
+    }
+}
+
+impl DerefMut for HyUtcDateTime {
+    fn deref_mut(&mut self) -> &mut UtcDateTime {
+        &mut self.0
     }
 }
 
@@ -159,6 +175,17 @@ mod tests {
 
     fn utc(s: &str) -> UtcDateTime {
         UtcDateTime::parse_ext_rfc3339(s).unwrap()
+    }
+
+    #[test]
+    fn deref_calls_utc_date_time_methods() {
+        use hygiea_core::datetime::HygieaUtcDateTimeExt;
+
+        let mut at = HyUtcDateTime(utc("2026-10-05T12:57:24.719Z"));
+        assert_eq!(at.year(), 2026);
+        assert_eq!(at.start_of_day(), utc("2026-10-05T00:00:00Z"));
+        *at = utc("2026-10-06T00:00:00Z");
+        assert_eq!(at.0, utc("2026-10-06T00:00:00Z"));
     }
 
     #[test]
