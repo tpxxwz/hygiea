@@ -3,6 +3,7 @@
 
 use std::time::Duration;
 
+use hygiea::app::ConfigResource;
 use hygiea::env::{BuiltinKey, env_get_or_else};
 use hygiea::redis::{FredRedisPool, RedisConfig};
 
@@ -10,7 +11,7 @@ use super::core::DistributedLock;
 use super::redis::RedisLock;
 
 async fn pool(watchdog_secs: u64) -> RedisLock {
-    let pool = FredRedisPool::connect(RedisConfig {
+    let pool = FredRedisPool::from_config(&RedisConfig {
         host: env_get_or_else(BuiltinKey::LocalRedisHost, || "localhost".to_string()),
         port: env_get_or_else(BuiltinKey::LocalRedisPort, || "6379".to_string())
             .parse()

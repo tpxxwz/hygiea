@@ -10,9 +10,10 @@
 
 use axum::Router;
 use axum::routing::{get, post};
+use hygiea::app::ConfigResource;
 use hygiea::http::{AxumConfig, HttpLimits, arity0, arity1, build_router};
 use hygiea::http_client::reqwest_client::{
-    HttpClientErr, Json, Method, RequestConfig, ReqwestConfig,
+    HttpClientErr, Json, Method, RequestConfig, ReqwestClient, ReqwestConfig,
 };
 use hygiea::{BaseErr, HyErr, Result, err, hy_err};
 use serde::{Deserialize, Serialize};
@@ -103,7 +104,7 @@ async fn main() -> Result<()> {
         let _ = axum::serve(listener, router).await;
     });
 
-    let client = ReqwestConfig::default().build()?;
+    let client = ReqwestClient::from_config(&ReqwestConfig::default()).await?;
     let url = |path: &str| format!("http://{addr}{path}");
 
     // 1. 正常返回

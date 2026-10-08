@@ -35,13 +35,13 @@ pub struct AppState {
 /// 建表、写入初始数据，相当于迁移和预热
 async fn migrate(db: &SqlxSqlitePool) -> Result<()> {
     sqlx::query("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
-        .execute(&db.inner)
+        .execute(&**db)
         .await
         .wrap_err(|| err!(BaseErr::SysErr))?;
     for name in ["alice", "bob"] {
         sqlx::query("INSERT INTO users (name) VALUES (?)")
             .bind(name)
-            .execute(&db.inner)
+            .execute(&**db)
             .await
             .wrap_err(|| err!(BaseErr::SysErr))?;
     }
@@ -53,7 +53,7 @@ async fn migrate(db: &SqlxSqlitePool) -> Result<()> {
 async fn list_users(state: Arc<AppState>) -> Result<Vec<String>> {
     let db = &state.db;
     let names: Vec<(String,)> = sqlx::query_as("SELECT name FROM users ORDER BY id")
-        .fetch_all(&db.inner)
+        .fetch_all(&**db)
         .await
         .wrap_err(|| err!(BaseErr::SysErr))?;
     Ok(names.into_iter().map(|(n,)| n).collect())

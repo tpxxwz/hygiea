@@ -1,14 +1,11 @@
 //! PostgreSQL 连接组件（SeaORM），feature `seaorm` + `postgres`
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 use serde::Deserialize;
 
-use hygiea_core::app::{
-    AppErr, CancellationToken, ImmediateComponent, Name, ResourceId, Resources, component,
-};
+use hygiea_core::app::{AppErr, ConfigResource, ImmediateResourceComponent, async_trait};
 use hygiea_core::{Result, ResultExt, err};
 
 // ---- config -----------------------------------------------------------------
@@ -143,37 +140,48 @@ fn parse_log_level(s: &str) -> log::LevelFilter {
 
 // ---- pool -------------------------------------------------------------------
 
+/// PostgreSQL 连接（SeaORM），`Deref` 到 `DatabaseConnection`。用 [`ConfigResource::from_config`] 建，
+/// 不经过 Registry 也能用
 #[derive(Clone, Debug)]
 pub struct SeaOrmPgPool {
-    pub inner: DatabaseConnection,
-    config: Arc<SeaOrmPgConfig>,
+    inner: DatabaseConnection,
 }
 
-impl SeaOrmPgPool {
-    pub fn new(inner: DatabaseConnection, config: Arc<SeaOrmPgConfig>) -> Self {
-        Self { inner, config }
-    }
+#[async_trait]
+impl ConfigResource for SeaOrmPgPool {
+    type Config = SeaOrmPgConfig;
 
-    /// 连接池用的配置
-    pub fn config(&self) -> &SeaOrmPgConfig {
-        &self.config
-    }
-
-    pub async fn connect(config: SeaOrmPgConfig) -> Result<Self> {
-        let conn: DatabaseConnection =
-            Database::connect(config.connect_options())
-                .await
-                .wrap_err(|| {
-                    err!(
-                        AppErr::ConnectFailed,
-                        format!(
-                            "postgres {}:{}/{}",
-                            config.host, config.port, config.database
-                        )
+    async fn from_config(config: &SeaOrmPgConfig) -> Result<Self> {
+        tracing::info!(
+            "Connecting to database: {}@{}:{}/{}",
+            config.username,
+            config.host,
+            config.port,
+            config.database
+        );
+        let conn = Database::connect(config.connect_options())
+            .await
+            .wrap_err(|| {
+                err!(
+                    AppErr::ConnectFailed,
+                    format!(
+                        "postgres {}:{}/{}",
+                        config.host, config.port, config.database
                     )
-                })?;
-        let config = Arc::new(config);
-        Ok(Self::new(conn, config))
+                )
+            })?;
+        tracing::info!("Database connection established");
+        Ok(Self { inner: conn })
+    }
+
+    /// 等在途查询跑完后关掉连接池
+    async fn close(&self) -> Result<()> {
+        self.inner
+            .close_by_ref()
+            .await
+            .wrap_err(|| err!(AppErr::StopFailed, "close database connection"))?;
+        tracing::info!("Database connection pool closed");
+        Ok(())
     }
 }
 
@@ -186,65 +194,8 @@ impl std::ops::Deref for SeaOrmPgPool {
 
 // ---- component --------------------------------------------------------------
 
-/// 同一个组件可以用不同的名字注册多次（比如主库、从库），连接池按组件名放进 Resources，
-/// 用 `get_named::<..>(name)` 取；匿名注册（名字是 `""`）的用 `get::<..>()` 取
-pub struct SeaOrmPgComponent {
-    name: Name,
-    config: SeaOrmPgConfig,
-    /// 启动后留一份连接池，关闭时在 `stop` 里关掉
-    pool: Option<SeaOrmPgPool>,
-}
-
-#[component]
-impl ImmediateComponent for SeaOrmPgComponent {
-    type Config = SeaOrmPgConfig;
-
-    fn build(name: Name, config: Self::Config) -> Self {
-        Self {
-            name,
-            config,
-            pool: None,
-        }
-    }
-
-    /// 连接池按组件名放进 Resources，依赖它的组件声明 `ResourceId::named::<SeaOrmPgPool>(名字)`
-    fn provides(&self) -> Vec<ResourceId> {
-        vec![ResourceId::named::<SeaOrmPgPool>(self.name.clone())]
-    }
-
-    async fn startup(
-        &mut self,
-        resources: &Resources,
-        _shutdown: CancellationToken,
-    ) -> Result<Option<tokio::task::JoinHandle<()>>> {
-        tracing::info!(
-            "Connecting to database: {}@{}:{}/{}",
-            self.config.username,
-            self.config.host,
-            self.config.port,
-            self.config.database
-        );
-        let pool = SeaOrmPgPool::connect(self.config.clone()).await?;
-        tracing::info!("Database connection established");
-        resources.insert_named(self.name.clone(), pool.clone());
-        self.pool = Some(pool);
-        Ok(None)
-    }
-
-    async fn stop(&mut self) -> Result<()> {
-        if let Some(pool) = self.pool.take() {
-            // 等在途查询跑完后关掉连接池
-            pool.inner
-                .close()
-                .await
-                .wrap_err(|| err!(AppErr::StopFailed, "close database connection"))?;
-            tracing::info!("Database connection pool closed");
-        }
-        Ok(())
-    }
-}
-
-// ---- tests ------------------------------------------------------------------
+/// PostgreSQL 连接组件（SeaORM），按组件名放进 Resources 的是 [`SeaOrmPgPool`]。用法见 [`ImmediateResourceComponent`]
+pub type SeaOrmPgComponent = ImmediateResourceComponent<SeaOrmPgPool>;
 
 #[cfg(test)]
 mod tests {

@@ -6,6 +6,7 @@ use hygiea_core::redact::redact;
 use hygiea_http_client::reqwest_client::ReqwestConfig;
 use serde::{Deserialize, Serialize};
 
+pub use hygiea_core::app::ConfigResource;
 pub use test_support::headers::header_map;
 pub use test_support::http_server::*;
 pub use test_support::logs::capture;

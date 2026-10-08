@@ -6,10 +6,8 @@ use std::time::Duration;
 use reqwest::redirect::Policy;
 use serde::Deserialize;
 
-use hygiea_core::app::{
-    AppErr, CancellationToken, ImmediateComponent, Name, ResourceId, Resources, component,
-};
-use hygiea_core::{Result, ResultExt, err};
+use hygiea_core::app::{AppErr, ConfigResource, ImmediateResourceComponent, async_trait};
+use hygiea_core::{Result, err};
 
 use super::HeaderMap;
 use super::config::{HeaderMapConfig, ProxyConfig};
@@ -21,7 +19,7 @@ use reqwest::{Client, ClientBuilder};
 
 /// `ClientBuilder` 的纯数据镜像：一个字段对一个 `ClientBuilder` 方法，字段顺序与方法声明顺序一致。
 ///
-/// 用 [`ReqwestConfig::build`] 造出的 [`ReqwestClient`] 内部是 `Arc`，连接池挂在它身上，
+/// 用 [`ConfigResource::from_config`] 造出的 [`ReqwestClient`] 内部是 `Arc`，连接池挂在它身上，
 /// 所以要长期持有并共享（clone 很廉价）；在请求路径上反复构造等于池子永远是空的，每次都重新建连和握手。
 ///
 /// `hygiea-http-client` crate 已经把 reqwest 的 feature 集固定成
@@ -213,29 +211,11 @@ impl ReqwestConfig {
         self.resolve.push((domain.into(), addrs));
         self
     }
-
-    /// 造出 [`ReqwestClient`]。请求头无效时返回 `InvalidConfig`；代理 URL 或 reqwest 构建失败时返回
-    /// [`ClientBuildFailed`](super::HttpClientErr::ClientBuildFailed)，reqwest 错误保留在 source 上
-    pub fn build(self) -> Result<ReqwestClient> {
-        // debug 状态要用的配置先取出来；reqwest 先校验（UA 不合法时报 ClientBuildFailed），再算 debug 状态
-        #[cfg(feature = "debug-log")]
-        let (debug, user_agent, default_headers) = (
-            self.debug,
-            self.user_agent.clone(),
-            self.default_headers.clone(),
-        );
-        let inner = client_builder(self)?.build().map_err(client_build_failed)?;
-        Ok(ReqwestClient {
-            inner,
-            #[cfg(feature = "debug-log")]
-            debug: super::debug::DebugState::new(debug, user_agent, default_headers)?,
-        })
-    }
 }
 
 // ---------------------------- 客户端 ----------------------------
 
-/// 组件提供的 HTTP 客户端，用 [`ReqwestConfig::build`] 造出来，传给
+/// 组件提供的 HTTP 客户端，用 [`ConfigResource::from_config`] 造出来，传给
 /// [`RequestConfig::send`](super::RequestConfig::send) 发请求。内部是 `Arc`，clone 很便宜，要长期持有并共享
 #[derive(Debug, Clone)]
 pub struct ReqwestClient {
@@ -294,38 +274,31 @@ fn client_builder(config: ReqwestConfig) -> Result<ClientBuilder> {
 
 // ---------------------------- 应用组件 ----------------------------
 
-/// 构建 HTTP 客户端，并按组件名注册到 `Resources`。
-pub struct ReqwestComponent {
-    name: Name,
-    config: ReqwestConfig,
-}
-
-#[component]
-impl ImmediateComponent for ReqwestComponent {
+#[async_trait]
+impl ConfigResource for ReqwestClient {
     type Config = ReqwestConfig;
 
-    fn build(name: Name, config: Self::Config) -> Self {
-        Self { name, config }
-    }
-
-    fn provides(&self) -> Vec<ResourceId> {
-        vec![ResourceId::named::<ReqwestClient>(self.name.clone())]
-    }
-
-    async fn startup(
-        &mut self,
-        resources: &Resources,
-        _shutdown: CancellationToken,
-    ) -> Result<Option<tokio::task::JoinHandle<()>>> {
-        let client = self
-            .config
-            .clone()
+    /// 请求头无效时返回 `InvalidConfig`；代理 URL 或 reqwest 构建失败时返回
+    /// [`ClientBuildFailed`](super::HttpClientErr::ClientBuildFailed)，reqwest 错误保留在 source 上
+    async fn from_config(config: &ReqwestConfig) -> Result<Self> {
+        // reqwest 先校验（UA 不合法时报 ClientBuildFailed），再算 debug 状态
+        let inner = client_builder(config.clone())?
             .build()
-            .wrap_err(|| err!(AppErr::InvalidConfig, "build HTTP client"))?;
-        resources.insert_named(self.name.clone(), client);
-        Ok(None)
+            .map_err(client_build_failed)?;
+        Ok(ReqwestClient {
+            inner,
+            #[cfg(feature = "debug-log")]
+            debug: super::debug::DebugState::new(
+                config.debug,
+                config.user_agent.clone(),
+                config.default_headers.clone(),
+            )?,
+        })
     }
 }
+
+/// 构建 HTTP 客户端，并按组件名注册到 `Resources`。用法见 [`ImmediateResourceComponent`]
+pub type ReqwestComponent = ImmediateResourceComponent<ReqwestClient>;
 
 #[cfg(test)]
 mod tests {
@@ -447,16 +420,18 @@ mod tests {
         use super::*;
 
         /// 默认配置能造出 Client
-        #[test]
-        fn default_config_builds() {
-            ReqwestConfig::default().build().unwrap();
+        #[tokio::test]
+        async fn default_config_builds() {
+            ReqwestClient::from_config(&ReqwestConfig::default())
+                .await
+                .unwrap();
         }
 
         /// 组合多项非默认配置也能造出 Client
-        #[test]
-        fn configured_fields_build() {
+        #[tokio::test]
+        async fn configured_fields_build() {
             let addr: SocketAddr = "127.0.0.1:80".parse().unwrap();
-            ReqwestConfig {
+            ReqwestClient::from_config(&ReqwestConfig {
                 user_agent: Some("hygiea-test".into()),
                 default_headers: header_map(&[("x-a", "1")]).into(),
                 cookie_store: true,
@@ -471,19 +446,19 @@ mod tests {
                 resolve: vec![("a.test".into(), vec![addr])],
                 #[cfg(feature = "debug-log")]
                 debug: true,
-            }
-            .build()
+            })
+            .await
             .unwrap();
         }
 
         /// reqwest 在构建 Client 时校验 User-Agent，错误保留为 source
-        #[test]
-        fn invalid_user_agent_is_client_build_failed() {
-            let err = ReqwestConfig {
+        #[tokio::test]
+        async fn invalid_user_agent_is_client_build_failed() {
+            let err = ReqwestClient::from_config(&ReqwestConfig {
                 user_agent: Some("bad\nvalue".into()),
                 ..ReqwestConfig::default()
-            }
-            .build()
+            })
+            .await
             .unwrap_err();
             assert!(err.is(HttpClientErr::ClientBuildFailed));
             assert!(err.source().is_some());
@@ -515,8 +490,8 @@ mod tests {
         }
 
         /// 超时、resolve、代理这些字段转成运行时类型
-        #[test]
-        fn fields_convert_to_runtime_types() {
+        #[tokio::test]
+        async fn fields_convert_to_runtime_types() {
             let config: ReqwestConfig = toml::from_str(
                 r#"
         timeout = { secs = 5, nanos = 0 }
@@ -541,7 +516,7 @@ mod tests {
             assert_eq!(config.proxies.len(), 1);
             assert_eq!(config.resolve[0].0, "example.com");
             assert_eq!(config.resolve[0].1[0].to_string(), "127.0.0.1:80");
-            assert!(config.build().is_ok());
+            assert!(ReqwestClient::from_config(&config).await.is_ok());
         }
 
         /// 请求头的三种写法：字符串、同名头列表、带 sensitive 的文本或字节
@@ -577,31 +552,31 @@ mod tests {
         mod rejected_when_building {
             use super::*;
 
-            fn build_err(toml: &str) {
+            async fn build_err(toml: &str) {
                 let config: ReqwestConfig = toml::from_str(toml).unwrap();
-                assert!(config.build().is_err(), "{toml}");
+                assert!(ReqwestClient::from_config(&config).await.is_err(), "{toml}");
             }
 
-            #[test]
-            fn invalid_header_name() {
-                build_err("[default_headers]\n\"bad name\" = \"x\"");
+            #[tokio::test]
+            async fn invalid_header_name() {
+                build_err("[default_headers]\n\"bad name\" = \"x\"").await;
             }
 
-            #[test]
-            fn invalid_header_value() {
-                build_err("[default_headers]\nx-key = \"bad\\nvalue\"");
+            #[tokio::test]
+            async fn invalid_header_value() {
+                build_err("[default_headers]\nx-key = \"bad\\nvalue\"").await;
             }
 
-            #[test]
-            fn invalid_proxy_url() {
-                build_err("[[proxies]]\nurl = \"not a url\"");
+            #[tokio::test]
+            async fn invalid_proxy_url() {
+                build_err("[[proxies]]\nurl = \"not a url\"").await;
             }
 
-            #[test]
-            fn invalid_proxy_header() {
+            #[tokio::test]
+            async fn invalid_proxy_header() {
                 build_err(
                     "[[proxies]]\nurl = \"http://127.0.0.1:7890\"\nheaders = { \"bad name\" = \"x\" }",
-                );
+                ).await;
             }
         }
     }

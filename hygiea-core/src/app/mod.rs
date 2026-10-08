@@ -158,6 +158,7 @@ mod component;
 mod config;
 mod error;
 mod registry;
+mod resource_component;
 mod resources;
 mod signal;
 
@@ -172,6 +173,7 @@ pub use error::AppErr;
 /// 找不对时用 `#[component(crate = "::path")]` 指定
 pub use hygiea_macros::component;
 pub use registry::Registry;
+pub use resource_component::{ConfigResource, ImmediateResourceComponent};
 pub use resources::{ReadyResources, Resource, ResourceId, ResourceSink, Resources};
 
 // ---- 再导出 -----------------------------------------------------------------

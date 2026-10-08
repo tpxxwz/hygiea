@@ -68,7 +68,7 @@
 | `http-client-reqwest` | `hygiea-http-client`（`reqwest`） | `hygiea::http_client::reqwest_client::ReqwestComponent` / `ReqwestConfig`，请求 API 也在这个模块；在 `Resources` 中提供 `ReqwestClient` |
 | `http-client-reqwest-debug-log` | `hygiea-http-client`（`debug-log`，带上 `reqwest`） | `ReqwestConfig::debug`：日志带原文和请求头、响应头，只在 dev-dependencies 里开 |
 | `grpc-tonic` | `hygiea-grpc`（`tonic`） | `hygiea::grpc::TonicComponent` |
-| `aws-s3` | `hygiea-aws`（`s3`） | `hygiea::aws::AwsComponent` / `AwsConfig`；在 `Resources` 中提供 `SdkConfig` 和 `aws_sdk_s3::Client` |
+| `aws-s3` | `hygiea-aws`（`s3`） | `hygiea::aws::AwsS3Component` / `AwsConfig`；在 `Resources` 中提供 `AwsS3Client`（`Deref` 到 `aws_sdk_s3::Client`） |
 
 ## 快速开始
 
@@ -240,7 +240,7 @@ async fn login(client: &ReqwestClient) -> Result<String> {
 }
 
 // client 只建一次并共享：连接池在它里面
-// let client = ReqwestConfig::default().build()?;
+// let client = ReqwestClient::from_config(&ReqwestConfig::default()).await?; // from_config 来自 hygiea::app::ConfigResource
 ```
 
 `send::<Decoder>` 的 `Decoder` 是解码器：`Json<T>` 解出 `T`，`String` / `Bytes` / `()` / `BodyStream` 解出它们自己。`resp.body` 的类型是解码器的输出，所以解码器要写在 turbofish 里，不能靠接收处的类型标注推断。自定义解码（拆 `{code, msg, data}` 外壳、解密……）实现 `FromBytes`，`Output` 可以是拆出来的业务数据。
@@ -293,8 +293,8 @@ let resp = RequestConfig::plain(Method::GET, url)
 测试里排查问题时，开 `http-client-reqwest-debug-log` feature（只放在 dev-dependencies 里），给 client 打开 `debug`：
 
 ```rust
-let client = ReqwestClient::debug()?; // 默认配置加 debug，等于 ReqwestConfig::default().debug(true).build()
-let client = ReqwestConfig { timeout: Some(t), ..Default::default() }.debug(true).build()?; // 要改别的配置时
+let client = ReqwestClient::debug().await?; // 默认配置加 debug，等于 ReqwestClient::from_config(&ReqwestConfig::default().debug(true)).await
+let client = ReqwestClient::from_config(&ReqwestConfig { timeout: Some(t), ..Default::default() }.debug(true)).await?; // 要改别的配置时
 // 配置文件里是 debug = true
 
 // 建好之后也能改，原地生效，这个 client 的所有 clone（包括 Resources 里那份）一起变，下一次请求起按新值打

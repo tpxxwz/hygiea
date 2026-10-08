@@ -1,9 +1,16 @@
-//! S3 的专属配置 [`S3Config`]，在公共的 `SdkConfig` 上叠加后造出 `aws_sdk_s3::Client`。
+//! S3：专属配置 [`S3Config`]，资源 [`AwsS3Client`]（在公共的 `SdkConfig` 上叠加 S3 专属项后造出的
+//! `aws_sdk_s3::Client`），组件 [`AwsS3Component`]。
+
+use std::ops::Deref;
 
 use aws_config::SdkConfig;
 use aws_sdk_s3::Client;
 use aws_sdk_s3::config::{Builder, RequestChecksumCalculation, ResponseChecksumValidation};
+use hygiea_core::Result;
+use hygiea_core::app::{ConfigResource, ImmediateResourceComponent, async_trait};
 use serde::Deserialize;
+
+use crate::AwsConfig;
 
 /// S3 专属项。没写的项继承公共配置或 SDK 默认值
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -33,8 +40,8 @@ pub enum ChecksumWhen {
 }
 
 impl S3Config {
-    /// 在公共配置上叠加 S3 专属项，得到 SDK 的 config builder，需要再改别的项时接着链
-    pub fn builder(&self, sdk_config: &SdkConfig) -> Builder {
+    /// 在公共配置上叠加 S3 专属项，得到 SDK 的 config builder
+    pub(crate) fn builder(&self, sdk_config: &SdkConfig) -> Builder {
         let mut builder = Builder::from(sdk_config);
         if let Some(url) = &self.endpoint_url {
             builder = builder.endpoint_url(url);
@@ -56,12 +63,43 @@ impl S3Config {
         }
         builder
     }
+}
 
-    /// 造出 S3 客户端。`Client` 内部是 `Arc`，clone 很廉价，长期持有共享
-    pub fn client(&self, sdk_config: &SdkConfig) -> Client {
-        Client::from_conf(self.builder(sdk_config).build())
+/// S3 客户端，`Deref` 到 `aws_sdk_s3::Client`，操作照常调。内部是 `Arc`，clone 很便宜，长期持有共享。
+/// 用 [`ConfigResource::from_config`] 建，不经过 Registry 也能用
+#[derive(Clone, Debug)]
+pub struct AwsS3Client {
+    inner: Client,
+}
+
+#[async_trait]
+impl ConfigResource for AwsS3Client {
+    type Config = AwsConfig;
+
+    /// 先按公共项加载 `SdkConfig`，再叠加 [`AwsConfig::s3`]。默认链里的凭证用到时才解析，
+    /// 所以这里不会因为凭证缺失而失败，第一次调用服务时才会报错
+    async fn from_config(config: &AwsConfig) -> Result<Self> {
+        let sdk_config = config.load().await;
+        tracing::info!(
+            "AWS config loaded [region={:?}]",
+            sdk_config.region().map(|r| r.as_ref())
+        );
+        Ok(Self {
+            inner: Client::from_conf(config.s3.builder(&sdk_config).build()),
+        })
     }
 }
+
+impl Deref for AwsS3Client {
+    type Target = Client;
+
+    fn deref(&self) -> &Client {
+        &self.inner
+    }
+}
+
+/// S3 组件，按组件名放进 Resources 的是 [`AwsS3Client`]。用法见 [`ImmediateResourceComponent`]
+pub type AwsS3Component = ImmediateResourceComponent<AwsS3Client>;
 
 #[cfg(test)]
 mod tests {

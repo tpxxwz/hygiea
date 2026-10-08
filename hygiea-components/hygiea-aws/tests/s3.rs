@@ -16,13 +16,13 @@
 //!   cargo test -p hygiea-aws --features s3 --test s3 -- --ignored ::live::
 //!   ```
 
-use hygiea_aws::aws_sdk_s3::Client;
 use hygiea_aws::aws_sdk_s3::primitives::ByteStream;
-use hygiea_aws::{AwsConfig, S3Config, StaticCredentials};
+use hygiea_aws::{AwsConfig, AwsS3Client, S3Config, StaticCredentials};
+use hygiea_core::app::ConfigResource;
 use hygiea_test::{container, live};
 
 /// 上传、读回、删除一个对象，删完确认对象不在了
-async fn put_get_delete(client: &Client, bucket: &str) {
+async fn put_get_delete(client: &AwsS3Client, bucket: &str) {
     let key = "hygiea-test/put_get_delete.txt";
 
     client
@@ -109,8 +109,9 @@ mod rustfs {
     #[tokio::test]
     async fn put_get_delete_object() {
         let server = start().await;
-        let c = config(&server, SECRET_KEY);
-        let client = c.s3.client(&c.load().await);
+        let client = AwsS3Client::from_config(&config(&server, SECRET_KEY))
+            .await
+            .unwrap();
         client.create_bucket().bucket("test").send().await.unwrap();
         put_get_delete(&client, "test").await;
     }
@@ -119,8 +120,9 @@ mod rustfs {
     #[tokio::test]
     async fn wrong_secret_is_rejected() {
         let server = start().await;
-        let c = config(&server, "wrong-secret");
-        let client = c.s3.client(&c.load().await);
+        let client = AwsS3Client::from_config(&config(&server, "wrong-secret"))
+            .await
+            .unwrap();
         let err = client.list_buckets().send().await.unwrap_err();
         assert_eq!(
             err.as_service_error().and_then(|e| e.meta().code()),
@@ -159,8 +161,7 @@ mod own_bucket {
 
     #[tokio::test]
     async fn put_get_delete_object() {
-        let c = config();
-        let client = c.s3.client(&c.load().await);
+        let client = AwsS3Client::from_config(&config()).await.unwrap();
         put_get_delete(&client, &env("S3_BUCKET")).await;
     }
 }

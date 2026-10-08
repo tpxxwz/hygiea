@@ -53,7 +53,9 @@ impl fmt::Debug for StaticCredentials {
 impl AwsConfig {
     /// 按配置加载 `SdkConfig`。默认链里的凭证是用到时才解析的，所以这里不会因为凭证缺失而失败，
     /// 第一次调用服务时才会报错
-    pub async fn load(&self) -> SdkConfig {
+    // 没开任何服务 feature 时没有调用方
+    #[cfg_attr(not(feature = "s3"), allow(dead_code))]
+    pub(crate) async fn load(&self) -> SdkConfig {
         let mut loader = aws_config::defaults(BehaviorVersion::latest());
         if let Some(region) = &self.region {
             loader = loader.region(Region::new(region.clone()));

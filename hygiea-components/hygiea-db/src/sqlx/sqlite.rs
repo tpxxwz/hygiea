@@ -1,16 +1,13 @@
 //! SQLite 连接池组件（sqlx），feature `sqlx` + `sqlite`
 
 use std::str::FromStr;
-use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Deserialize;
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 
-use hygiea_core::app::{
-    AppErr, CancellationToken, ImmediateComponent, Name, ResourceId, Resources, component,
-};
+use hygiea_core::app::{AppErr, ConfigResource, ImmediateResourceComponent, async_trait};
 use hygiea_core::{Result, ResultExt, err};
 
 // ---- config -----------------------------------------------------------------
@@ -155,22 +152,18 @@ where
 
 // ---- pool -------------------------------------------------------------------
 
+/// SQLite 连接池，`Deref` 到 sqlx 的 `SqlitePool`。用 [`ConfigResource::from_config`] 建，不经过 Registry 也能用
 #[derive(Clone, Debug)]
 pub struct SqlxSqlitePool {
-    pub inner: SqlitePool,
-    config: Arc<SqlxSqliteConfig>,
+    inner: SqlitePool,
 }
 
-impl SqlxSqlitePool {
-    pub fn new(inner: SqlitePool, config: Arc<SqlxSqliteConfig>) -> Self {
-        Self { inner, config }
-    }
+#[async_trait]
+impl ConfigResource for SqlxSqlitePool {
+    type Config = SqlxSqliteConfig;
 
-    pub fn config(&self) -> &SqlxSqliteConfig {
-        &self.config
-    }
-
-    pub async fn connect(config: SqlxSqliteConfig) -> Result<Self> {
+    async fn from_config(config: &SqlxSqliteConfig) -> Result<Self> {
+        tracing::info!("Connecting to SQLite database: {}", config.database);
         let connect_options = config.connect_options()?;
         let pool = if config.connect_lazy {
             config.pool_options().connect_lazy_with(connect_options)
@@ -181,7 +174,15 @@ impl SqlxSqlitePool {
                 .await
                 .wrap_err(|| err!(AppErr::ConnectFailed, format!("sqlite {}", config.database)))?
         };
-        Ok(Self::new(pool, Arc::new(config)))
+        tracing::info!("SQLite database connection established");
+        Ok(Self { inner: pool })
+    }
+
+    /// 不再发新连接，等借出去的连接还回来（在途查询跑完）后全部关掉
+    async fn close(&self) -> Result<()> {
+        self.inner.close().await;
+        tracing::info!("SQLite connection pool closed");
+        Ok(())
     }
 }
 
@@ -195,54 +196,8 @@ impl std::ops::Deref for SqlxSqlitePool {
 
 // ---- component --------------------------------------------------------------
 
-/// 同一个组件可以用不同的名字注册多次（比如主库、从库），连接池按组件名放进 Resources，
-/// 用 `get_named::<..>(name)` 取；匿名注册（名字是 `""`）的用 `get::<..>()` 取
-pub struct SqlxSqliteComponent {
-    name: Name,
-    config: SqlxSqliteConfig,
-    /// 启动后留一份连接池，关闭时在 `stop` 里关掉
-    pool: Option<SqlxSqlitePool>,
-}
-
-#[component]
-impl ImmediateComponent for SqlxSqliteComponent {
-    type Config = SqlxSqliteConfig;
-
-    fn build(name: Name, config: Self::Config) -> Self {
-        Self {
-            name,
-            config,
-            pool: None,
-        }
-    }
-
-    /// 连接池按组件名放进 Resources，依赖它的组件声明 `ResourceId::named::<SqlxSqlitePool>(名字)`
-    fn provides(&self) -> Vec<ResourceId> {
-        vec![ResourceId::named::<SqlxSqlitePool>(self.name.clone())]
-    }
-
-    async fn startup(
-        &mut self,
-        resources: &Resources,
-        _shutdown: CancellationToken,
-    ) -> Result<Option<tokio::task::JoinHandle<()>>> {
-        tracing::info!("Connecting to SQLite database: {}", self.config.database);
-        let pool = SqlxSqlitePool::connect(self.config.clone()).await?;
-        tracing::info!("SQLite database connection established");
-        resources.insert_named(self.name.clone(), pool.clone());
-        self.pool = Some(pool);
-        Ok(None)
-    }
-
-    async fn stop(&mut self) -> Result<()> {
-        if let Some(pool) = self.pool.take() {
-            // 不再发新连接，等借出去的连接还回来（在途查询跑完）后全部关掉
-            pool.inner.close().await;
-            tracing::info!("SQLite connection pool closed");
-        }
-        Ok(())
-    }
-}
+/// SQLite 连接池组件（sqlx），按组件名放进 Resources 的是 [`SqlxSqlitePool`]。用法见 [`ImmediateResourceComponent`]
+pub type SqlxSqliteComponent = ImmediateResourceComponent<SqlxSqlitePool>;
 
 #[cfg(test)]
 mod tests {
@@ -270,7 +225,7 @@ mod tests {
             max_connections: Some(1),
             ..Default::default()
         };
-        let pool = SqlxSqlitePool::connect(config).await.unwrap();
+        let pool = SqlxSqlitePool::from_config(&config).await.unwrap();
 
         sqlx::query("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
             .execute(&*pool)
@@ -288,12 +243,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(name, "hygiea");
-        assert_eq!(pool.config().database, ":memory:");
     }
 
     #[tokio::test]
     async fn applies_common_sqlite_options() {
-        let pool = SqlxSqlitePool::connect(SqlxSqliteConfig {
+        let pool = SqlxSqlitePool::from_config(&SqlxSqliteConfig {
             database: ":memory:".to_string(),
             max_connections: Some(1),
             journal_mode: Some("memory".to_string()),
@@ -361,7 +315,7 @@ mod tests {
             create_if_missing: true,
             ..Default::default()
         };
-        SqlxSqlitePool::connect(config).await.unwrap();
+        SqlxSqlitePool::from_config(&config).await.unwrap();
         assert!(path.exists());
     }
 
@@ -375,7 +329,7 @@ mod tests {
             create_if_missing: false,
             ..Default::default()
         };
-        assert!(SqlxSqlitePool::connect(config).await.is_err());
+        assert!(SqlxSqlitePool::from_config(&config).await.is_err());
         assert!(!path.exists());
     }
 }

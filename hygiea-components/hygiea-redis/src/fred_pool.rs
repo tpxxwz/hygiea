@@ -2,14 +2,10 @@
 
 use fred::prelude::*;
 use fred::types::config::ClusterDiscoveryPolicy;
-use hygiea_core::app::{
-    AppErr, CancellationToken, ImmediateComponent, Name, ResourceId, Resources, component,
-};
+use hygiea_core::app::{AppErr, ConfigResource, ImmediateResourceComponent, async_trait};
 use hygiea_core::{Result, ResultExt, err};
 use serde::Deserialize;
-use std::sync::Arc;
 use std::time::Duration;
-use tokio::task::JoinHandle;
 
 // ============================================================
 // Config
@@ -98,25 +94,26 @@ impl Default for RedisConfig {
 // Pool wrapper
 // ============================================================
 
+/// Redis 连接池，`Deref` 到 fred 的 `Pool`，命令照常调。用 [`ConfigResource::from_config`] 建，
+/// 不经过 Registry 也能用
 #[derive(Clone, Debug)]
 pub struct FredRedisPool {
     inner: Pool,
-    config: Arc<RedisConfig>,
 }
 
-impl FredRedisPool {
-    pub fn new(inner: Pool, config: Arc<RedisConfig>) -> Self {
-        Self { inner, config }
-    }
+#[async_trait]
+impl ConfigResource for FredRedisPool {
+    type Config = RedisConfig;
 
-    pub fn config(&self) -> &RedisConfig {
-        &self.config
-    }
-
-    pub async fn connect(config: RedisConfig) -> Result<Self> {
-        let fred_config = build_fred_config(&config)?;
-        let perf = build_perf_config(&config);
-        let connection = build_connection_config(&config);
+    async fn from_config(config: &RedisConfig) -> Result<Self> {
+        tracing::info!(
+            "Connecting to Redis [mode={}] with pool_size={}",
+            config.mode,
+            config.pool_size
+        );
+        let fred_config = build_fred_config(config)?;
+        let perf = build_perf_config(config);
+        let connection = build_connection_config(config);
         let policy = ReconnectPolicy::new_exponential(
             config.reconnect_max_attempts,
             config.reconnect_min_delay_ms,
@@ -131,13 +128,21 @@ impl FredRedisPool {
             config.pool_size,
         )
         .wrap_err(|| err!(AppErr::InvalidConfig, "create Redis pool failed"))?;
-        pool.init().await.wrap_err(|| {
-            err!(
-                AppErr::ConnectFailed,
-                format!("redis ({})", config.mode)
-            )
-        })?;
-        Ok(Self::new(pool, Arc::new(config)))
+        pool.init()
+            .await
+            .wrap_err(|| err!(AppErr::ConnectFailed, format!("redis ({})", config.mode)))?;
+        tracing::info!("Redis connection pool established");
+        Ok(Self { inner: pool })
+    }
+
+    /// 发 QUIT 正常断开所有连接
+    async fn close(&self) -> Result<()> {
+        self.inner
+            .quit()
+            .await
+            .wrap_err(|| err!(AppErr::StopFailed, "quit redis connections"))?;
+        tracing::info!("Redis connection pool closed");
+        Ok(())
     }
 }
 
@@ -152,60 +157,8 @@ impl std::ops::Deref for FredRedisPool {
 // Component
 // ============================================================
 
-/// 同一个组件可以用不同的名字注册多次（比如主库、从库），连接池按组件名放进 Resources，
-/// 用 `get_named::<..>(name)` 取；匿名注册（名字是 `""`）的用 `get::<..>()` 取
-pub struct RedisComponent {
-    name: Name,
-    config: RedisConfig,
-    /// 启动后留一份连接池，关闭时在 `stop` 里关掉
-    pool: Option<FredRedisPool>,
-}
-
-#[component]
-impl ImmediateComponent for RedisComponent {
-    type Config = RedisConfig;
-
-    fn build(name: Name, config: Self::Config) -> Self {
-        Self {
-            name,
-            config,
-            pool: None,
-        }
-    }
-
-    /// 连接池按组件名放进 Resources，依赖它的组件声明 `ResourceId::named::<FredRedisPool>(名字)`
-    fn provides(&self) -> Vec<ResourceId> {
-        vec![ResourceId::named::<FredRedisPool>(self.name.clone())]
-    }
-
-    async fn startup(
-        &mut self,
-        resources: &Resources,
-        _shutdown: CancellationToken,
-    ) -> Result<Option<JoinHandle<()>>> {
-        tracing::info!(
-            "Connecting to Redis [mode={}] with pool_size={}",
-            self.config.mode,
-            self.config.pool_size
-        );
-        let pool = FredRedisPool::connect(self.config.clone()).await?;
-        tracing::info!("Redis connection pool established");
-        resources.insert_named(self.name.clone(), pool.clone());
-        self.pool = Some(pool);
-        Ok(None)
-    }
-
-    async fn stop(&mut self) -> Result<()> {
-        if let Some(pool) = self.pool.take() {
-            // 发 QUIT 正常断开所有连接
-            pool.quit()
-                .await
-                .wrap_err(|| err!(AppErr::StopFailed, "quit redis connections"))?;
-            tracing::info!("Redis connection pool closed");
-        }
-        Ok(())
-    }
-}
+/// Redis 连接池组件，按组件名放进 Resources 的是 [`FredRedisPool`]。用法见 [`ImmediateResourceComponent`]
+pub type RedisComponent = ImmediateResourceComponent<FredRedisPool>;
 
 // ============================================================
 // Build helpers

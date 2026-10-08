@@ -16,7 +16,7 @@ mod normal {
         let base = serve_routes(ROUTES).await;
         let (out, _guard) = capture();
         RequestConfig::with_params(Method::GET, format!("{base}/ok"), [("q", "1")])
-            .send::<Bytes>(&local_config().build().unwrap())
+            .send::<Bytes>(&ReqwestClient::from_config(&local_config()).await.unwrap())
             .await
             .unwrap();
         let log = out.text();
@@ -44,7 +44,7 @@ mod normal {
         let base = serve_routes(ROUTES).await;
         let (out, _guard) = capture();
         RequestConfig::plain(Method::GET, format!("{base}/ok"))
-            .send::<String>(&local_config().build().unwrap())
+            .send::<String>(&ReqwestClient::from_config(&local_config()).await.unwrap())
             .await
             .unwrap();
         let log = out.text();
@@ -58,7 +58,7 @@ mod normal {
         let (out, _guard) = capture();
         RequestConfig::plain(Method::GET, format!("{base}/ok"))
             .enable_logging(false)
-            .send::<Bytes>(&local_config().build().unwrap())
+            .send::<Bytes>(&ReqwestClient::from_config(&local_config()).await.unwrap())
             .await
             .unwrap();
         assert_eq!(out.text(), "");
@@ -71,7 +71,7 @@ mod normal {
         let (out, _guard) = capture();
         let mut r = RequestConfig::plain(Method::GET, format!("{base}/ok"))
             .enable_logging(false)
-            .send::<BodyStream>(&local_config().build().unwrap())
+            .send::<BodyStream>(&ReqwestClient::from_config(&local_config()).await.unwrap())
             .await
             .unwrap();
         while let Some(chunk) = r.body.next().await {
@@ -95,7 +95,7 @@ mod failures {
         let (out, _guard) = capture();
         let _ = RequestConfig::plain(Method::GET, format!("{base}/fail"))
             .enable_logging(false)
-            .send::<Bytes>(&local_config().build().unwrap())
+            .send::<Bytes>(&ReqwestClient::from_config(&local_config()).await.unwrap())
             .await;
         let log = out.text();
         assert_eq!(log.lines().count(), 1, "{log}");
@@ -108,7 +108,7 @@ mod failures {
         let base = closed_port_url().await;
         let (out, _guard) = capture();
         let _ = RequestConfig::with_params(Method::GET, format!("{base}/x"), [("q", "1")])
-            .send::<Bytes>(&local_config().build().unwrap())
+            .send::<Bytes>(&ReqwestClient::from_config(&local_config()).await.unwrap())
             .await;
         let log = out.text();
         assert!(log.contains("WARN"), "{log}");
@@ -139,7 +139,7 @@ mod log_errors {
     #[tokio::test]
     async fn preview_failure_is_returned() {
         let base = serve_routes(ROUTES).await;
-        let client = local_config().build().unwrap();
+        let client = ReqwestClient::from_config(&local_config()).await.unwrap();
         let err = RequestConfig::plain(Method::GET, format!("{base}/ok"))
             .send::<Json<DecodeOnly>>(&client)
             .await
@@ -161,7 +161,7 @@ mod log_errors {
         let base = serve_routes(ROUTES).await;
         RequestConfig::plain(Method::GET, format!("{base}/ok"))
             .enable_logging(false)
-            .send::<Json<DecodeOnly>>(&local_config().build().unwrap())
+            .send::<Json<DecodeOnly>>(&ReqwestClient::from_config(&local_config()).await.unwrap())
             .await
             .unwrap();
     }

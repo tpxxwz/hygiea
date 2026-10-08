@@ -28,7 +28,7 @@ pub(crate) fn advisory_key(key: &str) -> i64 {
 impl DistributedLock for SqlxPgPool {
     async fn try_lock(&self, key: &str) -> Result<Option<LockGuard>> {
         let acquire_failed = || err!(BaseLockErr::AcquireFailed, key);
-        let mut tx = self.inner.begin().await.wrap_err(acquire_failed)?;
+        let mut tx = self.begin().await.wrap_err(acquire_failed)?;
         let (acquired,): (bool,) = sqlx::query_as("SELECT pg_try_advisory_xact_lock($1)")
             .bind(advisory_key(key))
             .fetch_one(&mut *tx)
@@ -58,7 +58,6 @@ impl DistributedLock for SeaOrmPgPool {
     async fn try_lock(&self, key: &str) -> Result<Option<LockGuard>> {
         let acquire_failed = || err!(BaseLockErr::AcquireFailed, key);
         let mut tx = self
-            .inner
             .get_postgres_connection_pool()
             .begin()
             .await

@@ -43,9 +43,9 @@ impl AppState {
 fn report() -> Result<()> {
     let state = AppState::get()?;
     tracing::info!(
-        "primary: {}, replica: {}",
-        state.primary.config().database,
-        state.replica.config().database
+        "primary pool size: {}, replica pool size: {}",
+        state.primary.size(),
+        state.replica.size()
     );
     Ok(())
 }

@@ -31,6 +31,13 @@
   但会和同一个二进制里链接进来的正式错误一起查重，所以用测试专用区间，别占正式模块的号
 - 注释、文档用中文。错误模板等实际输出的字符串保持英文，不翻译。
 - 写法跟周围代码保持一致：命名、注释密度、惯用写法。
+- 组件放进 Resources 的资源：
+  - 用组件 crate 自己定义的类型，第三方类型放在私有的 `inner` 里。只是换个类型名的（连接池、SDK 客户端）实现 `Deref` 到 `inner`，
+    不实现 `DerefMut`；在第三方之上加了自己接口、不想被绕过的（如 `ReqwestClient`）不实现 `Deref`
+  - 不存完整的 Config：配置在注册组件的地方本来就有。运行时要用的值在构建时转换好，作为单独的字段存放
+  - 不经过 Registry 也能直接从配置建出来。一个配置建一个资源的，资源实现 `ConfigResource`（`from_config` / `close`），
+    组件写成 `pub type XxxComponent = ImmediateResourceComponent<XxxPool>;`；一个配置建多个资源、有后台任务、
+    Deferred 组件照常手写
 
 ## feature
 

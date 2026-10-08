@@ -11,7 +11,7 @@ use hygiea_test::container;
 /// 用代码启动的官方 postgres 镜像
 #[container]
 mod postgres {
-    use hygiea_core::app::{Registry, Resources};
+    use hygiea_core::app::{ConfigResource, Registry, Resources};
     use hygiea_core::datetime::{HygieaDateTimeExt, UtcDateTime};
     use hygiea_db::HyUtcDateTime;
     use hygiea_db::{
@@ -63,12 +63,12 @@ mod postgres {
 
     /// 用默认配置连上去建好 [`SCHEMA`]，search_path 指向不存在的 schema 时 current_schema() 是 NULL
     async fn create_schema(server: &RunningContainer) {
-        let pool = SqlxPgPool::connect(sqlx_config(server)).await.unwrap();
+        let pool = SqlxPgPool::from_config(&sqlx_config(server)).await.unwrap();
         sqlx::query("CREATE SCHEMA hygiea_test")
             .execute(&*pool)
             .await
             .unwrap();
-        pool.inner.close().await;
+        pool.close().await.unwrap();
     }
 
     /// 启动 registry，把 `Resources` 交给 `check`，拿回它的结果。
@@ -99,7 +99,9 @@ mod postgres {
     #[tokio::test]
     async fn sqlx_connect_success() {
         let server = start().await;
-        let pool = SqlxPgPool::connect(sqlx_config(&server)).await.unwrap();
+        let pool = SqlxPgPool::from_config(&sqlx_config(&server))
+            .await
+            .unwrap();
 
         let value: i32 = sqlx::query_scalar("SELECT 1")
             .fetch_one(&*pool)
@@ -117,7 +119,7 @@ mod postgres {
             schema_search_path: SCHEMA.to_string(),
             ..sqlx_config(&server)
         };
-        let pool = SqlxPgPool::connect(config).await.unwrap();
+        let pool = SqlxPgPool::from_config(&config).await.unwrap();
 
         let schema: Option<String> = sqlx::query_scalar("SELECT current_schema()")
             .fetch_one(&*pool)
@@ -133,11 +135,11 @@ mod postgres {
             max_connections: Some(2),
             ..sqlx_config(&server)
         };
-        let pool = SqlxPgPool::connect(config).await.unwrap();
+        let pool = SqlxPgPool::from_config(&config).await.unwrap();
 
         sqlx::query("SELECT 1").fetch_one(&*pool).await.unwrap();
 
-        pool.inner.close().await;
+        pool.close().await.unwrap();
 
         // 关闭后再发查询应该失败
         let err = sqlx::query("SELECT 1").fetch_one(&*pool).await.unwrap_err();
@@ -147,7 +149,9 @@ mod postgres {
     #[tokio::test]
     async fn seaorm_connect_success() {
         let server = start().await;
-        let pool = SeaOrmPgPool::connect(seaorm_config(&server)).await.unwrap();
+        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server))
+            .await
+            .unwrap();
 
         let row = pool.query_one_raw(sql("SELECT 1")).await.unwrap().unwrap();
         assert_eq!(row.try_get_by_index::<i32>(0).unwrap(), 1);
@@ -162,7 +166,7 @@ mod postgres {
             schema_search_path: SCHEMA.to_string(),
             ..seaorm_config(&server)
         };
-        let pool = SeaOrmPgPool::connect(config).await.unwrap();
+        let pool = SeaOrmPgPool::from_config(&config).await.unwrap();
 
         let row = pool
             .query_one_raw(sql("SELECT current_schema()"))
@@ -180,12 +184,14 @@ mod postgres {
     #[tokio::test]
     async fn seaorm_stop_closes_connection() {
         let server = start().await;
-        let pool = SeaOrmPgPool::connect(seaorm_config(&server)).await.unwrap();
+        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server))
+            .await
+            .unwrap();
 
         pool.query_one_raw(sql("SELECT 1")).await.unwrap();
 
-        // close_by_ref 关的是共享的底层连接池，pool 本身还能用来发查询
-        pool.inner.close_by_ref().await.unwrap();
+        // close 关的是共享的底层连接池，pool 本身还能用来发查询
+        pool.close().await.unwrap();
 
         // 关闭后再发查询应该失败
         let result = pool.query_one_raw(sql("SELECT 1")).await;
@@ -260,7 +266,9 @@ mod postgres {
     #[tokio::test]
     async fn sqlx_hy_utc_datetime_round_trip() {
         let server = start().await;
-        let pool = SqlxPgPool::connect(sqlx_config(&server)).await.unwrap();
+        let pool = SqlxPgPool::from_config(&sqlx_config(&server))
+            .await
+            .unwrap();
         sqlx::query(CREATE_RECORD).execute(&*pool).await.unwrap();
 
         let at = HyUtcDateTime(utc("2026-10-05T12:57:24.719Z"));
@@ -297,7 +305,9 @@ mod postgres {
     #[tokio::test]
     async fn seaorm_hy_utc_datetime_round_trip() {
         let server = start().await;
-        let pool = SeaOrmPgPool::connect(seaorm_config(&server)).await.unwrap();
+        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server))
+            .await
+            .unwrap();
         pool.execute_unprepared(CREATE_RECORD).await.unwrap();
 
         let at = HyUtcDateTime(utc("2026-10-05T12:57:24.719Z"));
@@ -340,7 +350,9 @@ mod postgres {
         use hygiea_db::RepoErr;
 
         let server = start().await;
-        let pool = SqlxPgPool::connect(sqlx_config(&server)).await.unwrap();
+        let pool = SqlxPgPool::from_config(&sqlx_config(&server))
+            .await
+            .unwrap();
         sqlx::query("CREATE TABLE item (id INT PRIMARY KEY)")
             .execute(&*pool)
             .await
@@ -385,7 +397,9 @@ mod postgres {
         use hygiea_db::RepoErr;
 
         let server = start().await;
-        let pool = SeaOrmPgPool::connect(seaorm_config(&server)).await.unwrap();
+        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server))
+            .await
+            .unwrap();
         pool.execute_unprepared("CREATE TABLE item (id INT PRIMARY KEY)")
             .await
             .unwrap();

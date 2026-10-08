@@ -11,10 +11,12 @@ mod request_content {
     async fn seen<P: serde::Serialize + Send, B: IntoBody + Send>(
         cfg: RequestConfig<P, B>,
     ) -> serde_json::Value {
-        cfg.send::<Json<serde_json::Value>>(&local_config().build().unwrap())
-            .await
-            .unwrap()
-            .body
+        cfg.send::<Json<serde_json::Value>>(
+            &ReqwestClient::from_config(&local_config()).await.unwrap(),
+        )
+        .await
+        .unwrap()
+        .body
     }
 
     /// 方法和路径
@@ -203,7 +205,7 @@ mod responses {
         let base = serve(move |_| Reply::json(200, big.clone())).await;
         let (out, _guard) = capture();
         let mut r = RequestConfig::plain(Method::GET, format!("{base}/big"))
-            .send::<BodyStream>(&local_config().build().unwrap())
+            .send::<BodyStream>(&ReqwestClient::from_config(&local_config()).await.unwrap())
             .await
             .unwrap();
         assert_eq!(r.status, StatusCode::OK);
@@ -225,7 +227,7 @@ mod responses {
         let base = serve(move |_| Reply::json(200, big.clone())).await;
         let path = std::env::temp_dir().join(format!("hygiea-{}-download.bin", std::process::id()));
         let r = RequestConfig::plain(Method::GET, format!("{base}/file"))
-            .send::<BodyStream>(&local_config().build().unwrap())
+            .send::<BodyStream>(&ReqwestClient::from_config(&local_config()).await.unwrap())
             .await
             .unwrap();
         let file = tokio::fs::File::create(&path).await.unwrap();
@@ -241,7 +243,7 @@ mod responses {
     async fn stream_non_2xx_is_status_error() {
         let base = serve_routes(ROUTES).await;
         let err = RequestConfig::plain(Method::GET, format!("{base}/fail"))
-            .send::<BodyStream>(&local_config().build().unwrap())
+            .send::<BodyStream>(&ReqwestClient::from_config(&local_config()).await.unwrap())
             .await
             .unwrap_err();
         assert!(err.is(HttpClientErr::NonSuccessStatus));
@@ -253,7 +255,7 @@ mod responses {
     async fn response_metadata() {
         let base = serve(|req| echo(req).header("x-request-id", "rid-1")).await;
         let resp = RequestConfig::plain(Method::POST, format!("{base}/meta"))
-            .send::<Bytes>(&local_config().build().unwrap())
+            .send::<Bytes>(&ReqwestClient::from_config(&local_config()).await.unwrap())
             .await
             .unwrap();
         assert_eq!(resp.method, Method::POST);
@@ -267,7 +269,7 @@ mod responses {
     #[tokio::test]
     async fn send_decodes_any_2xx() {
         let base = serve_routes(ROUTES).await;
-        let client = local_config().build().unwrap();
+        let client = ReqwestClient::from_config(&local_config()).await.unwrap();
         let ok = RequestConfig::plain(Method::GET, format!("{base}/ok"))
             .send::<Json<Login>>(&client)
             .await
@@ -285,7 +287,7 @@ mod responses {
     #[tokio::test]
     async fn send_other_body_types() {
         let base = serve_routes(ROUTES).await;
-        let client = local_config().build().unwrap();
+        let client = ReqwestClient::from_config(&local_config()).await.unwrap();
         let url = format!("{base}/ok");
         let s = RequestConfig::plain(Method::GET, &url)
             .send::<String>(&client)
@@ -308,7 +310,7 @@ mod responses {
     async fn send_non_2xx_is_status_error() {
         let base = serve_routes(ROUTES).await;
         let err = RequestConfig::plain(Method::GET, format!("{base}/fail"))
-            .send::<Json<Login>>(&local_config().build().unwrap())
+            .send::<Json<Login>>(&ReqwestClient::from_config(&local_config()).await.unwrap())
             .await
             .unwrap_err();
         assert!(err.is(HttpClientErr::NonSuccessStatus));
@@ -324,7 +326,7 @@ mod responses {
         let gbk = [0xc4, 0xe3, 0xba, 0xc3]; // "你好" 的 GBK 字节
         let base = serve(move |_| Reply::bytes(200, "text/plain; charset=gbk", gbk.to_vec())).await;
         let resp = RequestConfig::plain(Method::GET, format!("{base}/gbk"))
-            .send::<String>(&local_config().build().unwrap())
+            .send::<String>(&ReqwestClient::from_config(&local_config()).await.unwrap())
             .await
             .unwrap();
         assert_eq!(resp.body, "你好");
@@ -336,7 +338,7 @@ mod responses {
         let base = serve(|_| Reply::bytes(200, "text/plain", vec![b'a', 0xff, b'b'])).await;
         let (out, _guard) = capture();
         let resp = RequestConfig::plain(Method::GET, format!("{base}/bad-bytes"))
-            .send::<String>(&local_config().build().unwrap())
+            .send::<String>(&ReqwestClient::from_config(&local_config()).await.unwrap())
             .await
             .unwrap();
         assert_eq!(resp.body, "a\u{fffd}b");
@@ -354,7 +356,7 @@ mod transport_errors {
     async fn connect_failure() {
         let base = closed_port_url().await;
         let err = RequestConfig::plain(Method::GET, format!("{base}/x"))
-            .send::<Bytes>(&local_config().build().unwrap())
+            .send::<Bytes>(&ReqwestClient::from_config(&local_config()).await.unwrap())
             .await
             .unwrap_err();
         assert!(err.is(HttpClientErr::RequestFailed));
@@ -368,7 +370,7 @@ mod transport_errors {
     async fn stream_read_interrupted() {
         let base = serve(|_| Reply::json(200, "{\"a\":").truncated(50)).await;
         let mut r = RequestConfig::plain(Method::GET, format!("{base}/cut"))
-            .send::<BodyStream>(&local_config().build().unwrap())
+            .send::<BodyStream>(&ReqwestClient::from_config(&local_config()).await.unwrap())
             .await
             .unwrap();
         let mut failed = None;
@@ -386,7 +388,7 @@ mod transport_errors {
     async fn body_read_interrupted() {
         let base = serve(|_| Reply::json(200, "{\"a\":").truncated(50)).await;
         let err = RequestConfig::plain(Method::GET, format!("{base}/cut"))
-            .send::<Bytes>(&local_config().build().unwrap())
+            .send::<Bytes>(&ReqwestClient::from_config(&local_config()).await.unwrap())
             .await
             .unwrap_err();
         assert!(err.is(HttpClientErr::RequestFailed));

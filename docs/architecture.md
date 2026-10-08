@@ -29,7 +29,7 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 | `env` | 常开 | 环境变量 |
 | `string` | 常开 | 缓存的正则、模板渲染，`fmt_tpl!` / `fmt_tpl_once!` / `fmt_pos!` 宏 |
 | `log` | `log` | 日志配置和初始化 |
-| `app` | `app` | 应用框架：组件（`Component` 加上 `ImmediateComponent` / `DeferredComponent` 两种启动方式）、注册、依赖排序、两阶段启动（`before_activate` / `on_ready`）、优雅退出；`#[component]` 宏从这里导出 |
+| `app` | `app` | 应用框架：组件（`Component` 加上 `ImmediateComponent` / `DeferredComponent` 两种启动方式）、注册、依赖排序、两阶段启动（`before_activate` / `on_ready`）、优雅退出；`ConfigResource` + `ImmediateResourceComponent<R>`（一个配置建一个资源的通用组件，`resource_component.rs`）；`#[component]` 宏从这里导出 |
 | `net` | `ws-client` | WebSocket 客户端 |
 
 ### hygiea-macros
@@ -69,9 +69,8 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 | `hygiea-http-client/src/reqwest_client/request.rs` | `RequestConfig`（单次请求，纯数据）和 `HttpResponse`；`headers.rs` 请求头与认证，`body.rs` 请求体，`response.rs` 响应体 |
 | `hygiea-http-client/src/reqwest_client/send.rs` | 发送流程（开头有流程图）；`retry.rs` 重试；`logging.rs` 日志；`text.rs` 字节转文本；`error.rs` 错误 |
 | `hygiea-grpc/src/tonic_server.rs` | gRPC 服务组件 |
-| `hygiea-aws/src/config.rs` | `AwsConfig`：所有服务共用的配置（region、endpoint、profile、写死的凭证），加载成 `SdkConfig`；每个服务一个子配置 |
-| `hygiea-aws/src/s3.rs` | `S3Config`：S3 专属项，在 `SdkConfig` 上叠加后造出 `aws_sdk_s3::Client`（feature `s3`） |
-| `hygiea-aws/src/component.rs` | `AwsComponent`：按组件名把 `SdkConfig` 和开了 feature 的各服务客户端放进 Resources |
+| `hygiea-aws/src/config.rs` | `AwsConfig`：所有服务共用的配置（region、endpoint、profile、写死的凭证），加载成 `SdkConfig`；每个服务一个子配置。各服务组件的配置都是它 |
+| `hygiea-aws/src/s3.rs` | `S3Config`：S3 专属项；`AwsS3Client`：在 `SdkConfig` 上叠加 S3 专属项后造出的客户端，实现 `ConfigResource`；`AwsS3Component = ImmediateResourceComponent<AwsS3Client>`（feature `s3`） |
 
 ### hygiea-test
 

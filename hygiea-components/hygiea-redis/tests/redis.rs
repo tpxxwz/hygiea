@@ -11,7 +11,7 @@ use hygiea_test::container;
 #[container]
 mod redis {
     use fred::interfaces::KeysInterface;
-    use hygiea_core::app::{Registry, Resources};
+    use hygiea_core::app::{ConfigResource, Registry, Resources};
     use hygiea_redis::{FredRedisPool, RedisComponent, RedisConfig};
     use hygiea_test::container::{ContainerSpec, RunningContainer};
 
@@ -77,7 +77,7 @@ mod redis {
     #[tokio::test]
     async fn connect_to_redis_success() {
         let redis = start().await;
-        FredRedisPool::connect(config(&redis, 0))
+        FredRedisPool::from_config(&config(&redis, 0))
             .await
             .expect("应该能连接到 Redis");
     }
@@ -85,7 +85,9 @@ mod redis {
     #[tokio::test]
     async fn set_and_get_value() {
         let redis = start().await;
-        let pool = FredRedisPool::connect(config(&redis, 0)).await.unwrap();
+        let pool = FredRedisPool::from_config(&config(&redis, 0))
+            .await
+            .unwrap();
 
         let () = pool
             .set("test_key", "test_value", None, None, false)
@@ -98,7 +100,9 @@ mod redis {
     #[tokio::test]
     async fn select_database() {
         let redis = start().await;
-        let pool = FredRedisPool::connect(config(&redis, 1)).await.unwrap();
+        let pool = FredRedisPool::from_config(&config(&redis, 1))
+            .await
+            .unwrap();
 
         // 在 db 1 里 SET 一个值，能 GET 出来
         let () = pool

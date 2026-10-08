@@ -7,7 +7,10 @@
 
 use axum::Router;
 use axum::routing::post;
-use hygiea::http_client::reqwest_client::{Json, Method, RequestConfig, ReqwestConfig};
+use hygiea::app::ConfigResource;
+use hygiea::http_client::reqwest_client::{
+    Json, Method, RequestConfig, ReqwestClient, ReqwestConfig,
+};
 use hygiea::redact::redact;
 use hygiea::{BaseErr, Result, err};
 use serde::{Deserialize, Serialize};
@@ -51,7 +54,7 @@ async fn main() -> Result<()> {
         let _ = axum::serve(listener, router).await;
     });
 
-    let client = ReqwestConfig::default().build()?;
+    let client = ReqwestClient::from_config(&ReqwestConfig::default()).await?;
     let params = LoginParams {
         username: "alice".to_string(),
         password: "s3cr3t".to_string(),

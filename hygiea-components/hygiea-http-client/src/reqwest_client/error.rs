@@ -20,7 +20,7 @@ use super::{Method, StatusCode};
 #[err_code_internal_module_prefix = "101"]
 pub enum HttpClientErr {
     // ---- 建 client ----
-    /// `ReqwestConfig::build` 失败，比如 TLS 后端初始化失败、代理配置不合法；原始错误挂在 source 上
+    /// `ReqwestClient::from_config` 失败，比如 TLS 后端初始化失败、代理配置不合法；原始错误挂在 source 上
     #[error(err_code = "01", err_tpl = "Http client build failed")]
     ClientBuildFailed,
 
@@ -115,7 +115,7 @@ pub(super) fn request_failed(
 }
 
 /// 非 2xx。`body` 放在 err_args 里，打日志可见，不渲染进对外消息
-/// `ReqwestConfig::build` 失败
+/// `ReqwestClient::from_config` 失败
 pub(super) fn client_build_failed(e: reqwest::Error) -> HyErr {
     err!(HttpClientErr::ClientBuildFailed).with_source(e)
 }

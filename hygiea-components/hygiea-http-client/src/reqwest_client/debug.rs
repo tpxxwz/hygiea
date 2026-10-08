@@ -19,7 +19,7 @@ use reqwest::header::{ACCEPT, Entry, HeaderValue, USER_AGENT};
 use serde::Serialize;
 use serde_json::Value;
 
-use hygiea_core::app::AppErr;
+use hygiea_core::app::{AppErr, ConfigResource};
 use hygiea_core::{BaseErr, HyErr, Result, ResultExt, err};
 
 use super::body::IntoBody;
@@ -39,10 +39,10 @@ impl ReqwestConfig {
 }
 
 impl ReqwestClient {
-    /// 默认配置、打开 debug 日志的 client，就是 `ReqwestConfig::default().debug(true).build()`。
+    /// 默认配置、打开 debug 日志的 client，就是 `ReqwestClient::from_config(&ReqwestConfig::default().debug(true))`。
     /// 只在 `debug-log` feature 下存在，给测试用；要改别的配置就用 [`ReqwestConfig::debug`](ReqwestConfig::debug) 那条写法
-    pub fn debug() -> Result<Self> {
-        ReqwestConfig::default().debug(true).build()
+    pub async fn debug() -> Result<Self> {
+        Self::from_config(&ReqwestConfig::default().debug(true)).await
     }
 
     /// 打开或关闭 debug 日志，初始值是 [`ReqwestConfig::debug`](ReqwestConfig::debug)。
@@ -335,17 +335,26 @@ mod tests {
         use super::*;
 
         /// 默认关，`.debug(true)` 打开，build 后带到 ReqwestClient 上；pretty 默认关
-        #[test]
-        fn switch_reaches_client() {
-            assert_eq!(ReqwestConfig::default().build().unwrap().debug.mode(), None);
-            let client = ReqwestConfig::default().debug(true).build().unwrap();
+        #[tokio::test]
+        async fn switch_reaches_client() {
+            assert_eq!(
+                ReqwestClient::from_config(&ReqwestConfig::default())
+                    .await
+                    .unwrap()
+                    .debug
+                    .mode(),
+                None
+            );
+            let client = ReqwestClient::from_config(&ReqwestConfig::default().debug(true))
+                .await
+                .unwrap();
             assert_eq!(client.debug.mode(), Some(false));
         }
 
         /// `ReqwestClient::debug()`：默认配置加上 debug
-        #[test]
-        fn shortcut_is_default_with_debug() {
-            let client = ReqwestClient::debug().unwrap();
+        #[tokio::test]
+        async fn shortcut_is_default_with_debug() {
+            let client = ReqwestClient::debug().await.unwrap();
             assert_eq!(client.debug.mode(), Some(false));
             assert_eq!(
                 client.debug.default_headers,
@@ -354,9 +363,11 @@ mod tests {
         }
 
         /// set_debug / set_pretty 原地改，所有 clone 一起变；debug 关时 pretty 不起作用
-        #[test]
-        fn switches_are_shared_by_clones() {
-            let client = ReqwestConfig::default().build().unwrap();
+        #[tokio::test]
+        async fn switches_are_shared_by_clones() {
+            let client = ReqwestClient::from_config(&ReqwestConfig::default())
+                .await
+                .unwrap();
             let clone = client.clone();
             client.set_pretty(true);
             assert_eq!(clone.debug.mode(), None);
@@ -369,16 +380,18 @@ mod tests {
         }
 
         /// 配置文件里写 `debug = true`
-        #[test]
-        fn parsed_from_config_file() {
+        #[tokio::test]
+        async fn parsed_from_config_file() {
             let config: ReqwestConfig = toml::from_str("debug = true").unwrap();
             assert!(config.debug);
         }
 
         /// 什么都不配时只有 reqwest 默认的 `Accept: */*`
-        #[test]
-        fn default_headers_start_with_accept() {
-            let client = ReqwestConfig::default().build().unwrap();
+        #[tokio::test]
+        async fn default_headers_start_with_accept() {
+            let client = ReqwestClient::from_config(&ReqwestConfig::default())
+                .await
+                .unwrap();
             assert_eq!(
                 client.debug.default_headers,
                 header_map(&[("accept", "*/*")])
@@ -386,28 +399,28 @@ mod tests {
         }
 
         /// UA 和 default_headers 都算进来；default_headers 里的同名头覆盖 Accept 和 UA，同名多值只剩最后一个
-        #[test]
-        fn default_headers_follow_reqwest_rules() {
+        #[tokio::test]
+        async fn default_headers_follow_reqwest_rules() {
             let mut configured = header_map(&[("accept", "text/plain"), ("x-a", "1")]);
             configured.append("x-a", "2".parse().unwrap());
-            let client = ReqwestConfig {
+            let client = ReqwestClient::from_config(&ReqwestConfig {
                 user_agent: Some("ua".into()),
                 default_headers: configured.into(),
                 ..ReqwestConfig::default()
-            }
-            .build()
+            })
+            .await
             .unwrap();
             assert_eq!(
                 client.debug.default_headers,
                 header_map(&[("accept", "text/plain"), ("user-agent", "ua"), ("x-a", "2")])
             );
 
-            let client = ReqwestConfig {
+            let client = ReqwestClient::from_config(&ReqwestConfig {
                 user_agent: Some("ua".into()),
                 default_headers: header_map(&[("user-agent", "override")]).into(),
                 ..ReqwestConfig::default()
-            }
-            .build()
+            })
+            .await
             .unwrap();
             assert_eq!(client.debug.default_headers["user-agent"], "override");
         }

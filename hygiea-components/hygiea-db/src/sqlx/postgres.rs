@@ -1,15 +1,12 @@
 //! PostgreSQL 连接池组件（sqlx），feature `sqlx` + `postgres`
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Deserialize;
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
 
-use hygiea_core::app::{
-    AppErr, CancellationToken, ImmediateComponent, Name, ResourceId, Resources, component,
-};
+use hygiea_core::app::{AppErr, ConfigResource, ImmediateResourceComponent, async_trait};
 use hygiea_core::{Result, ResultExt, err};
 
 // ---- config -----------------------------------------------------------------
@@ -108,23 +105,24 @@ impl SqlxPgConfig {
 
 // ---- pool -------------------------------------------------------------------
 
+/// PostgreSQL 连接池，`Deref` 到 sqlx 的 `PgPool`。用 [`ConfigResource::from_config`] 建，不经过 Registry 也能用
 #[derive(Clone, Debug)]
 pub struct SqlxPgPool {
-    pub inner: PgPool,
-    config: Arc<SqlxPgConfig>,
+    inner: PgPool,
 }
 
-impl SqlxPgPool {
-    pub fn new(inner: PgPool, config: Arc<SqlxPgConfig>) -> Self {
-        Self { inner, config }
-    }
+#[async_trait]
+impl ConfigResource for SqlxPgPool {
+    type Config = SqlxPgConfig;
 
-    /// 连接池用的配置
-    pub fn config(&self) -> &SqlxPgConfig {
-        &self.config
-    }
-
-    pub async fn connect(config: SqlxPgConfig) -> Result<Self> {
+    async fn from_config(config: &SqlxPgConfig) -> Result<Self> {
+        tracing::info!(
+            "Connecting to database: {}@{}:{}/{}",
+            config.username,
+            config.host,
+            config.port,
+            config.database
+        );
         let pool = if config.connect_lazy {
             config.pool_options().connect_lazy(&config.url())
         } else {
@@ -139,8 +137,15 @@ impl SqlxPgPool {
                 )
             )
         })?;
-        let config = Arc::new(config);
-        Ok(Self::new(pool, config))
+        tracing::info!("Database connection established");
+        Ok(Self { inner: pool })
+    }
+
+    /// 不再发新连接，等借出去的连接还回来（在途查询跑完）后全部关掉
+    async fn close(&self) -> Result<()> {
+        self.inner.close().await;
+        tracing::info!("Database connection pool closed");
+        Ok(())
     }
 }
 
@@ -153,60 +158,8 @@ impl std::ops::Deref for SqlxPgPool {
 
 // ---- component --------------------------------------------------------------
 
-/// 同一个组件可以用不同的名字注册多次（比如主库、从库），连接池按组件名放进 Resources，
-/// 用 `get_named::<..>(name)` 取；匿名注册（名字是 `""`）的用 `get::<..>()` 取
-pub struct SqlxPgComponent {
-    name: Name,
-    config: SqlxPgConfig,
-    /// 启动后留一份连接池，关闭时在 `stop` 里关掉
-    pool: Option<SqlxPgPool>,
-}
-
-#[component]
-impl ImmediateComponent for SqlxPgComponent {
-    type Config = SqlxPgConfig;
-
-    fn build(name: Name, config: Self::Config) -> Self {
-        Self {
-            name,
-            config,
-            pool: None,
-        }
-    }
-
-    /// 连接池按组件名放进 Resources，依赖它的组件声明 `ResourceId::named::<SqlxPgPool>(名字)`
-    fn provides(&self) -> Vec<ResourceId> {
-        vec![ResourceId::named::<SqlxPgPool>(self.name.clone())]
-    }
-
-    async fn startup(
-        &mut self,
-        resources: &Resources,
-        _shutdown: CancellationToken,
-    ) -> Result<Option<tokio::task::JoinHandle<()>>> {
-        tracing::info!(
-            "Connecting to database: {}@{}:{}/{}",
-            self.config.username,
-            self.config.host,
-            self.config.port,
-            self.config.database
-        );
-        let pool = SqlxPgPool::connect(self.config.clone()).await?;
-        tracing::info!("Database connection established");
-        resources.insert_named(self.name.clone(), pool.clone());
-        self.pool = Some(pool);
-        Ok(None)
-    }
-
-    async fn stop(&mut self) -> Result<()> {
-        if let Some(pool) = self.pool.take() {
-            // 不再发新连接，等借出去的连接还回来（在途查询跑完）后全部关掉
-            pool.inner.close().await;
-            tracing::info!("Database connection pool closed");
-        }
-        Ok(())
-    }
-}
+/// PostgreSQL 连接池组件（sqlx），按组件名放进 Resources 的是 [`SqlxPgPool`]。用法见 [`ImmediateResourceComponent`]
+pub type SqlxPgComponent = ImmediateResourceComponent<SqlxPgPool>;
 
 #[cfg(test)]
 mod tests {
@@ -270,7 +223,7 @@ mod tests {
             ..Default::default()
         };
         // 不应该报错，因为是 lazy connect
-        let result = SqlxPgPool::connect(config).await;
+        let result = SqlxPgPool::from_config(&config).await;
         assert!(result.is_ok());
     }
 }

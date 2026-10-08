@@ -1,6 +1,7 @@
 //! SeaORM + PostgreSQL 锁的端到端测试，要连真实的 PostgreSQL（`CLOUD_PG_*` 环境变量）。
 //! 手动跑：`cd playground && cargo test --test distributed_lock -- --ignored pg_it`
 
+use hygiea::app::ConfigResource;
 use hygiea::db::{SeaOrmPgConfig, SeaOrmPgPool};
 use hygiea::env::{BuiltinKey, env_get, env_get_or_else};
 
@@ -24,7 +25,7 @@ fn cloud_pg_config() -> SeaOrmPgConfig {
 }
 
 async fn make_db() -> SeaOrmPgPool {
-    SeaOrmPgPool::connect(cloud_pg_config()).await.unwrap()
+    SeaOrmPgPool::from_config(&cloud_pg_config()).await.unwrap()
 }
 
 #[tokio::test]
@@ -122,7 +123,7 @@ async fn test_concurrent_distinct_keys_under_pool_pressure() {
 
     let mut config = cloud_pg_config();
     config.max_connections = Some(MAX_CONNECTIONS);
-    let db = SeaOrmPgPool::connect(config).await.unwrap();
+    let db = SeaOrmPgPool::from_config(&config).await.unwrap();
 
     let completed = Arc::new(AtomicU32::new(0));
     let start = std::time::Instant::now();

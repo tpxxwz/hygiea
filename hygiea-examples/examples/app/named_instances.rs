@@ -30,9 +30,9 @@ async fn main() -> Result<()> {
             let primary = resources.require_named::<SqlxSqlitePool>("primary")?;
             let replica = resources.require_named::<SqlxSqlitePool>("replica")?;
             tracing::info!(
-                "primary: {}, replica: {}",
-                primary.config().database,
-                replica.config().database
+                "primary pool size: {}, replica pool size: {}",
+                primary.size(),
+                replica.size()
             );
 
             // 没有注册过的名字取不到，返回错误而不是 panic

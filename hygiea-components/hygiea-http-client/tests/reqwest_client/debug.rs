@@ -9,15 +9,17 @@ use serde_json::{Value, json};
 use crate::support::*;
 
 /// 开了 debug 的 client，带 UA 和一个默认头
-fn debug_client() -> ReqwestClient {
-    ReqwestConfig {
-        user_agent: Some("hygiea-debug".into()),
-        ..local_config()
-    }
-    .default_headers(header_map(&[("x-default", "d")]))
-    .unwrap()
-    .debug(true)
-    .build()
+async fn debug_client() -> ReqwestClient {
+    ReqwestClient::from_config(
+        &ReqwestConfig {
+            user_agent: Some("hygiea-debug".into()),
+            ..local_config()
+        }
+        .default_headers(header_map(&[("x-default", "d")]))
+        .unwrap()
+        .debug(true),
+    )
+    .await
     .unwrap()
 }
 
@@ -62,7 +64,7 @@ async fn success_has_request_and_response() {
     let base = serve(echo).await;
     let (out, _guard) = capture();
     login_request(format!("{base}/echo"))
-        .send::<Json<Value>>(&debug_client())
+        .send::<Json<Value>>(&debug_client().await)
         .await
         .unwrap();
     let log = out.text();
@@ -93,7 +95,7 @@ async fn req_headers_match_what_server_received() {
     let base = serve(echo).await;
     let (out, _guard) = capture();
     let seen = login_request(format!("{base}/echo"))
-        .send::<Json<Value>>(&debug_client())
+        .send::<Json<Value>>(&debug_client().await)
         .await
         .unwrap()
         .body;
@@ -111,7 +113,7 @@ async fn retry_path_has_response_body() {
     let base = serve(echo).await;
     let (out, _guard) = capture();
     login_request(format!("{base}/echo"))
-        .send::<Json<Value>>((&debug_client(), RetryCtx::new(0, NoRetry)))
+        .send::<Json<Value>>((&debug_client().await, RetryCtx::new(0, NoRetry)))
         .await
         .unwrap();
     let success = debug_json(&out.text(), "http call success");
@@ -124,7 +126,7 @@ async fn masked_decoder_logs_raw_body() {
     let base = serve_routes(&[("/login", 200, r#"{"user":"alice","token":"t0k"}"#)]).await;
     let (out, _guard) = capture();
     RequestConfig::plain(Method::GET, format!("{base}/login"))
-        .send::<Json<Login>>(&debug_client())
+        .send::<Json<Login>>(&debug_client().await)
         .await
         .unwrap();
     let success = debug_json(&out.text(), "http call success");
@@ -140,7 +142,7 @@ async fn non_2xx_has_response() {
     let base = serve_routes(&[("/fail", 503, r#"{"err":"down"}"#)]).await;
     let (out, _guard) = capture();
     RequestConfig::plain(Method::GET, format!("{base}/fail"))
-        .send::<Bytes>(&debug_client())
+        .send::<Bytes>(&debug_client().await)
         .await
         .unwrap_err();
     let log = out.text();
@@ -157,7 +159,7 @@ async fn decode_failed_has_response_and_error() {
     let base = serve_routes(&[("/bad", 200, r#"{"user":1}"#)]).await;
     let (out, _guard) = capture();
     RequestConfig::plain(Method::GET, format!("{base}/bad"))
-        .send::<Json<Login>>(&debug_client())
+        .send::<Json<Login>>(&debug_client().await)
         .await
         .unwrap_err();
     let failed = debug_json(&out.text(), "http call decode failed");
@@ -172,7 +174,7 @@ async fn body_stream_has_headers_but_no_body() {
     let base = serve(echo).await;
     let (out, _guard) = capture();
     RequestConfig::plain(Method::GET, format!("{base}/echo"))
-        .send::<BodyStream>(&debug_client())
+        .send::<BodyStream>(&debug_client().await)
         .await
         .unwrap();
     let success = debug_json(&out.text(), "http call success");
@@ -184,7 +186,7 @@ async fn body_stream_has_headers_but_no_body() {
 #[tokio::test]
 async fn pretty_switch() {
     let base = serve(echo).await;
-    let client = debug_client();
+    let client = debug_client().await;
     let send = |client: ReqwestClient| {
         let url = format!("{base}/echo");
         async move {
@@ -217,7 +219,7 @@ async fn off_keeps_original_logs() {
     let base = serve(echo).await;
     let (out, _guard) = capture();
     RequestConfig::with_params(Method::GET, format!("{base}/echo"), login("t0k"))
-        .send::<Bytes>(&local_config().build().unwrap())
+        .send::<Bytes>(&ReqwestClient::from_config(&local_config()).await.unwrap())
         .await
         .unwrap();
     let log = out.text();

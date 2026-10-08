@@ -640,8 +640,9 @@ impl<'a> RespBody<'a> {
 mod tests {
     use crate::reqwest_client::HttpClientErr;
     use crate::reqwest_client::headers::Auth;
-    use crate::reqwest_client::{Form, Json, ReqwestConfig};
+    use crate::reqwest_client::{Form, Json, ReqwestClient, ReqwestConfig};
     use hygiea_core::BaseErr;
+    use hygiea_core::app::ConfigResource;
     use hygiea_core::redact::redact;
     use reqwest::Client;
     use serde::Serialize;
@@ -670,8 +671,10 @@ mod tests {
         device_id: "dev-1",
     };
 
-    fn client() -> ReqwestClient {
-        ReqwestConfig::default().build().unwrap()
+    async fn client() -> ReqwestClient {
+        ReqwestClient::from_config(&ReqwestConfig::default())
+            .await
+            .unwrap()
     }
 
     /// 构建出最终的 reqwest::Request，看真正要发出去的东西
@@ -690,7 +693,7 @@ mod tests {
             kind: HttpClientErr,
         ) -> HyErr {
             let (out, _guard) = capture();
-            let err = cfg.send::<Bytes>(&client()).await.unwrap_err();
+            let err = cfg.send::<Bytes>(&client().await).await.unwrap_err();
             assert!(err.is(kind), "{err:#}");
             assert_eq!(out.text(), "");
             err
@@ -737,7 +740,7 @@ mod tests {
         async fn preview_error_is_json_error() {
             let (out, _guard) = capture();
             let err = RequestConfig::with_params(Method::GET, URL, Unserializable)
-                .send::<Bytes>(&client())
+                .send::<Bytes>(&client().await)
                 .await
                 .unwrap_err();
             assert!(err.is(BaseErr::JsonError));
@@ -806,7 +809,7 @@ mod tests {
             cfg: RequestConfig<P, B>,
         ) -> (HyErr, String) {
             let (out, _guard) = capture();
-            let err = cfg.send::<Bytes>(&client()).await.unwrap_err();
+            let err = cfg.send::<Bytes>(&client().await).await.unwrap_err();
             assert!(err.is(HttpClientErr::RequestFailed), "{err:#}");
             (err, out.text())
         }
@@ -914,15 +917,17 @@ mod tests {
 
         const REFUSED: &str = "http://127.0.0.1:1/login";
 
-        fn debug_client() -> ReqwestClient {
-            ReqwestConfig {
-                user_agent: Some("ua".into()),
-                ..ReqwestConfig::default()
-            }
-            .default_headers(header_map(&[("x-default", "d"), ("x-both", "client")]))
-            .unwrap()
-            .debug(true)
-            .build()
+        async fn debug_client() -> ReqwestClient {
+            ReqwestClient::from_config(
+                &ReqwestConfig {
+                    user_agent: Some("ua".into()),
+                    ..ReqwestConfig::default()
+                }
+                .default_headers(header_map(&[("x-default", "d"), ("x-both", "client")]))
+                .unwrap()
+                .debug(true),
+            )
+            .await
             .unwrap()
         }
 
@@ -956,7 +961,7 @@ mod tests {
         /// start 是请求那一侧；url、params、body 原文，不打码
         #[tokio::test]
         async fn start_is_request() {
-            let log = logs(login(), &debug_client()).await;
+            let log = logs(login(), &debug_client().await).await;
             let start = debug_json(&log, "http call start");
             let login = json!({"username": "alice", "password": "p@ss", "device_id": "dev-1"});
             assert_eq!(start["method"], "POST");
@@ -972,7 +977,7 @@ mod tests {
         /// 请求头：请求自己的头（含 Json 自动加的 content-type）补上 client 默认头，同名以请求的为准
         #[tokio::test]
         async fn req_headers_merge_client_defaults() {
-            let log = logs(login(), &debug_client()).await;
+            let log = logs(login(), &debug_client().await).await;
             let headers = &debug_json(&log, "http call start")["request"]["headers"];
             assert_eq!(
                 *headers,
@@ -990,7 +995,7 @@ mod tests {
         /// error 是返回给调用方的错误，里面的地址仍然打码
         #[tokio::test]
         async fn transport_failed_has_request_and_error() {
-            let log = logs(login(), &debug_client()).await;
+            let log = logs(login(), &debug_client().await).await;
             assert!(log.contains(" WARN "), "{log}");
             let start = debug_json(&log, "http call start");
             let failed = debug_json(&log, "http call failed");
@@ -1007,7 +1012,7 @@ mod tests {
         /// 开关在发出前读，改了对下一次请求生效
         #[tokio::test]
         async fn switches_take_effect_on_next_request() {
-            let client = debug_client();
+            let client = debug_client().await;
             let compact = logs(login(), &client).await;
             assert_eq!(compact.lines().count(), 2, "{compact}");
             assert!(
@@ -1035,7 +1040,7 @@ mod tests {
         /// debug 关时和原来一样：enable_logging 关了只有一行失败日志，打码，没有 JSON
         #[tokio::test]
         async fn off_keeps_original_logs() {
-            let log = logs(login(), &client()).await;
+            let log = logs(login(), &client().await).await;
             assert_eq!(log.lines().count(), 1, "{log}");
             assert!(log.contains("http call failed method=POST"), "{log}");
             assert!(log.contains("password=***"), "{log}");
