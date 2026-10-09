@@ -6,9 +6,7 @@
 
 #![cfg(feature = "fred")]
 
-use hygiea_test::container;
-
-#[container]
+#[hygiea_test::container]
 mod redis {
     use fred::interfaces::KeysInterface;
     use hygiea_core::app::{ConfigResource, Registry, Resources};
@@ -111,5 +109,98 @@ mod redis {
             .unwrap();
         let value: String = pool.get("db1_key").await.unwrap();
         assert_eq!(value, "db1_value");
+    }
+}
+
+// ---- 临时探针：每个只多一样东西，看完删掉 ----
+
+/// 只多一个生命周期 'static
+#[hygiea_test::container]
+mod probe_lifetime {
+    fn helper(s: &'static str) -> &'static str {
+        s
+    }
+
+    #[test]
+    fn lifetime() {
+        let _ = helper("a");
+    }
+}
+
+/// 只多泛型（不带生命周期）
+#[hygiea_test::container]
+mod probe_generic {
+    fn helper<T: Send>(t: T) -> T {
+        t
+    }
+
+    #[test]
+    fn generic() {
+        let _ = helper(1);
+    }
+}
+
+/// 只多 impl FnOnce 参数
+#[hygiea_test::container]
+mod probe_impl_fn {
+    fn helper(f: impl FnOnce() -> i32) -> i32 {
+        f()
+    }
+
+    #[test]
+    fn impl_fn() {
+        let _ = helper(|| 1);
+    }
+}
+
+/// 只多一个 async 辅助函数
+#[hygiea_test::container]
+mod probe_async {
+    async fn helper() -> i32 {
+        1
+    }
+
+    #[tokio::test]
+    async fn async_helper() {
+        let _ = helper().await;
+    }
+}
+
+/// probe_async 的完全副本：结果和 probe_async 不一样，就是 RustRover 本身不稳定
+#[hygiea_test::container]
+mod probe_async_copy {
+
+
+    async fn helper() -> i32 {
+        1
+    }
+
+    #[tokio::test]
+    async fn async_helper() {
+        let _ = helper().await;
+    }
+}
+
+/// async 辅助函数 + 同步的 #[test]：看是 async 辅助函数本身，还是它和 #[tokio::test] 一起出现才有问题
+#[hygiea_test::container]
+mod probe_async_sync_test {
+    #[allow(dead_code)]
+    async fn helper() -> i32 {
+        1
+    }
+
+    #[test]
+    fn sync_test() {}
+}
+
+/// 不挂宏，async 辅助函数 + #[tokio::test]：没按钮就跟我们的宏无关
+mod probe_async_no_macro {
+    async fn helper() -> i32 {
+        1
+    }
+
+    #[tokio::test]
+    async fn async_helper() {
+        let _ = helper().await;
     }
 }

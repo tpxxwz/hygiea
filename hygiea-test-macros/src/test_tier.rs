@@ -17,10 +17,12 @@ use syn::punctuated::Punctuated;
 //
 // 展开成：
 //
+// #[cfg(test)]
 // mod rustfs {
 //     #[allow(unused_imports)]
 //     use super::*;
 //
+//     #[cfg(test)]
 //     mod container {
 //         use super::*;
 //
@@ -115,12 +117,15 @@ fn expand_inner(
     let name = module.ident;
     let tier_mod = format_ident!("{}", tier.name(), span = name.span());
 
+    // 这些层的模块只放测试，内外两层都固定只在测试编译时存在，不用调用方自己写 #[cfg(test)]
     Ok(quote! {
+        #[cfg(test)]
         #(#outer_attrs)*
         #vis mod #name {
             #[allow(unused_imports)]
             use super::*;
 
+            #[cfg(test)]
             mod #tier_mod {
                 #(#inner_attrs)*
                 #(#items)*

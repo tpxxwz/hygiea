@@ -6,10 +6,8 @@
 
 #![cfg(all(feature = "sqlx", feature = "seaorm", feature = "postgres"))]
 
-use hygiea_test::container;
-
 /// 用代码启动的官方 postgres 镜像
-#[container]
+#[hygiea_test::container]
 mod postgres {
     use hygiea_core::app::{ConfigResource, Registry, Resources};
     use hygiea_core::datetime::{HygieaDateTimeExt, UtcDateTime};
