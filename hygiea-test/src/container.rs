@@ -198,9 +198,8 @@ impl RunningContainer {
     }
 }
 
-#[cfg(test)]
 #[crate::container]
-mod tests {
+mod tests_container {
     use super::*;
 
     /// 环境变量和 cmd 生效，日志里出现指定文字才算就绪

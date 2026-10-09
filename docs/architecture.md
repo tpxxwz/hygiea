@@ -104,7 +104,7 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 
 | 文件 | 内容 |
 |---|---|
-| `src/test_tier.rs` | `#[container]` / `#[live]`：标在模块上，给里面的测试加 `#[ignore]`、把内容挪进层名子模块；`live(env = ..)` 生成 `hygiea_test::tier::require_env` 调用 |
+| `src/test_tier.rs` | `#[container]` / `#[live]`：标在模块上，给里面的测试加 `#[ignore]`、检查模块名以层名结尾；`live(env = ..)` 生成 `hygiea_test::tier::require_env` 调用 |
 | `tests/` | trybuild：`test_tier_ui`，fixture 经 `hygiea_test` 使用宏。`hygiea-test` 是只写 path 的 dev-dependency |
 
 ### test-support

@@ -1,7 +1,7 @@
 //! Redis 连接池连真实服务，`#[container]` 层（见仓库根目录 AGENTS.md 的测试分层）：
 //! 用代码启动官方 redis 容器，需要 Docker（Podman 把 `DOCKER_HOST` 指向它的兼容 socket）
 //! ```sh
-//! cargo test -p hygiea-redis --features fred --test redis -- --ignored ::container::
+//! cargo test -p hygiea-redis --features fred --test redis -- --ignored _container::
 //! ```
 
 #![cfg(feature = "fred")]
@@ -9,7 +9,7 @@
 use hygiea_test::container;
 
 #[container]
-mod redis {
+mod redis_container {
     use fred::interfaces::KeysInterface;
     use hygiea_core::app::{ConfigResource, Registry, Resources};
     use hygiea_redis::{FredRedisPool, RedisComponent, RedisConfig};

@@ -1,12 +1,12 @@
 use proc_macro::TokenStream;
-use quote::{format_ident, quote};
+use quote::quote;
 use syn::punctuated::Punctuated;
 
 // #[container] / #[live] 属性宏的实现：标在模块上，把模块里的测试归到对应的层，
 // 默认 cargo test 不跑，按层过滤能选中。
 //
 // #[container]
-// mod rustfs {
+// mod rustfs_container {
 //     use super::*;
 //
 //     #[tokio::test]
@@ -17,31 +17,25 @@ use syn::punctuated::Punctuated;
 //
 // 展开成：
 //
-// mod rustfs {
-//     #[allow(unused_imports)]
+// #[cfg(test)]
+// mod rustfs_container {
 //     use super::*;
 //
-//     mod container {
-//         use super::*;
+//     #[tokio::test]
+//     #[ignore = "container: needs a container runtime; run with `-- --ignored _container::`"]
+//     async fn put_get() { .. }
 //
-//         #[tokio::test]
-//         #[ignore = "container: needs a container runtime; run with `-- --ignored ::container::`"]
-//         async fn put_get() { .. }
-//
-//         fn helper() { .. }
-//     }
+//     fn helper() { .. }
 // }
 //
-// 测试名因此是 `rustfs::container::put_get`，`cargo test -- --ignored ::container::` 只选中这一层。
-// 套一层层名模块是为了让层名出现在测试路径里，用户起的模块名照样保留，不同层的测试可以同名。
+// 模块名必须以 `_container` / `_live` 结尾，不符合就编译报错，让层名出现在测试路径里：
+// 测试名是 `rustfs_container::put_get`，`cargo test -- --ignored _container::` 只选中这一层。
+// 测试函数原地不动，不另套模块，源码位置和编译后的一致，IDE 才能认出测试、显示运行按钮。
 //
 // 哪些是测试：带最后一段叫 test 的属性（`#[test]`、`#[tokio::test(..)]` 等）的函数，
 // 宏给它们加 `#[ignore]`；其他项原样保留，辅助函数可以放在模块里。嵌套的内联模块也一样处理。
 // #[live(env = ["A", "B"])] 还会在每个测试的函数体开头调用 `::hygiea_test::tier::require_env(&["A", "B"])`，
 // 缺了就列出全部缺少的名字再 panic。逻辑在 hygiea-test 里，宏只生成调用。
-//
-// 模块内容被挪进了层名模块。外面那层 glob 引入了上一级，所以里面的 `super::xxx`、`use super::*` 照常能用；
-// 只有往上跳两级以上的 `super::super::..` 要多写一个 `super::`。
 
 /// 测试所在的层
 #[derive(Clone, Copy)]
@@ -72,7 +66,7 @@ fn expand_inner(
     item: proc_macro2::TokenStream,
 ) -> syn::Result<proc_macro2::TokenStream> {
     let env = parse_args(tier, attr)?;
-    let module: syn::ItemMod = syn::parse2(item).map_err(|e| {
+    let mut module: syn::ItemMod = syn::parse2(item).map_err(|e| {
         syn::Error::new(
             e.span(),
             format!(
@@ -81,7 +75,7 @@ fn expand_inner(
             ),
         )
     })?;
-    let Some((_, items)) = module.content else {
+    let Some((brace, items)) = module.content.take() else {
         return Err(syn::Error::new_spanned(
             &module.ident,
             format!(
@@ -91,6 +85,20 @@ fn expand_inner(
             ),
         ));
     };
+
+    let suffix = format!("_{}", tier.name());
+    if !module.ident.to_string().ends_with(&suffix) {
+        return Err(syn::Error::new_spanned(
+            &module.ident,
+            format!(
+                "#[{}] module name must end with `{}` so the tier shows up in test paths, e.g. `mod {}{}`",
+                tier.name(),
+                suffix,
+                module.ident,
+                suffix
+            ),
+        ));
+    }
 
     let reason = ignore_reason(tier, &env);
     let env_check = env_check(&krate(), &env);
@@ -106,26 +114,11 @@ fn expand_inner(
         ));
     }
 
-    // 内部属性（`#![..]`）跟着内容进层名模块，外部属性（文档注释等）留在外面
-    let (inner_attrs, outer_attrs): (Vec<_>, Vec<_>) = module
-        .attrs
-        .into_iter()
-        .partition(|a| matches!(a.style, syn::AttrStyle::Inner(_)));
-    let vis = module.vis;
-    let name = module.ident;
-    let tier_mod = format_ident!("{}", tier.name(), span = name.span());
-
+    module.content = Some((brace, items));
+    // 这些层的模块只放测试，固定只在测试编译时存在，不用调用方自己写 #[cfg(test)]
     Ok(quote! {
-        #(#outer_attrs)*
-        #vis mod #name {
-            #[allow(unused_imports)]
-            use super::*;
-
-            mod #tier_mod {
-                #(#inner_attrs)*
-                #(#items)*
-            }
-        }
+        #[cfg(test)]
+        #module
     })
 }
 
@@ -175,15 +168,15 @@ fn is_test(func: &syn::ItemFn) -> bool {
 fn ignore_reason(tier: Tier, env: &[syn::LitStr]) -> String {
     match tier {
         Tier::Container => {
-            "container: needs a container runtime; run with `-- --ignored ::container::`".into()
+            "container: needs a container runtime; run with `-- --ignored _container::`".into()
         }
         Tier::Live if env.is_empty() => {
-            "live: needs an external service; run with `-- --ignored ::live::`".into()
+            "live: needs an external service; run with `-- --ignored _live::`".into()
         }
         Tier::Live => {
             let names: Vec<String> = env.iter().map(|e| e.value()).collect();
             format!(
-                "live: needs env {}; run with `-- --ignored ::live::`",
+                "live: needs env {}; run with `-- --ignored _live::`",
                 names.join(", ")
             )
         }

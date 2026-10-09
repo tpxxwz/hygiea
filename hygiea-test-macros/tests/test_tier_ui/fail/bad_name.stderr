@@ -1,0 +1,5 @@
+error: #[container] module name must end with `_container` so the tier shows up in test paths, e.g. `mod rustfs_container`
+ --> tests/test_tier_ui/fail/bad_name.rs:3:5
+  |
+3 | mod rustfs {
+  |     ^^^^^^

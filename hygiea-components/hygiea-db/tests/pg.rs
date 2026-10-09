@@ -1,7 +1,7 @@
 //! PostgreSQL 连接池集成测试（sqlx 和 seaorm），container 层（见仓库根目录 AGENTS.md 的测试分层）：
 //! 用代码启动官方 postgres 容器，需要 Docker（Podman 把 `DOCKER_HOST` 指向它的兼容 socket）
 //! ```sh
-//! cargo test -p hygiea-db --all-features --test pg -- --ignored ::container::
+//! cargo test -p hygiea-db --all-features --test pg -- --ignored _container::
 //! ```
 
 #![cfg(all(feature = "sqlx", feature = "seaorm", feature = "postgres"))]
@@ -10,7 +10,7 @@ use hygiea_test::container;
 
 /// 用代码启动的官方 postgres 镜像
 #[container]
-mod postgres {
+mod postgres_container {
     use hygiea_core::app::{ConfigResource, Registry, Resources};
     use hygiea_core::datetime::{HygieaDateTimeExt, UtcDateTime};
     use hygiea_db::HyUtcDateTime;

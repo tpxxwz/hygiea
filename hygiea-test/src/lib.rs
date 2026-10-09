@@ -25,15 +25,15 @@
 //!
 //! ```ignore
 //! #[hygiea_test::container]
-//! mod rustfs {
+//! mod rustfs_container {
 //!     use super::*;
 //!
 //!     #[tokio::test]
-//!     async fn put_get() { /* 测试名：rustfs::container::put_get */ }
+//!     async fn put_get() { /* 测试名：rustfs_container::put_get */ }
 //! }
 //!
 //! #[hygiea_test::live(env = ["S3_BUCKET", "S3_ACCESS_KEY_ID"])]
-//! mod own_bucket {
+//! mod own_bucket_live {
 //!     use super::*;
 //!
 //!     #[tokio::test]
@@ -42,13 +42,12 @@
 //! ```
 //!
 //! ```sh
-//! cargo test -- --ignored ::container::   # CI 里跑 container 层
-//! cargo test -- --ignored ::live::        # 手动跑 live 层
+//! cargo test -- --ignored _container::   # CI 里跑 container 层
+//! cargo test -- --ignored _live::        # 手动跑 live 层
 //! ```
 //!
-//! 为了让层名出现在测试路径里，宏把模块内容挪进一层以层名命名的子模块。外面那层 glob 引入了上一级，
-//! 所以模块里的 `super::xxx`、`use super::*` 照常能用；只有往上跳两级以上的 `super::super::..`
-//! 要多写一个 `super::`。只能标在内联模块（`mod x { .. }`）上。
+//! 模块名必须以层名结尾（`_container` / `_live`），不符合编译报错，这样测试路径里带上层名，能按层筛选。
+//! 测试函数原地不动，IDE 照常显示运行按钮。只能标在内联模块（`mod x { .. }`）上。
 
 #[cfg(feature = "log")]
 pub mod log;

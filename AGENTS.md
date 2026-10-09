@@ -64,8 +64,8 @@
   | container | 用 `hygiea_test::container::ContainerSpec` 在代码里启动容器（需要 Docker） | 不跑 | 跑（本机要有 Docker） | 模块上标 `#[container]` |
   | live | 连使用者自己控制的真实服务（R2、AWS 等），凭证从环境变量读 | 不跑 | **不跑**，只由用户手动跑 | 模块上标 `#[live(env = ["A", ..])]` |
 
-  模块里照常用 `#[test]` / `#[tokio::test]` 标测试，宏给它们加 `#[ignore]`，并把模块内容挪进层名子模块（测试名 `<模块名>::container::<函数名>`）。
-  container 层：`cargo test -p <crate> --features .. -- --ignored ::container::`；live 层：`-- --ignored ::live::`。
+  模块里照常用 `#[test]` / `#[tokio::test]` 标测试，宏给它们加 `#[ignore]`。模块名必须以层名结尾（`xxx_container` / `xxx_live`，宏会检查），测试名 `<模块名>::<函数名>` 里因此带上层名。
+  container 层：`cargo test -p <crate> --features .. -- --ignored _container::`；live 层：`-- --ignored _live::`。
   有这两层的测试文件，文件头写明运行命令和需要的环境变量。
   组件用 `hygiea-test = { workspace = true }` 作为 dev-dependency 引入。`hygiea-test` 只依赖 core，
   core 自己的测试不能用它（会出现两份 core）。
@@ -88,8 +88,8 @@
       │                  匿名 / 具名各取一次资源。依赖外部服务的（PG、Redis）这里不启动，
       │                  启动并连上的测试放进 <服务>.rs 的 container 模块
       └── <服务>.rs       连真实服务，比如 pg.rs / redis.rs / s3.rs：
-                         #[container] mod <服务名> { .. }      用 ContainerSpec 起容器，镜像写固定 tag
-                         #[live(env = [..])] mod <名字> { .. }  托管服务和自建容器行为有差别时才写（比如 R2）
+                         #[container] mod <服务名>_container { .. }  用 ContainerSpec 起容器，镜像写固定 tag
+                         #[live(env = [..])] mod <名字>_live { .. }   托管服务和自建容器行为有差别时才写（比如 R2）
                          两个模块共用同一份测试逻辑，文件头写明运行命令和环境变量
   ```
 - 示例不连外部服务，数据库用 SQLite 内存库（`database = ":memory:"`）。
@@ -100,10 +100,10 @@
 - 改代码过程中只跑改动对应的测试，带上相关 feature，比如 `cargo test -p hygiea-http-client --features reqwest --test reqwest_client`。不要默认跑 `--workspace --all-features` 全量测试，同一条命令不要重复跑。
 - 准备提交时，先分析这次改动需要新增或修改哪些测试，确认后再按范围测。
 - 改了 feature 或 `cfg`，用几种 feature 组合 `cargo check`（不开、只开相关的、`--all-features`）。
-- 改了有 container 层测试的代码，本机有 Docker 时顺带跑对应 crate 的 container 层（`-- --ignored ::container::`）；
+- 改了有 container 层测试的代码，本机有 Docker 时顺带跑对应 crate 的 container 层（`-- --ignored _container::`）；
   没有 Docker 就说明没跑。live 层不要跑，需要用户的凭证，改了相关代码时告诉用户要手动跑哪条命令。
 - 仓库目前没有 CI。以后加 CI 时：普通测试 `cargo test --workspace --all-features`；有 Docker 的 runner 上再跑
-  `cargo test --workspace --all-features -- --ignored ::container::`；live 层不放进 CI。
+  `cargo test --workspace --all-features -- --ignored _container::`；live 层不放进 CI。
 - 改了宏的报错信息，重新生成 trybuild 快照并检查 diff：
   `TRYBUILD=overwrite cargo test -p hygiea-macros --test hy_err_ui --test redact_ui`
   （`#[container]` / `#[live]` 的快照：`TRYBUILD=overwrite cargo test -p hygiea-test-macros --test test_tier_ui`）

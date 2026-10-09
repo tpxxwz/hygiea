@@ -1,5 +1,5 @@
 error: #[container] module has no test functions; mark them with #[test] / #[tokio::test]
  --> tests/test_tier_ui/fail/no_tests.rs:3:5
   |
-3 | mod rustfs {
-  |     ^^^^^^
+3 | mod rustfs_container {
+  |     ^^^^^^^^^^^^^^^^

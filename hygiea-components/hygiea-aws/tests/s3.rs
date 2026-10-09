@@ -2,7 +2,7 @@
 //!
 //! - `#[container]`：用代码启动 RustFS 容器，需要 Docker（Podman 把 `DOCKER_HOST` 指向它的兼容 socket）
 //!   ```sh
-//!   cargo test -p hygiea-aws --features s3 --test s3 -- --ignored ::container::
+//!   cargo test -p hygiea-aws --features s3 --test s3 -- --ignored _container::
 //!   ```
 //! - `#[live]`：连自己的 S3 兼容服务（AWS S3、Cloudflare R2 等），需要一个可写的 bucket
 //!   ```sh
@@ -13,7 +13,7 @@
 //!   export S3_SECRET_ACCESS_KEY=...
 //!   export S3_FORCE_PATH_STYLE=false  # MinIO / RustFS 设 true
 //!
-//!   cargo test -p hygiea-aws --features s3 --test s3 -- --ignored ::live::
+//!   cargo test -p hygiea-aws --features s3 --test s3 -- --ignored _live::
 //!   ```
 
 use hygiea_aws::aws_sdk_s3::primitives::ByteStream;
@@ -68,7 +68,7 @@ async fn put_get_delete(client: &AwsS3Client, bucket: &str) {
 
 /// 用代码启动的 RustFS（兼容 S3 的对象存储）
 #[container]
-mod rustfs {
+mod rustfs_container {
     use hygiea_test::container::{ContainerSpec, RunningContainer};
 
     use super::*;
@@ -134,7 +134,7 @@ mod rustfs {
 
 /// 自己的 S3 兼容服务，连接信息全部从环境变量读
 #[live(env = ["S3_REGION", "S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"])]
-mod own_bucket {
+mod own_bucket_live {
     use super::*;
 
     /// 环境变量在 `#[live(env = ..)]` 里检查过了，这里取不到只可能是宏的检查漏了
