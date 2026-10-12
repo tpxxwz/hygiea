@@ -572,7 +572,7 @@ mod postgres {
         use hygiea_db::RepoErr;
         use hygiea_db::db;
         use hygiea_db::seaorm::DbResultExt;
-        use sea_orm::{ActiveModelTrait, IntoActiveModel, PaginatorTrait, QuerySelect};
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, ModelTrait, PaginatorTrait, QuerySelect};
 
         let server = start().await;
         let pool = SeaOrmPgPool::from_config(&seaorm_config(&server))
@@ -614,6 +614,15 @@ mod postgres {
         assert!(e.is(RepoErr::UpdateFailed), "{e:#}");
         let e = db!(am.clone().delete(db)).unwrap_err();
         assert!(e.is(RepoErr::DeleteFailed), "{e:#}");
+        // Model 也有 delete（ModelTrait::delete），和 ActiveModel 的同名
+        let model = record::Model {
+            id: 1,
+            create_at: HyUtcDateTime(utc("2026-10-05T12:57:24.719Z")),
+            delete_at: None,
+        };
+        let e = db!(model.delete(db)).unwrap_err();
+        assert!(e.is(RepoErr::DeleteFailed), "{e:#}");
+        assert!(op(&e).starts_with("Db delete failed: record at "), "{e:#}");
         // ActiveModel 也能写 op，表名照样带上
         let line = line!() + 1;
         let e = db!(am.clone().delete(db), "remove record").unwrap_err();

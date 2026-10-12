@@ -21,9 +21,9 @@ use std::panic::Location;
 use hygiea_core::{HyErr, Result, ResultExt, err};
 use sea_orm::{
     ActiveModelTrait, ConnectionTrait, DbErr, DeleteMany, DeleteOne, EntityTrait, Insert,
-    InsertMany, Paginator, Select, SelectFive, SelectFour, SelectFourMany, SelectSix, SelectThree,
-    SelectThreeMany, SelectTwo, SelectTwoMany, SelectTwoRequired, Selector, SelectorRaw,
-    SelectorTrait, Topology, TryInsert, UpdateMany, UpdateOne, ValidatedDeleteOne,
+    InsertMany, IntoActiveModel, Paginator, Select, SelectFive, SelectFour, SelectFourMany,
+    SelectSix, SelectThree, SelectThreeMany, SelectTwo, SelectTwoMany, SelectTwoRequired, Selector,
+    SelectorRaw, SelectorTrait, Topology, TryInsert, UpdateMany, UpdateOne, ValidatedDeleteOne,
     ValidatedUpdateOne,
 };
 
@@ -81,7 +81,7 @@ impl<T> DbResultExt<T> for std::result::Result<T, DbErr> {
 /// | `Insert` / `InsertMany` / `TryInsert` 的 `exec*` | `InsertFailed` | 实体 |
 /// | `UpdateOne` / `UpdateMany` 的 `exec*` | `UpdateFailed` | 实体 |
 /// | `DeleteOne` / `DeleteMany` 的 `exec*` | `DeleteFailed` | 实体 |
-/// | ActiveModel 的 `insert` / `update` / `update_without_returning` / `delete` | 对应的增改删 | 实体 |
+/// | ActiveModel 的 `insert` / `update` / `update_without_returning` / `delete`，Model 的 `delete` | 对应的增改删 | 实体 |
 /// | ActiveModel 的 `save`（主键 NotSet 插入，否则更新） | `ExecFailed` | 实体 |
 /// | `into_tuple` / `into_model` / `into_partial_model` / `into_json` 之后、`find_by_statement` | `QueryFailed` | 没有，必须写 op |
 /// | `paginate` 之后（分页器） | `QueryFailed` | 没有，必须写 op |
@@ -100,7 +100,7 @@ macro_rules! db {
     (@args [$($call:tt)*] $head:tt $($rest:tt)*) => {
         $crate::db!(@args [$($call)* $head] $($rest)*)
     };
-    // ActiveModel 自己的方法：操作看方法名，表名从 A::Entity 取
+    // ActiveModel 自己的方法：操作看方法名，表名从 A::Entity 取。delete 也可能是 Model 的（ModelTrait::delete）
     (@split ($($op:expr)?) [$($recv:tt)+] . insert ($($args:tt)*)) => {
         $crate::db!(@active_model ($($op)?) [$($recv)+] insert ($($args)*) Insert)
     };
@@ -211,13 +211,19 @@ pub mod __private {
         move || S::KIND.err(op(Some(custom), S::table(), at))
     }
 
-    /// ActiveModel 方法的错误，操作由宏按方法名给
-    pub fn active_model_err<A: ActiveModelTrait, O: Display>(
-        _: &A,
+    /// ActiveModel 方法的错误，操作由宏按方法名给。收 `IntoActiveModel`：ActiveModel 自己（SeaORM 的 blanket impl）
+    /// 和 Model 都满足，`model.delete(db)`（`ModelTrait::delete`）和 `am.delete(db)` 同名，宏分不出来
+    pub fn active_model_err<M, A, O>(
+        _: &M,
         kind: Kind,
         custom: Option<O>,
         at: &'static str,
-    ) -> impl FnOnce() -> HyErr + use<A, O> {
+    ) -> impl FnOnce() -> HyErr + use<M, A, O>
+    where
+        M: IntoActiveModel<A>,
+        A: ActiveModelTrait,
+        O: Display,
+    {
         move || kind.err(op(custom, Some(table::<A::Entity>()), at))
     }
 
