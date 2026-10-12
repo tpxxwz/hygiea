@@ -46,6 +46,15 @@ ctor 已经收集了所有 crate 的注册（`ERR_REGISTRATIONS`：码 + 模板�
 - 导出全量错误码表，给文档、前端、i18n 用；或者做个管理接口列出系统的全部错误码
 - 做法：`ErrRegistration` 加上 crate 名、enum 名、变体名（宏里都拿得到），提供 `hygiea::error::catalog()` 之类的只读访问
 
+### 数据库错误看不到 SQL 和 PG 的 detail
+
+- HyErr 打 source 链用的是 Display，PG 的 `detail`（比如 `Key (id)=(1) already exists.`）、`table`、`constraint`
+  只在 `DbErr` 的 Debug 里，现在日志里看不到
+- sqlx 和 SeaORM 的错误里都不带 SQL（Spring、MyBatis 是转换异常时自己拼进去的），只有日志能看到。
+  sqlx 0.8 的语句日志只按耗时分级（`log_statements` / `log_slow_statements`），没法只在失败时打；
+  SeaORM 的 `set_metric_callback` 回调里有 `failed`，可以只在失败时打 `info.statement`，但拿不到 `DbErr`、
+  和往上抛的错误是两条日志，参数值也会原样打出来
+
 ## 视情况再定
 
 ### 组件要不要能脱离 hygiea 单独用

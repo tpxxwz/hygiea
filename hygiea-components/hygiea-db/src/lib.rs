@@ -11,6 +11,7 @@
 //!
 //! 和框架无关、开 `sqlx` 或 `seaorm` 就有的：
 //! - UTC 时间列类型 [`HyUtcDateTime`]，两个框架同时开也是同一个类型
+//! - 分页的请求和结果 [`PageRequest`]、[`Page`]
 //! - 数据库错误 [`RepoErr`]，按操作（事务、查询、插入、更新、删除、执行）分
 //!
 //! 各框架专用的在 [`sqlx`](mod@sqlx) / [`seaorm`] 模块里，比如事务函数 `sqlx::transaction`、`seaorm::transaction`；
@@ -27,18 +28,22 @@
 mod datetime;
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]
 mod error;
+#[cfg(any(feature = "sqlx", feature = "seaorm"))]
+mod page;
 #[cfg(feature = "seaorm")]
 pub mod seaorm;
 #[cfg(feature = "sqlx")]
 pub mod sqlx;
 
 #[cfg(all(feature = "sqlx", feature = "postgres"))]
-pub use self::sqlx::postgres::*;
+pub use self::sqlx::pool::postgres::*;
 #[cfg(all(feature = "sqlx", feature = "sqlite"))]
-pub use self::sqlx::sqlite::*;
+pub use self::sqlx::pool::sqlite::*;
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]
 pub use datetime::HyUtcDateTime;
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]
 pub use error::RepoErr;
+#[cfg(any(feature = "sqlx", feature = "seaorm"))]
+pub use page::{Page, PageRequest};
 #[cfg(all(feature = "seaorm", feature = "postgres"))]
-pub use seaorm::postgres::*;
+pub use seaorm::pool::postgres::*;

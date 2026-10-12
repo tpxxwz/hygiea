@@ -412,6 +412,24 @@ macro_rules! bail {
     };
 }
 
+/// 条件不成立时构造错误并立即返回：第一个参数是应该成立的条件，后面的参数同 [`err!`]。
+/// 等价于 `if !(条件) { bail!(..) }`，返回类型的转换同 [`bail!`]
+///
+/// ```ignore
+/// fn withdraw(amount: i64) -> Result<()> {
+///     ensure!(amount > 0, BizErr::InvalidAmount, { "amount": amount });
+///     Ok(())
+/// }
+/// ```
+#[macro_export]
+macro_rules! ensure {
+    ($cond:expr, $($t:tt)*) => {
+        if !($cond) {
+            $crate::bail!($($t)*);
+        }
+    };
+}
+
 /// 框架内置错误：默认启用的模块（错误处理、datetime、string 等）和 redact 用到的都在这里。
 /// 需要开 feature 的模块各有自己的错误 enum，比如 http 的 `hygiea::http_client::reqwest_client::HttpClientErr`。
 /// 它们共用项目前缀 999（配在 hygiea-core 的 Cargo.toml）。`BaseErr` 不带模块前缀，5 位业务码随意分配，
@@ -439,6 +457,12 @@ pub enum BaseErr {
         err_tpl = "Environment variable not set: {{ name }}"
     )]
     EnvError,
+    /// 参数必须大于 0（0 和负数都不行）：批大小、条数、页大小这类。`param` 是参数名，`op` 是哪一步
+    #[error(
+        err_code = "00006",
+        err_tpl = "{{ param }} must be greater than 0: {{ op }}"
+    )]
+    NotPositive,
 }
 
 #[cfg(test)]
@@ -706,6 +730,20 @@ mod tests {
 
         let result = check_value(1);
         assert!(result.is_ok());
+    }
+
+    /// ensure! 条件不成立时提前返回，成立时往下走
+    #[test]
+    fn ensure_returns_when_condition_fails() {
+        fn check_value(n: i32) -> Result<i32> {
+            ensure!(n > 0, BaseErr::NotPositive, { "param": "n", "op": "check_value" });
+            Ok(n)
+        }
+
+        let e = check_value(0).unwrap_err();
+        assert!(e.is(BaseErr::NotPositive));
+        assert_eq!(e.to_string(), "n must be greater than 0: check_value");
+        assert_eq!(check_value(1).unwrap(), 1);
     }
 
     /// err! 的三种形式：无参、单个值、`{..}`

@@ -433,4 +433,400 @@ mod postgres {
         let ids: Vec<i32> = rows.iter().map(|r| r.try_get("", "id").unwrap()).collect();
         assert_eq!(ids, vec![1, 2]);
     }
+
+    /// 复合主键 (a, b) 的实体，不建表，测试里用来看报错
+    mod pair {
+        use sea_orm::entity::prelude::*;
+
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+        #[sea_orm(table_name = "pair")]
+        pub struct Model {
+            #[sea_orm(primary_key, auto_increment = false)]
+            pub a: i64,
+            #[sea_orm(primary_key, auto_increment = false)]
+            pub b: i64,
+            pub v: i64,
+        }
+
+        #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+        pub enum Relation {}
+
+        impl ActiveModelBehavior for ActiveModel {}
+    }
+
+    /// 普通查询用 SeaORM + db!：into_tuple 这类转换也整条放进 db!；插入用 active_models 把 &[Model] 转过去
+    #[tokio::test]
+    async fn seaorm_db_select() {
+        use hygiea_db::db;
+        use hygiea_db::seaorm::active_models;
+        use sea_orm::{QueryOrder, QuerySelect};
+
+        let server = start().await;
+        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server))
+            .await
+            .unwrap();
+        pool.execute_unprepared(CREATE_RECORD).await.unwrap();
+        let at = HyUtcDateTime(utc("2026-10-05T12:57:24.719Z"));
+        let models = [1, 2, 3].map(|id| record::Model {
+            id,
+            create_at: at,
+            delete_at: None,
+        });
+        db!(record::Entity::insert_many(active_models(&models)).exec_without_returning(&*pool))
+            .unwrap();
+
+        // 普通查询：SeaORM 的调用整条放进 db!；into_tuple 之后拿不到表名，要写 op
+        let ids: Vec<i64> = db!(
+            record::Entity::find()
+                .select_only()
+                .column(record::Column::Id)
+                .order_by_desc(record::Column::Id)
+                .into_tuple()
+                .all(&*pool),
+            "record ids"
+        )
+        .unwrap();
+        assert_eq!(ids, [3, 2, 1]);
+        let first = db!(record::Entity::find()
+            .order_by_asc(record::Column::Id)
+            .one(&*pool))
+        .unwrap();
+        assert_eq!(first, Some(models[0].clone()));
+    }
+
+    /// 单条插入直接用 SeaORM，db! 包住：失败自动是 InsertFailed、op 里有表名
+    #[tokio::test]
+    async fn seaorm_db_insert() {
+        use hygiea_db::RepoErr;
+        use hygiea_db::db;
+        use sea_orm::{IntoActiveModel, TryInsertResult, sea_query::OnConflict};
+
+        let server = start().await;
+        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server))
+            .await
+            .unwrap();
+        pool.execute_unprepared(CREATE_RECORD).await.unwrap();
+        let at = HyUtcDateTime(utc("2026-10-05T12:57:24.719Z"));
+        let later = HyUtcDateTime(utc("2026-10-06T00:00:00Z"));
+        let model = |id, delete_at| record::Model {
+            id,
+            create_at: at,
+            delete_at,
+        };
+        let db = &*pool;
+
+        // insert_one：返回行数
+        let rows =
+            db!(record::Entity::insert(model(1, None).into_active_model())
+                .exec_without_returning(db))
+            .unwrap();
+        assert_eq!(rows, 1);
+
+        // insert_one_returning：返回写入后的整行
+        let written =
+            db!(record::Entity::insert(model(2, None).into_active_model()).exec_with_returning(db))
+                .unwrap();
+        assert_eq!(written, model(2, None));
+
+        // 主键冲突：InsertFailed，op 里有表名，原始错误在 source 上
+        let e =
+            db!(record::Entity::insert(model(1, None).into_active_model())
+                .exec_without_returning(db))
+            .unwrap_err();
+        assert!(e.is(RepoErr::InsertFailed), "{e:#}");
+        assert!(
+            format!("{e:#}").contains("Db insert failed: record"),
+            "{e:#}"
+        );
+        assert!(format!("{e:#}").contains("duplicate key"), "{e:#}");
+
+        // insert_one_ignore_conflict：TryInsert，冲突时是 Conflicted 或 0 行
+        let skipped = db!(
+            record::Entity::insert(model(1, Some(later)).into_active_model())
+                .on_conflict_do_nothing()
+                .exec_without_returning(db)
+        )
+        .unwrap();
+        assert!(
+            matches!(skipped, TryInsertResult::Inserted(0)),
+            "{skipped:?}"
+        );
+
+        // insert_one_or_update_returning：on_conflict 由调用方用 SeaORM 的 OnConflict 拼
+        let upsert = OnConflict::column(record::Column::Id)
+            .update_column(record::Column::DeleteAt)
+            .to_owned();
+        let written = db!(
+            record::Entity::insert(model(1, Some(later)).into_active_model())
+                .on_conflict(upsert)
+                .exec_with_returning(db)
+        )
+        .unwrap();
+        assert_eq!(written, model(1, Some(later)));
+    }
+
+    /// db! 的 op 是"表名 at 文件:行号"，跨行时行号是 db! 开头那一行；第二个参数是自定义 op，写在表名前面；
+    /// ActiveModel 的方法按方法名定操作；SeaORM 类型里没有实体的（into_tuple 之后、分页器）必须写 op。.db() 一律 ExecFailed，op 是调用位置
+    #[tokio::test]
+    async fn seaorm_db_errors() {
+        use hygiea_db::RepoErr;
+        use hygiea_db::db;
+        use hygiea_db::seaorm::DbResultExt;
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, PaginatorTrait, QuerySelect};
+
+        let server = start().await;
+        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server))
+            .await
+            .unwrap();
+        let db = &*pool;
+        let op = |e: &hygiea_core::HyErr| format!("{e}");
+
+        // 表没建：查、增、改、删各自的错误，op 带表名和 db! 那一行
+        let line = line!() + 1;
+        let e = db!(record::Entity::find().all(db)).unwrap_err();
+        assert!(e.is(RepoErr::QueryFailed), "{e:#}");
+        assert_eq!(
+            op(&e),
+            format!("Db query failed: record at {}:{line}", file!())
+        );
+        // 跨行时是 db! 开头那一行
+        let line = line!() + 1;
+        let e = db!(record::Entity::find()
+            .select_only()
+            .column(record::Column::Id)
+            .count(db))
+        .unwrap_err();
+        assert_eq!(
+            op(&e),
+            format!("Db query failed: record at {}:{line}", file!())
+        );
+
+        let am = record::Model {
+            id: 1,
+            create_at: HyUtcDateTime(utc("2026-10-05T12:57:24.719Z")),
+            delete_at: None,
+        }
+        .into_active_model();
+        let e = db!(am.clone().insert(db)).unwrap_err();
+        assert!(e.is(RepoErr::InsertFailed), "{e:#}");
+        assert!(op(&e).starts_with("Db insert failed: record at "), "{e:#}");
+        let e = db!(am.clone().update(db)).unwrap_err();
+        assert!(e.is(RepoErr::UpdateFailed), "{e:#}");
+        let e = db!(am.clone().delete(db)).unwrap_err();
+        assert!(e.is(RepoErr::DeleteFailed), "{e:#}");
+        // ActiveModel 也能写 op，表名照样带上
+        let line = line!() + 1;
+        let e = db!(am.clone().delete(db), "remove record").unwrap_err();
+        assert_eq!(
+            op(&e),
+            format!(
+                "Db delete failed: remove record, record at {}:{line}",
+                file!()
+            )
+        );
+        // save 分不出增还是改
+        let e = db!(am.clone().save(db)).unwrap_err();
+        assert!(e.is(RepoErr::ExecFailed), "{e:#}");
+        let e = db!(record::Entity::delete_many().exec(db)).unwrap_err();
+        assert!(e.is(RepoErr::DeleteFailed), "{e:#}");
+        assert!(op(&e).starts_with("Db delete failed: record at "), "{e:#}");
+        // 拿得到表名的也能写 op：自定义在前，表名照样带上
+        let line = line!() + 1;
+        let e = db!(record::Entity::find().all(db), "list records").unwrap_err();
+        assert_eq!(
+            op(&e),
+            format!(
+                "Db query failed: list records, record at {}:{line}",
+                file!()
+            )
+        );
+
+        // into_tuple 之后、分页器拿不到表名，必须写 op（不写编译报错），op 是"自定义 at 位置"
+        let line = line!() + 1;
+        let e = db!(
+            record::Entity::find()
+                .select_only()
+                .column(record::Column::Id)
+                .into_tuple::<i64>()
+                .all(db),
+            "record ids"
+        )
+        .unwrap_err();
+        assert!(e.is(RepoErr::QueryFailed), "{e:#}");
+        assert_eq!(
+            op(&e),
+            format!("Db query failed: record ids at {}:{line}", file!())
+        );
+        let e = db!(
+            record::Entity::find().paginate(db, 10).fetch_page(0),
+            "record page"
+        )
+        .unwrap_err();
+        assert!(e.is(RepoErr::QueryFailed), "{e:#}");
+        assert!(
+            op(&e).starts_with("Db query failed: record page at "),
+            "{e:#}"
+        );
+
+        // 原始错误在 source 上
+        assert!(
+            format!("{e:#}").contains(r#"relation "record" does not exist"#),
+            "{e:#}"
+        );
+
+        // .db()：什么写法都能接，ExecFailed，op 是 .db() 所在的行（跨行时不是语句开头那行）
+        let result = db.execute_unprepared("SELECT * FROM record").await;
+        let line = line!() + 1;
+        let e = result.db().unwrap_err();
+        assert!(e.is(RepoErr::ExecFailed), "{e:#}");
+        assert_eq!(op(&e), format!("Db exec failed: {}:{line}", file!()));
+        db.execute_unprepared(CREATE_RECORD).await.db().unwrap();
+        assert_eq!(db!(record::Entity::find().count(db)).unwrap(), 0);
+    }
+
+    /// find_page 取一页加总数：中间页、最后一页不满、页号超出时 items 为空，总数和总页数不变
+    #[tokio::test]
+    async fn seaorm_find_page() {
+        use hygiea_db::db;
+        use hygiea_db::seaorm::find_page;
+        use hygiea_db::{Page, PageRequest, RepoErr};
+        use sea_orm::{ColumnTrait, IntoActiveModel, QueryFilter, QueryOrder};
+
+        let server = start().await;
+        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server))
+            .await
+            .unwrap();
+        pool.execute_unprepared(CREATE_RECORD).await.unwrap();
+        let at = HyUtcDateTime(utc("2026-10-05T12:57:24.719Z"));
+        let models = (1..=7).map(|id| {
+            record::Model {
+                id,
+                create_at: at,
+                delete_at: None,
+            }
+            .into_active_model()
+        });
+        db!(record::Entity::insert_many(models).exec_without_returning(&*pool)).unwrap();
+
+        let size = 3;
+        let ids = async |page| {
+            let select = record::Entity::find()
+                .filter(record::Column::Id.gte(2))
+                .order_by_asc(record::Column::Id);
+            find_page(&*pool, select, PageRequest::new(page, size).unwrap())
+                .await
+                .unwrap()
+                .map(|m| m.id)
+        };
+        assert_eq!(
+            ids(0).await,
+            Page::new(vec![2, 3, 4], PageRequest::new(0, size).unwrap(), 6)
+        );
+        assert_eq!(
+            ids(1).await,
+            Page::new(vec![5, 6, 7], PageRequest::new(1, size).unwrap(), 6)
+        );
+        let beyond = ids(2).await;
+        assert_eq!(beyond.items, Vec::<i64>::new());
+        assert_eq!((beyond.total_items, beyond.total_pages), (6, 2));
+
+        // pair 表没建
+        let e = find_page(
+            &*pool,
+            pair::Entity::find(),
+            PageRequest::new(4, size).unwrap(),
+        )
+        .await
+        .unwrap_err();
+        assert!(e.is(RepoErr::QueryFailed), "{e:#}");
+        assert!(
+            format!("{e:#}").contains("Db query failed: find_page pair page 4 size 3, fetch items"),
+            "{e:#}"
+        );
+    }
+
+    /// sqlx 自己写 LIMIT / OFFSET，绑 PageRequest 的 limit()、offset()，再用 Page::new 拼结果
+    #[tokio::test]
+    async fn sqlx_page_request_binds_limit_offset() {
+        use hygiea_db::{Page, PageRequest};
+
+        let server = start().await;
+        let pool = SqlxPgPool::from_config(&sqlx_config(&server))
+            .await
+            .unwrap();
+        sqlx::query(CREATE_RECORD).execute(&*pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO record (id, create_at) SELECT g, now() FROM generate_series(1, 5) AS g",
+        )
+        .execute(&*pool)
+        .await
+        .unwrap();
+
+        let request = PageRequest::new(1, 2).unwrap();
+        let items: Vec<i64> =
+            sqlx::query_scalar("SELECT id FROM record ORDER BY id LIMIT $1 OFFSET $2")
+                .bind(request.limit())
+                .bind(request.offset())
+                .fetch_all(&*pool)
+                .await
+                .unwrap();
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM record")
+            .fetch_one(&*pool)
+            .await
+            .unwrap();
+        let page = Page::new(items, request, total.unsigned_abs());
+        assert_eq!(page, Page::new(vec![3, 4], request, 5));
+        assert_eq!(page.total_pages, 3);
+    }
+
+    /// transaction_snapshot 开出来是 REPEATABLE READ + READ ONLY，里面写数据报错；transaction 是默认的 READ COMMITTED
+    #[tokio::test]
+    async fn seaorm_transaction_snapshot_is_repeatable_read_only() {
+        use hygiea_core::{ResultExt, err};
+        use hygiea_db::RepoErr;
+
+        let server = start().await;
+        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server))
+            .await
+            .unwrap();
+        pool.execute_unprepared(CREATE_RECORD).await.unwrap();
+        async fn show(txn: &impl ConnectionTrait, name: &str) -> String {
+            txn.query_one_raw(sql(&format!("SHOW {name}")))
+                .await
+                .unwrap()
+                .unwrap()
+                .try_get("", name)
+                .unwrap()
+        }
+
+        let (isolation, read_only) =
+            hygiea_db::seaorm::transaction_snapshot(&*pool, "read", async |txn| {
+                Ok((
+                    show(txn, "transaction_isolation").await,
+                    show(txn, "transaction_read_only").await,
+                ))
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            (isolation.as_str(), read_only.as_str()),
+            ("repeatable read", "on")
+        );
+
+        let written = hygiea_db::seaorm::transaction_snapshot(&*pool, "write", async |txn| {
+            txn.execute_unprepared("INSERT INTO record (id, create_at) VALUES (1, now())")
+                .await
+                .wrap_err(|| err!(RepoErr::InsertFailed, "insert record"))?;
+            Ok(())
+        })
+        .await;
+        assert!(written.unwrap_err().is(RepoErr::InsertFailed));
+
+        let isolation = hygiea_db::seaorm::transaction(&*pool, "read", async |txn| {
+            Ok(show(txn, "transaction_isolation").await)
+        })
+        .await
+        .unwrap();
+        assert_eq!(isolation, "read committed");
+    }
 }
