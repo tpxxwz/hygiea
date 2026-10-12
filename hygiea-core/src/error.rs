@@ -1,5 +1,6 @@
 use linkme::distributed_slice;
 use minijinja::{Environment, UndefinedBehavior};
+use std::backtrace::{Backtrace, BacktraceStatus};
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
@@ -93,12 +94,18 @@ pub type Result<T, E = HyErr> = std::result::Result<T, E>;
 /// `Debug` 参考 anyhow，给人看：`{:?}` 是错误码、消息加上逐层的原因（`main` 返回 `Err`、`unwrap` 的 panic、
 /// `dbg!`、测试断言失败时打的都是它）；`{:#?}` 才是原始结构体（排查模板渲染时看 `err_tpl` / `err_args`）。
 ///
+/// 构造时按环境变量捕获调用栈，同 anyhow / 标准库的 [`Backtrace::capture`]：设了 `RUST_LIB_BACKTRACE=1`
+/// （没设它时看 `RUST_BACKTRACE=1`）才捕获，`{:?}` 末尾多一段 `Stack backtrace:`；不设不捕获，没有开销。
+/// 栈只在 `Debug` 里，`Display`、对外的响应里没有
+///
 /// 字段只读：错误码是 [`HyErr::is`] 的依据，改了会让判断和 Display 对不上
 pub struct HyErr {
     err_code: &'static str,
     err_tpl: &'static str,
     err_args: serde_json::Value,
     source: Option<Source>,
+    /// 没捕获时是 None。装箱：`Backtrace` 本身几十字节，不捕获时只占一个指针，`Result<T, HyErr>` 不跟着变大
+    backtrace: Option<Box<Backtrace>>,
 }
 
 impl HyErr {
@@ -110,6 +117,7 @@ impl HyErr {
             err_tpl,
             err_args,
             source: None,
+            backtrace: capture_backtrace(),
         }
     }
 
@@ -126,6 +134,11 @@ impl HyErr {
     /// 模板参数，没有变量的模板是 `Null`
     pub fn err_args(&self) -> &serde_json::Value {
         &self.err_args
+    }
+
+    /// 构造时捕获的调用栈，环境变量没开时是 None，见 [`HyErr`]
+    pub fn backtrace(&self) -> Option<&Backtrace> {
+        self.backtrace.as_deref()
     }
 
     /// 挂上导致这个错误的外部错误，重复调用以最后一次为准
@@ -189,7 +202,8 @@ impl fmt::Display for HyErr {
 ///     task 11 panicked with message "boom"
 /// ```
 ///
-/// 原因有多层时编号（`0: ...`、`1: ...`），从近到远。`{:#?}` 输出原始结构体
+/// 原因有多层时编号（`0: ...`、`1: ...`），从近到远；捕获了调用栈时最后是 `Stack backtrace:`。
+/// `{:#?}` 输出原始结构体
 impl fmt::Debug for HyErr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if f.alternate() {
@@ -199,6 +213,7 @@ impl fmt::Debug for HyErr {
                 .field("err_tpl", &self.err_tpl)
                 .field("err_args", &self.err_args)
                 .field("source", &self.source)
+                .field("backtrace", &self.backtrace)
                 .finish();
         }
         write!(f, "[{}] ", self.err_code)?;
@@ -219,7 +234,19 @@ impl fmt::Debug for HyErr {
                 }
             }
         }
+        if let Some(backtrace) = &self.backtrace {
+            write!(f, "\n\nStack backtrace:\n{backtrace}")?;
+        }
         Ok(())
+    }
+}
+
+/// 按环境变量捕获调用栈，没开（`Disabled`）或平台不支持（`Unsupported`）时不留
+fn capture_backtrace() -> Option<Box<Backtrace>> {
+    let backtrace = Backtrace::capture();
+    match backtrace.status() {
+        BacktraceStatus::Captured => Some(Box::new(backtrace)),
+        _ => None,
     }
 }
 
@@ -508,25 +535,59 @@ mod tests {
         assert_eq!(format!("{e:#}"), "wrapped: outer: inner cause");
     }
 
+    /// 去掉构造时捕获的栈：跑测试时设了 RUST_BACKTRACE=1 也能精确比较 Debug 输出
+    fn without_backtrace(mut e: HyErr) -> HyErr {
+        e.backtrace = None;
+        e
+    }
+
     /// Debug 参考 anyhow：[错误码] 消息，有原因时列在 Caused by 下面；一层不编号，多层按 0、1 编号
     #[test]
     fn debug_is_human_readable() {
-        let plain = err!(TestErr::NotFound, "bob");
+        let plain = without_backtrace(err!(TestErr::NotFound, "bob"));
         let code = plain.err_code();
         assert_eq!(format!("{plain:?}"), format!("[{code}] user bob not found"));
 
-        let one = err!(TestErr::Wrapped).with_source(Inner);
+        let one = without_backtrace(err!(TestErr::Wrapped).with_source(Inner));
         let code = one.err_code();
         assert_eq!(
             format!("{one:?}"),
             format!("[{code}] wrapped\n\nCaused by:\n    inner cause")
         );
 
-        let two = err!(TestErr::Wrapped).with_source(Outer(Inner));
+        let two = without_backtrace(err!(TestErr::Wrapped).with_source(Outer(Inner)));
         assert_eq!(
             format!("{two:?}"),
             format!("[{code}] wrapped\n\nCaused by:\n    0: outer\n    1: inner cause")
         );
+    }
+
+    /// 捕获了栈时 Debug 末尾是 Stack backtrace，栈里有构造错误的这个函数；Display 里没有栈。
+    /// 环境变量控制的 capture 在进程里只读一次，这里用 force_capture 直接塞进去
+    #[test]
+    fn debug_prints_backtrace_when_captured() {
+        let mut e = err!(TestErr::Wrapped).with_source(Inner);
+        e.backtrace = Some(Box::new(Backtrace::force_capture()));
+        let debug = format!("{e:?}");
+        assert!(debug.contains("\n\nStack backtrace:\n"), "{debug}");
+        assert!(
+            debug.contains("debug_prints_backtrace_when_captured"),
+            "{debug}"
+        );
+        let caused = debug.find("Caused by:").unwrap();
+        let stack = debug.find("Stack backtrace:").unwrap();
+        assert!(caused < stack, "{debug}");
+        assert!(e.backtrace().is_some());
+        assert!(!format!("{e}").contains("Stack backtrace"));
+        assert!(!format!("{e:#}").contains("Stack backtrace"));
+    }
+
+    /// 没捕获栈时 Debug 里没有 Stack backtrace 这一段
+    #[test]
+    fn debug_has_no_backtrace_when_not_captured() {
+        let e = without_backtrace(err!(TestErr::Wrapped));
+        assert!(e.backtrace().is_none());
+        assert!(!format!("{e:?}").contains("Stack backtrace"));
     }
 
     /// {:#?} 是原始结构体，排查模板渲染时能看到未渲染的模板和参数
