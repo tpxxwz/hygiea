@@ -5,7 +5,7 @@
 //! runtime 没暂停时 panic 等），core 暂时不考虑这套东西，所以挪到这里保留代码和测试。
 //!
 //! core 已经没有替换时钟的钩子了，这里用本文件自己的 [`now_utc`] 代替，不影响 `hygiea::datetime::now_utc`。
-//! 以后要重新做仿真时钟，从这里和 `docs/notes/virtual-time-and-parallelism.md` 开始。
+//! 以后要重新做仿真时钟，从这里和 `playground/docs/virtual-time-and-parallelism.md` 开始。
 
 use parking_lot::{Mutex, RwLock};
 use std::collections::VecDeque;
