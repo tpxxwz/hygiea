@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 
-use super::{AppErr, Name};
+use super::{AppErr, Name, RegistryConfig};
 use crate::{Result, err};
 
 #[derive(Hash, PartialEq, Eq)]
@@ -106,14 +106,22 @@ impl<T: Send + Sync + Clone + 'static> Resource for T {}
 /// ```
 #[derive(Clone)]
 pub struct Resources {
+    /// 框架配置，Registry 建的时候给，之后不变
+    registry_config: Arc<RegistryConfig>,
     map: Arc<DashMap<ResourceKey, Arc<dyn Any + Send + Sync>>>,
 }
 
 impl Resources {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(registry_config: RegistryConfig) -> Self {
         Self {
+            registry_config: Arc::new(registry_config),
             map: Arc::new(DashMap::new()),
         }
+    }
+
+    /// 框架配置（`[registry]`），比如应用名 `app_name`
+    pub fn registry_config(&self) -> &RegistryConfig {
+        &self.registry_config
     }
 
     fn key<T: Resource>(name: Name) -> ResourceKey {
@@ -217,6 +225,11 @@ impl ResourceSink {
         Self(resources.clone())
     }
 
+    /// 见 [`Resources::registry_config`]
+    pub fn registry_config(&self) -> &RegistryConfig {
+        self.0.registry_config()
+    }
+
     /// 插入匿名资源，见 [`Resources::insert`]
     pub fn insert<T: Resource>(&self, value: T) {
         self.0.insert(value)
@@ -240,6 +253,11 @@ impl ReadyResources {
     /// Registry 在第二阶段构造。组件的单元测试里也可以用它直接调 `activate`
     pub fn new(resources: &Resources) -> Self {
         Self(resources.clone())
+    }
+
+    /// 见 [`Resources::registry_config`]
+    pub fn registry_config(&self) -> &RegistryConfig {
+        self.0.registry_config()
     }
 
     /// 见 [`Resources::get`]
@@ -278,11 +296,29 @@ mod tests {
     use super::*;
 
     // 注意：这里不建 Registry（会装全局日志，占用 log.rs 的 INSTALLED 标记），
-    // Resources::new() 是 pub(crate)，本文件在 core 内部可以直接调用
+    // Resources::new 是 pub(super)，本文件在 core 内部可以直接调用
+
+    /// 两个阶段视图都能取到框架配置：prepare 里读不了资源，但能拿到应用名
+    #[test]
+    fn views_expose_registry_config() {
+        let resources = Resources::new(RegistryConfig {
+            app_name: "demo".to_string(),
+            ..Default::default()
+        });
+        assert_eq!(resources.registry_config().app_name, "demo");
+        assert_eq!(
+            ResourceSink::new(&resources).registry_config().app_name,
+            "demo"
+        );
+        assert_eq!(
+            ReadyResources::new(&resources).registry_config().app_name,
+            "demo"
+        );
+    }
 
     #[test]
     fn anonymous_and_named_resources_are_independent() {
-        let resources = Resources::new();
+        let resources = Resources::new(RegistryConfig::default());
         resources.insert(1i32);
         resources.insert_named("a", 2i32);
 
@@ -294,7 +330,7 @@ mod tests {
 
     #[test]
     fn different_types_same_name_do_not_interfere() {
-        let resources = Resources::new();
+        let resources = Resources::new(RegistryConfig::default());
         resources.insert_named::<i32>("x", 1);
         resources.insert_named::<String>("x", "hello".to_string());
 
@@ -308,7 +344,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "already exists")]
     fn insert_duplicate_anonymous_panics() {
-        let resources = Resources::new();
+        let resources = Resources::new(RegistryConfig::default());
         resources.insert(1i32);
         resources.insert(2i32);
     }
@@ -316,14 +352,14 @@ mod tests {
     #[test]
     #[should_panic(expected = "already exists")]
     fn insert_named_duplicate_panics() {
-        let resources = Resources::new();
+        let resources = Resources::new(RegistryConfig::default());
         resources.insert_named("a", 1i32);
         resources.insert_named("a", 2i32);
     }
 
     #[test]
     fn require_missing_returns_resource_missing_with_type_and_name() {
-        let resources = Resources::new();
+        let resources = Resources::new(RegistryConfig::default());
         let err = resources.require_named::<i32>("primary").unwrap_err();
         assert!(err.is(AppErr::ResourceMissing));
         let msg = err.to_string();
@@ -333,14 +369,14 @@ mod tests {
 
     #[test]
     fn require_anonymous_missing_returns_resource_missing() {
-        let resources = Resources::new();
+        let resources = Resources::new(RegistryConfig::default());
         let err = resources.require::<i32>().unwrap_err();
         assert!(err.is(AppErr::ResourceMissing));
     }
 
     #[test]
     fn remove_then_contains_is_false() {
-        let resources = Resources::new();
+        let resources = Resources::new(RegistryConfig::default());
         resources.insert_named("a", 1i32);
         assert!(resources.contains_named::<i32>("a"));
 

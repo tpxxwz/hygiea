@@ -39,7 +39,7 @@ impl ReqwestConfig {
 }
 
 impl ReqwestClient {
-    /// 默认配置、打开 debug 日志的 client，就是 `ReqwestClient::from_config(&ReqwestConfig::default().debug(true), &AppContext::default())`。
+    /// 默认配置、打开 debug 日志的 client，就是 `ReqwestClient::from_config(&ReqwestConfig::default().debug(true), &RegistryConfig::default())`。
     /// 只在 `debug-log` feature 下存在，给测试用；要改别的配置就用 [`ReqwestConfig::debug`](ReqwestConfig::debug) 那条写法
     pub async fn debug() -> Result<Self> {
         Self::from_config(&ReqwestConfig::default().debug(true), &Default::default()).await

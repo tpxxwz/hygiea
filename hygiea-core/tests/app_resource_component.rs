@@ -8,8 +8,8 @@
 use std::sync::{Arc, Mutex};
 
 use hygiea_core::app::{
-    AppContext, AppErr, ConfigResource, ImmediateResourceComponent, Registry, RegistryConfig,
-    ResourceId, Resources, async_trait,
+    AppErr, ConfigResource, ImmediateResourceComponent, Registry, RegistryConfig, ResourceId,
+    Resources, async_trait,
 };
 use hygiea_core::{Result, err};
 
@@ -36,7 +36,7 @@ struct FakeResource {
 impl ConfigResource for FakeResource {
     type Config = FakeConfig;
 
-    async fn from_config(config: &FakeConfig, app: &AppContext) -> Result<Self> {
+    async fn from_config(config: &FakeConfig, registry_config: &RegistryConfig) -> Result<Self> {
         config
             .events
             .lock()
@@ -47,7 +47,7 @@ impl ConfigResource for FakeResource {
         }
         Ok(Self {
             value: config.value.clone(),
-            app_name: app.app_name.clone(),
+            app_name: registry_config.app_name.clone(),
             events: config.events.clone(),
         })
     }
@@ -120,7 +120,7 @@ async fn anonymous_instance_is_got_without_name() {
     assert_eq!(snapshot(&events), vec!["only:from_config", "only:close"]);
 }
 
-/// Registry 按 `[registry] app_name` 建 AppContext，组件 from_config 时拿到；`Registry::new()` 时是默认的 `hygiea`
+/// Resources 持有 Registry 的配置，组件 from_config 时拿到 `app_name`；`Registry::new()` 时是默认的 `hygiea`
 #[tokio::test]
 async fn from_config_gets_app_name() {
     let events = EventLog::default();
@@ -131,7 +131,7 @@ async fn from_config_gets_app_name() {
     .add::<FakeComponent>(config(&events, "only"))
     .on_ready(|res: Resources| async move {
         assert_eq!(res.require::<FakeResource>()?.app_name, "demo");
-        assert_eq!(res.require::<AppContext>()?.app_name, "demo");
+        assert_eq!(res.registry_config().app_name, "demo");
         Err(shutdown_err())
     });
     let (result, _guard) = registry.run().await;

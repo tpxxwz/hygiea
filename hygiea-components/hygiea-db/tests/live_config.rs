@@ -68,7 +68,7 @@ where
 }
 
 mod sqlite {
-    use hygiea_core::app::{AppContext, ConfigResource};
+    use hygiea_core::app::{ConfigResource, RegistryConfig};
     use hygiea_db::{
         LiveConfigOptions, PoolConfig, RepoErr, SqliteConnectConfig, SqlxSqliteConfig,
         SqlxSqlitePool,
@@ -78,9 +78,10 @@ mod sqlite {
     use super::*;
 
     /// 应用名 `hy`：表是 hy_config、hy_config_revision、hy_config_history
-    fn app() -> AppContext {
-        AppContext {
+    fn app() -> RegistryConfig {
+        RegistryConfig {
             app_name: "hy".to_string(),
+            ..Default::default()
         }
     }
 
@@ -569,7 +570,7 @@ mod sqlite {
 /// 用代码启动的官方 postgres 镜像
 #[container]
 mod postgres {
-    use hygiea_core::app::{AppContext, ConfigResource};
+    use hygiea_core::app::{ConfigResource, RegistryConfig};
     use hygiea_db::{
         LiveConfigOptions, PgConnectConfig, RepoErr, SeaOrmPgConfig, SeaOrmPgPool, SqlxPgConfig,
         SqlxPgPool,
@@ -617,9 +618,10 @@ mod postgres {
     }
 
     /// 应用名 `hy`：表是 hy_config 那三张；主池的连接叫 `hy`，live config 的小池叫 `hy-live-config`
-    fn app() -> AppContext {
-        AppContext {
+    fn app() -> RegistryConfig {
+        RegistryConfig {
             app_name: "hy".to_string(),
+            ..Default::default()
         }
     }
 
@@ -853,8 +855,9 @@ mod postgres {
     #[tokio::test]
     async fn table_prefix_follows_app_name() {
         let env = Env::new().await;
-        let cfg = AppContext {
+        let cfg = RegistryConfig {
             app_name: "cfg".to_string(),
+            ..Default::default()
         };
         let pool = SqlxPgPool::from_config(&sqlx_config(&env.server), &cfg)
             .await

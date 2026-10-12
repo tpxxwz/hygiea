@@ -13,7 +13,7 @@
 //! impl ConfigResource for SqlxPgPool {
 //!     type Config = SqlxPgConfig;
 //!
-//!     async fn from_config(config: &SqlxPgConfig, app: &AppContext) -> Result<Self> { .. }
+//!     async fn from_config(config: &SqlxPgConfig, registry_config: &RegistryConfig) -> Result<Self> { .. }
 //!
 //!     async fn close(&self) -> Result<()> { .. }
 //! }
@@ -21,14 +21,14 @@
 //! pub type SqlxPgComponent = ImmediateResourceComponent<SqlxPgPool>;
 //! ```
 //!
-//! 不经过 Registry 时直接调 `SqlxPgPool::from_config(&config, &AppContext::default())`。一个配置建出多个资源、要跑后台任务、
+//! 不经过 Registry 时直接调 `SqlxPgPool::from_config(&config, &RegistryConfig::default())`。一个配置建出多个资源、要跑后台任务、
 //! Deferred 组件这些情况照常手写组件。
 
 use async_trait::async_trait;
 use tokio::task::JoinHandle;
 
 use super::{
-    AppContext, CancellationToken, ImmediateComponent, Name, Resource, ResourceId, Resources,
+    CancellationToken, ImmediateComponent, Name, RegistryConfig, Resource, ResourceId, Resources,
     component,
 };
 use crate::Result;
@@ -42,9 +42,9 @@ pub trait ConfigResource: Resource + Sized {
     /// 建资源用的配置，也是 [`ImmediateResourceComponent`] 的配置
     type Config: Send + Sync + 'static;
 
-    /// 按配置建出资源（连数据库、建客户端等）。`app` 是进程级的信息（应用名等），经过 Registry 时由它给，
-    /// 用不到就忽略。错误用 [`AppErr`](super::AppErr) 的变体，底层原因挂在 source 上
-    async fn from_config(config: &Self::Config, app: &AppContext) -> Result<Self>;
+    /// 按配置建出资源（连数据库、建客户端等）。`registry_config` 是框架配置（应用名等），经过 Registry 时
+    /// 是 [`Resources::registry_config`]，用不到就忽略。错误用 [`AppErr`](super::AppErr) 的变体，底层原因挂在 source 上
+    async fn from_config(config: &Self::Config, registry_config: &RegistryConfig) -> Result<Self>;
 
     /// 关闭资源，组件关闭时调用，比如等在途查询跑完后关掉连接池。默认什么都不做
     async fn close(&self) -> Result<()> {
@@ -86,9 +86,7 @@ impl<R: ConfigResource> ImmediateComponent for ImmediateResourceComponent<R> {
         resources: &Resources,
         _shutdown: CancellationToken,
     ) -> Result<Option<JoinHandle<()>>> {
-        // Registry 建的时候放进去了；不经过 Registry 拼的 Resources 里没有，按空的算
-        let app = resources.get::<AppContext>().unwrap_or_default();
-        let resource = R::from_config(&self.config, &app).await?;
+        let resource = R::from_config(&self.config, resources.registry_config()).await?;
         resources.insert_named(self.name.clone(), resource.clone());
         self.resource = Some(resource);
         Ok(None)

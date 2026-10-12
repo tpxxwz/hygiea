@@ -38,7 +38,7 @@ use crate::RepoErr;
 // ---- 名字、结构、DDL ---------------------------------------------------------------
 
 /// 表名前缀是应用名加 `_`（`dict_jp` → `dict_jp_config`）。前缀拼进 SQL（表名不能绑参数），应用名得是
-/// 小写下划线 `[a-z][a-z0-9_]*`：经过 Registry 时入口已经校验过，这里再查一次（不经过 Registry 时 AppContext 是自己建的）。
+/// 小写下划线 `[a-z][a-z0-9_]*`：经过 Registry 时入口已经校验过，这里再查一次（不经过 Registry 时 RegistryConfig 是自己建的）。
 /// 不能带 schema，表建在连接池 search_path 的第一个 schema 里
 #[derive(Clone, Debug)]
 pub(crate) struct Tables {

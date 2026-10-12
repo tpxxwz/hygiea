@@ -4,7 +4,7 @@ use serde::Deserialize;
 use sqlx::PgPool;
 
 use hygiea_core::app::{
-    AppContext, AppErr, ConfigResource, ImmediateResourceComponent, async_trait,
+    AppErr, ConfigResource, ImmediateResourceComponent, RegistryConfig, async_trait,
 };
 use hygiea_core::{Result, ResultExt, err};
 
@@ -41,14 +41,14 @@ pub struct SqlxPgPool {
 impl ConfigResource for SqlxPgPool {
     type Config = SqlxPgConfig;
 
-    async fn from_config(config: &SqlxPgConfig, app: &AppContext) -> Result<Self> {
+    async fn from_config(config: &SqlxPgConfig, registry_config: &RegistryConfig) -> Result<Self> {
         let target = config.connect.target();
-        let options = config.connect.sqlx_options(app)?;
+        let options = config.connect.sqlx_options(registry_config)?;
         #[cfg(feature = "live-config")]
         let live_config = live_config_source_for(
             |tables| Ok(Store::postgres(options.clone(), &config.pool, tables)),
             &config.live_config,
-            app,
+            registry_config,
         )?;
         tracing::info!("Connecting to database: {target}");
         let pool_options = config.pool.sqlx::<sqlx::Postgres>(PG_POOL_SIZE);
@@ -119,7 +119,7 @@ mod tests {
             schema_search_path: "public,custom".to_string(),
             ..Default::default()
         };
-        let options = connect.sqlx_options(&AppContext::default()).unwrap();
+        let options = connect.sqlx_options(&RegistryConfig::default()).unwrap();
         assert_eq!(options.get_options(), Some("-c search_path=public,custom"));
     }
 }

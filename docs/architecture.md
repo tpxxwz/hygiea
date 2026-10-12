@@ -29,7 +29,7 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 | `env` | 常开 | 环境变量 |
 | `string` | 常开 | 缓存的正则、模板渲染，`fmt_tpl!` / `fmt_tpl_once!` / `fmt_pos!` 宏 |
 | `log` | `log` | 日志配置和初始化 |
-| `app` | `app` | 应用框架：组件（`Component` 加上 `ImmediateComponent` / `DeferredComponent` 两种启动方式）、注册、依赖排序、两阶段启动（`before_activate` / `on_ready`）、优雅退出；`ConfigResource` + `ImmediateResourceComponent<R>`（一个配置建一个资源的通用组件，`resource_component.rs`）；`AppContext`（进程级信息，现在是 `[registry] app_name`，`context.rs`，建资源时传给 `from_config`）；`#[component]` 宏从这里导出 |
+| `app` | `app` | 应用框架：组件（`Component` 加上 `ImmediateComponent` / `DeferredComponent` 两种启动方式）、注册、依赖排序、两阶段启动（`before_activate` / `on_ready`）、优雅退出；`ConfigResource` + `ImmediateResourceComponent<R>`（一个配置建一个资源的通用组件，`resource_component.rs`）；`Resources` 持有 `RegistryConfig`（`registry_config()`，三个阶段视图都能取，建资源时传给 `from_config`）；`#[component]` 宏从这里导出。设计说明见 `docs/design/app.md` |
 | `net` | `ws-client` | WebSocket 客户端 |
 
 ### hygiea-macros

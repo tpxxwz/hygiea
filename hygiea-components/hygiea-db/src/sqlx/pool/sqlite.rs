@@ -4,7 +4,7 @@ use serde::Deserialize;
 use sqlx::SqlitePool;
 
 use hygiea_core::app::{
-    AppContext, AppErr, ConfigResource, ImmediateResourceComponent, async_trait,
+    AppErr, ConfigResource, ImmediateResourceComponent, RegistryConfig, async_trait,
 };
 use hygiea_core::{Result, ResultExt, err};
 
@@ -42,17 +42,20 @@ pub struct SqlxSqlitePool {
 impl ConfigResource for SqlxSqlitePool {
     type Config = SqlxSqliteConfig;
 
-    async fn from_config(config: &SqlxSqliteConfig, app: &AppContext) -> Result<Self> {
+    async fn from_config(
+        config: &SqlxSqliteConfig,
+        registry_config: &RegistryConfig,
+    ) -> Result<Self> {
         // SQLite 没有连接名，应用名只有动态配置拿来当表名前缀
         #[cfg(not(feature = "live-config"))]
-        let _ = app;
+        let _ = registry_config;
         tracing::info!("Connecting to SQLite database: {}", config.connect.database);
         let connect_options = config.connect.sqlx_options()?;
         #[cfg(feature = "live-config")]
         let live_config = live_config_source_for(
             |tables| Ok(Store::sqlite(connect_options.clone(), &config.pool, tables)),
             &config.live_config,
-            app,
+            registry_config,
         )?;
         let pool_options = config.pool.sqlx::<sqlx::Sqlite>(SQLITE_POOL_SIZE);
         let pool = if config.pool.connect_lazy {

@@ -11,7 +11,7 @@
 //!
 //! 连接池的配置分段：`[db.connect]` 连哪个库（[`PgConnectConfig`] / [`SqliteConnectConfig`]），`[db.pool]` 池的参数
 //! （[`PoolConfig`]，各数据库、框架共用），SeaORM 另有 `[db.log]`。PG 连接的 `application_name` 用 `[registry] app_name`
-//! （建连接池时从 `AppContext` 拿到），不能在 `connect.params` 里自己写。
+//! （建连接池时从 `RegistryConfig` 拿到），不能在 `connect.params` 里自己写。
 //!
 //! 开了 `live-config` 后，各连接池多了 `live_config` / `live_config_all`：数据库配置表，改了表程序自动拿到新值，
 //! 配置在 `[db.live_config]`（默认不开），见 [`live_config`] 模块文档。

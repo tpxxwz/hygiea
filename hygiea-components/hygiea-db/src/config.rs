@@ -7,7 +7,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 #[cfg(feature = "postgres")]
-use hygiea_core::app::AppContext;
+use hygiea_core::app::RegistryConfig;
 
 use hygiea_core::Result;
 
@@ -48,9 +48,9 @@ impl Default for PgConnectConfig {
 
 #[cfg(feature = "postgres")]
 impl PgConnectConfig {
-    /// 连接 URL，不带 search_path（各框架另外设）。连接的 `application_name` 统一用 [`AppContext::app_name`]
+    /// 连接 URL，不带 search_path（各框架另外设）。连接的 `application_name` 统一用 [`RegistryConfig::app_name`]
     /// （空的不设），`params` 里不能自己写，写了报 `AppErr::InvalidConfig`
-    pub fn url(&self, app: &AppContext) -> Result<String> {
+    pub fn url(&self, registry_config: &RegistryConfig) -> Result<String> {
         use hygiea_core::app::AppErr;
         use hygiea_core::err;
 
@@ -64,12 +64,13 @@ impl PgConnectConfig {
                 "connect.params: application_name comes from [registry] app_name, don't set it here"
             ));
         }
-        if !app.app_name.is_empty() {
+        let app_name = &registry_config.app_name;
+        if !app_name.is_empty() {
             if !params.is_empty() {
                 params.push('&');
             }
             params.push_str("application_name=");
-            params.push_str(&percent_encode(&app.app_name));
+            params.push_str(&percent_encode(app_name));
         }
         let query = if params.is_empty() {
             String::new()
@@ -94,13 +95,13 @@ impl PgConnectConfig {
     #[cfg(any(feature = "sqlx", feature = "live-config"))]
     pub(crate) fn sqlx_options(
         &self,
-        app: &AppContext,
+        registry_config: &RegistryConfig,
     ) -> Result<sqlx::postgres::PgConnectOptions> {
         use hygiea_core::app::AppErr;
         use hygiea_core::{ResultExt, err};
 
         let options: sqlx::postgres::PgConnectOptions = self
-            .url(app)?
+            .url(registry_config)?
             .parse()
             .wrap_err(|| err!(AppErr::InvalidConfig, "invalid postgres connection url"))?;
         Ok(if self.schema_search_path.is_empty() {
@@ -317,7 +318,11 @@ mod tests {
     #[test]
     fn pg_url() {
         let config = PgConnectConfig::default();
-        let none = AppContext::default();
+        let named_as = |app_name: &str| RegistryConfig {
+            app_name: app_name.to_string(),
+            ..Default::default()
+        };
+        let none = named_as("");
         assert_eq!(
             config.url(&none).unwrap(),
             "postgres://postgres:postgres@localhost:5432/postgres"
@@ -334,10 +339,8 @@ mod tests {
         );
         assert_eq!(config.target(), "postgres postgres@localhost:5432/postgres");
 
-        // 应用名：统一用 AppContext 的，params 里不能自己写
-        let app = AppContext {
-            app_name: "dict-jp".to_string(),
-        };
+        // 应用名：统一用 RegistryConfig 的，params 里不能自己写
+        let app = named_as("dict-jp");
         assert_eq!(
             config.url(&app).unwrap(),
             "postgres://postgres:postgres@localhost:5432/postgres?sslmode=require&application_name=dict-jp"
@@ -347,9 +350,7 @@ mod tests {
             ..Default::default()
         };
         assert!(named.url(&app).is_err());
-        let odd = AppContext {
-            app_name: "a b&c".to_string(),
-        };
+        let odd = named_as("a b&c");
         assert!(
             PgConnectConfig::default()
                 .url(&odd)

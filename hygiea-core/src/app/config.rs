@@ -134,7 +134,7 @@ fn parse_override(raw: &str) -> Result<(String, String), String> {
 pub struct RegistryConfig {
     /// 应用名，小写下划线 `[a-z][a-z0-9_]*`，默认 [`DEFAULT_APP_NAME`](Self::DEFAULT_APP_NAME)（和默认的环境变量前缀
     /// `HYGIEA` 对得上）。[`Registry::load_config`] 读配置时检查：格式不对、和环境变量前缀对不上（前缀是它的大写，
-    /// 比如 `dict_jp` 对应 [`ConfigArgs::env_prefix`]`("DICT_JP")`）都报错。进 [`AppContext`](super::AppContext) 给各组件用，
+    /// 比如 `dict_jp` 对应 [`ConfigArgs::env_prefix`]`("DICT_JP")`）都报错。组件从 [`Resources::registry_config`](super::Resources::registry_config) 取，
     /// 比如数据库连接的 `application_name`、动态配置的表名前缀
     pub app_name: String,
     pub tracing: TracingConfig,

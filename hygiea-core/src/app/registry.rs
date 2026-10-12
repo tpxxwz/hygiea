@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use super::component::ComponentEntry;
 use super::signal::{ShutdownSignals, force_exit};
-use super::{AppContext, AppErr, Component, Name, RegistryConfig, ResourceId, Resources};
+use super::{AppErr, Component, Name, RegistryConfig, ResourceId, Resources};
 use crate::log::{BaseLogErr, LogGuard};
 use crate::{HyErr, Result, err};
 
@@ -65,19 +65,18 @@ impl Registry {
                 panic!("{e:#}")
             }
         };
-        // 进程级的信息先放进 Resources，组件启动时取（ImmediateResourceComponent 交给 from_config）
-        let state = Resources::new();
-        state.insert(AppContext {
-            app_name: config.app_name.clone(),
-        });
+        let shutdown_timeout = Duration::from_secs(config.shutdown_timeout_secs);
+        let shutdown_delay = Duration::from_secs(config.shutdown_delay_secs);
+        // 框架配置交给 Resources，组件各阶段都能取（ImmediateResourceComponent 交给 from_config）
+        let state = Resources::new(config);
         Self {
             state,
             components: Vec::new(),
             before_activate: None,
             on_ready: None,
             started: 0,
-            shutdown_timeout: Duration::from_secs(config.shutdown_timeout_secs),
-            shutdown_delay: Duration::from_secs(config.shutdown_delay_secs),
+            shutdown_timeout,
+            shutdown_delay,
             log_guard,
         }
     }

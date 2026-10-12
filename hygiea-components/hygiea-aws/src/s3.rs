@@ -7,7 +7,7 @@ use aws_config::SdkConfig;
 use aws_sdk_s3::Client;
 use aws_sdk_s3::config::{Builder, RequestChecksumCalculation, ResponseChecksumValidation};
 use hygiea_core::Result;
-use hygiea_core::app::{AppContext, ConfigResource, ImmediateResourceComponent, async_trait};
+use hygiea_core::app::{ConfigResource, ImmediateResourceComponent, RegistryConfig, async_trait};
 use serde::Deserialize;
 
 use crate::AwsConfig;
@@ -78,7 +78,7 @@ impl ConfigResource for AwsS3Client {
 
     /// 先按公共项加载 `SdkConfig`，再叠加 [`AwsConfig::s3`]。默认链里的凭证用到时才解析，
     /// 所以这里不会因为凭证缺失而失败，第一次调用服务时才会报错
-    async fn from_config(config: &AwsConfig, _app: &AppContext) -> Result<Self> {
+    async fn from_config(config: &AwsConfig, _registry_config: &RegistryConfig) -> Result<Self> {
         let sdk_config = config.load().await;
         tracing::info!(
             "AWS config loaded [region={:?}]",

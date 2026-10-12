@@ -6,7 +6,7 @@ use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 use serde::Deserialize;
 
 use hygiea_core::app::{
-    AppContext, AppErr, ConfigResource, ImmediateResourceComponent, async_trait,
+    AppErr, ConfigResource, ImmediateResourceComponent, RegistryConfig, async_trait,
 };
 use hygiea_core::{Result, ResultExt, err};
 
@@ -53,9 +53,9 @@ impl Default for SeaOrmLogConfig {
 }
 
 impl SeaOrmPgConfig {
-    fn connect_options(&self, app: &AppContext) -> Result<ConnectOptions> {
+    fn connect_options(&self, registry_config: &RegistryConfig) -> Result<ConnectOptions> {
         let (connect, pool, log) = (&self.connect, &self.pool, &self.log);
-        let mut opt = ConnectOptions::new(connect.url(app)?);
+        let mut opt = ConnectOptions::new(connect.url(registry_config)?);
         if !connect.schema_search_path.is_empty() {
             opt.set_schema_search_path(&connect.schema_search_path);
         }
@@ -107,22 +107,25 @@ pub struct SeaOrmPgPool {
 impl ConfigResource for SeaOrmPgPool {
     type Config = SeaOrmPgConfig;
 
-    async fn from_config(config: &SeaOrmPgConfig, app: &AppContext) -> Result<Self> {
+    async fn from_config(
+        config: &SeaOrmPgConfig,
+        registry_config: &RegistryConfig,
+    ) -> Result<Self> {
         #[cfg(feature = "live-config")]
         let live_config = live_config_source_for(
             |tables| {
                 Ok(Store::postgres(
-                    config.connect.sqlx_options(app)?,
+                    config.connect.sqlx_options(registry_config)?,
                     &config.pool,
                     tables,
                 ))
             },
             &config.live_config,
-            app,
+            registry_config,
         )?;
         let target = config.connect.target();
         tracing::info!("Connecting to database: {target}");
-        let conn = Database::connect(config.connect_options(app)?)
+        let conn = Database::connect(config.connect_options(registry_config)?)
             .await
             .wrap_err(|| err!(AppErr::ConnectFailed, target.clone()))?;
         tracing::info!("Database connection established");
@@ -177,7 +180,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let options = config.connect_options(&AppContext::default()).unwrap();
+        let options = config.connect_options(&RegistryConfig::default()).unwrap();
         assert_eq!(options.get_max_connections(), Some(3));
         assert_eq!(options.get_min_connections(), Some(0));
         assert_eq!(options.get_acquire_timeout(), Some(Duration::from_secs(30)));

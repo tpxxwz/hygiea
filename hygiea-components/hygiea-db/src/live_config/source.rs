@@ -11,7 +11,7 @@ use serde_json::{Map, Value};
 use tokio::sync::{OnceCell, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
-use hygiea_core::app::{AppContext, CancellationToken};
+use hygiea_core::app::{CancellationToken, RegistryConfig};
 use hygiea_core::{BaseErr, Result, ResultExt, ensure, err};
 
 use super::Backend;
@@ -33,13 +33,13 @@ pub(crate) fn live_config_source(source: &Option<LiveConfigSource>) -> Result<&L
 pub(crate) fn live_config_source_for(
     store: impl FnOnce(Tables) -> Result<Store>,
     config: &LiveConfigOptions,
-    app: &AppContext,
+    registry_config: &RegistryConfig,
 ) -> Result<Option<LiveConfigSource>> {
     if !config.enabled {
         return Ok(None);
     }
     // 表名前缀用应用名
-    let tables = Tables::new(&app.app_name)?;
+    let tables = Tables::new(&registry_config.app_name)?;
     LiveConfigSource::new(store(tables)?, config).map(Some)
 }
 

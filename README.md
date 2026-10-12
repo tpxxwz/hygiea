@@ -155,7 +155,7 @@ async fn main() -> Result<()> {
 }
 ```
 
-- 应用名是 `[registry] app_name`（小写下划线，默认 `hygiea`），环境变量前缀要是它的大写：自己的应用写 `app_name = "my_app"`，代码里配 `ConfigArgs::from_cli().env_prefix("MY_APP")`，对不上启动时报错。组件从 `AppContext` 拿到它，比如数据库连接的 `application_name`。
+- 应用名是 `[registry] app_name`（小写下划线，默认 `hygiea`），环境变量前缀要是它的大写：自己的应用写 `app_name = "my_app"`，代码里配 `ConfigArgs::from_cli().env_prefix("MY_APP")`，对不上启动时报错。组件从 `Resources::registry_config()` 拿到它（`ResourceSink` / `ReadyResources` 上也有），`ConfigResource::from_config` 的第二个参数就是它，比如数据库连接的 `application_name`。
 - 环境名默认 `dev`，用 `--env prod` 或 `HYGIEA_ENV=prod` 切换到 `config/prod.toml`；`-f local` 叠加 `config/local.toml`，`HYGIEA__HTTP__PORT=9090` 或 `--set http.port=9090` 覆盖单个配置项。配置项的层级就是 `AppConfig` 的字段层级，比如日志级别是 `registry.tracing.root_env_filter`。
 - 启动分两个阶段：先连上 SQLite、HTTP 绑好端口，然后 HTTP 才开始接请求；要在接请求之前做的初始化放进 `before_activate`（见 `app_two_phase`）。
 - 按 Ctrl+C 退出时，先停 HTTP（处理完手上的请求），再按启动的逆序关连接池。
@@ -242,7 +242,7 @@ async fn login(client: &ReqwestClient) -> Result<String> {
 }
 
 // client 只建一次并共享：连接池在它里面
-// let client = ReqwestClient::from_config(&ReqwestConfig::default(), &AppContext::default()).await?; // from_config 来自 hygiea::app::ConfigResource
+// let client = ReqwestClient::from_config(&ReqwestConfig::default(), &RegistryConfig::default()).await?; // from_config 来自 hygiea::app::ConfigResource
 ```
 
 `send::<Decoder>` 的 `Decoder` 是解码器：`Json<T>` 解出 `T`，`String` / `Bytes` / `()` / `BodyStream` 解出它们自己。`resp.body` 的类型是解码器的输出，所以解码器要写在 turbofish 里，不能靠接收处的类型标注推断。自定义解码（拆 `{code, msg, data}` 外壳、解密……）实现 `FromBytes`，`Output` 可以是拆出来的业务数据。
@@ -295,8 +295,8 @@ let resp = RequestConfig::plain(Method::GET, url)
 测试里排查问题时，开 `http-client-reqwest-debug-log` feature（只放在 dev-dependencies 里），给 client 打开 `debug`：
 
 ```rust
-let client = ReqwestClient::debug().await?; // 默认配置加 debug，等于 ReqwestClient::from_config(&ReqwestConfig::default().debug(true), &AppContext::default()).await
-let client = ReqwestClient::from_config(&ReqwestConfig { timeout: Some(t), ..Default::default() }.debug(true), &AppContext::default()).await?; // 要改别的配置时
+let client = ReqwestClient::debug().await?; // 默认配置加 debug，等于 ReqwestClient::from_config(&ReqwestConfig::default().debug(true), &RegistryConfig::default()).await
+let client = ReqwestClient::from_config(&ReqwestConfig { timeout: Some(t), ..Default::default() }.debug(true), &RegistryConfig::default()).await?; // 要改别的配置时
 // 配置文件里是 debug = true
 
 // 建好之后也能改，原地生效，这个 client 的所有 clone（包括 Resources 里那份）一起变，下一次请求起按新值打

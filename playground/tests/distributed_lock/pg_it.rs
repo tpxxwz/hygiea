@@ -1,31 +1,39 @@
 //! SeaORM + PostgreSQL 锁的端到端测试，要连真实的 PostgreSQL（`CLOUD_PG_*` 环境变量）。
 //! 手动跑：`cd playground && cargo test --test distributed_lock -- --ignored pg_it`
 
-use hygiea::app::ConfigResource;
-use hygiea::db::{SeaOrmPgConfig, SeaOrmPgPool};
+use hygiea::app::{ConfigResource, RegistryConfig};
+use hygiea::db::{PgConnectConfig, SeaOrmLogConfig, SeaOrmPgConfig, SeaOrmPgPool};
 use hygiea::env::{BuiltinKey, env_get, env_get_or_else};
 
 fn cloud_pg_config() -> SeaOrmPgConfig {
     SeaOrmPgConfig {
-        host: env_get(BuiltinKey::CloudPgHost).unwrap(),
-        port: env_get(BuiltinKey::CloudPgPort)
-            .unwrap()
-            .parse()
-            .expect("CLOUD_PG_PORT must be a number"),
-        username: env_get(BuiltinKey::CloudPgUser).unwrap(),
-        password: env_get(BuiltinKey::CloudPgPassword).unwrap(),
-        database: env_get_or_else(BuiltinKey::CloudPgDb, || {
-            env_get(BuiltinKey::CloudPgUser).unwrap()
-        }),
-        params: env_get(BuiltinKey::CloudPgParams).unwrap(),
-        schema_search_path: "dict_jp".to_string(),
-        sqlx_logging_level: "warn".to_string(),
+        connect: PgConnectConfig {
+            host: env_get(BuiltinKey::CloudPgHost).unwrap(),
+            port: env_get(BuiltinKey::CloudPgPort)
+                .unwrap()
+                .parse()
+                .expect("CLOUD_PG_PORT must be a number"),
+            username: env_get(BuiltinKey::CloudPgUser).unwrap(),
+            password: env_get(BuiltinKey::CloudPgPassword).unwrap(),
+            database: env_get_or_else(BuiltinKey::CloudPgDb, || {
+                env_get(BuiltinKey::CloudPgUser).unwrap()
+            }),
+            params: env_get(BuiltinKey::CloudPgParams).unwrap(),
+            schema_search_path: "dict_jp".to_string(),
+            ..Default::default()
+        },
+        log: SeaOrmLogConfig {
+            level: "warn".to_string(),
+            ..Default::default()
+        },
         ..SeaOrmPgConfig::default()
     }
 }
 
 async fn make_db() -> SeaOrmPgPool {
-    SeaOrmPgPool::from_config(&cloud_pg_config()).await.unwrap()
+    SeaOrmPgPool::from_config(&cloud_pg_config(), &RegistryConfig::default())
+        .await
+        .unwrap()
 }
 
 #[tokio::test]
@@ -122,8 +130,10 @@ async fn test_concurrent_distinct_keys_under_pool_pressure() {
     const MAX_CONNECTIONS: u32 = 50;
 
     let mut config = cloud_pg_config();
-    config.max_connections = Some(MAX_CONNECTIONS);
-    let db = SeaOrmPgPool::from_config(&config).await.unwrap();
+    config.pool.max_connections = Some(MAX_CONNECTIONS);
+    let db = SeaOrmPgPool::from_config(&config, &RegistryConfig::default())
+        .await
+        .unwrap();
 
     let completed = Arc::new(AtomicU32::new(0));
     let start = std::time::Instant::now();

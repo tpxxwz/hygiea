@@ -7,7 +7,7 @@ use reqwest::redirect::Policy;
 use serde::Deserialize;
 
 use hygiea_core::app::{
-    AppContext, AppErr, ConfigResource, ImmediateResourceComponent, async_trait,
+    AppErr, ConfigResource, ImmediateResourceComponent, RegistryConfig, async_trait,
 };
 use hygiea_core::{Result, err};
 
@@ -282,7 +282,10 @@ impl ConfigResource for ReqwestClient {
 
     /// 请求头无效时返回 `InvalidConfig`；代理 URL 或 reqwest 构建失败时返回
     /// [`ClientBuildFailed`](super::HttpClientErr::ClientBuildFailed)，reqwest 错误保留在 source 上
-    async fn from_config(config: &ReqwestConfig, _app: &AppContext) -> Result<Self> {
+    async fn from_config(
+        config: &ReqwestConfig,
+        _registry_config: &RegistryConfig,
+    ) -> Result<Self> {
         // reqwest 先校验（UA 不合法时报 ClientBuildFailed），再算 debug 状态
         let inner = client_builder(config.clone())?
             .build()
