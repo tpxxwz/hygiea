@@ -32,7 +32,18 @@ impl IntoRegistryConfig for AppConfig {
     }
 }
 
-fn write(dir: &std::path::Path, file: &str, content: &str) {
+/// 写配置文件，末尾补上必填的 `[registry] app_name`（顶层的 key 要写在段之前）。
+/// app_name 要和环境变量前缀对得上，用前缀的小写
+fn write(dir: &std::path::Path, file: &str, content: &str, prefix: &str) {
+    let app_name = prefix.to_ascii_lowercase();
+    write_raw(
+        dir,
+        file,
+        &format!("{content}\n[registry]\napp_name = \"{app_name}\"\n"),
+    );
+}
+
+fn write_raw(dir: &std::path::Path, file: &str, content: &str) {
     std::fs::write(dir.join(file), content).unwrap();
 }
 
@@ -41,10 +52,10 @@ fn write(dir: &std::path::Path, file: &str, content: &str) {
 #[test]
 fn config_layers_override_in_order() {
     let dir = tempfile::tempdir().unwrap();
-    write(dir.path(), "dev.toml", "name = \"from-dev\"\n");
-    write(dir.path(), "local.toml", "name = \"from-local\"\n");
-
     let prefix = "HYGIEA_TEST_LAYERS";
+    write(dir.path(), "dev.toml", "name = \"from-dev\"\n", prefix);
+    write(dir.path(), "local.toml", "name = \"from-local\"\n", prefix);
+
     let base = ConfigArgs::default()
         .env_prefix(prefix)
         .default_config_dir(dir.path().to_str().unwrap());
@@ -85,10 +96,10 @@ fn config_layers_override_in_order() {
 #[test]
 fn env_var_selects_environment() {
     let dir = tempfile::tempdir().unwrap();
-    write(dir.path(), "dev.toml", "name = \"dev-env\"\n");
-    write(dir.path(), "prod.toml", "name = \"prod-env\"\n");
-
     let prefix = "HYGIEA_TEST_ENVSELECT";
+    write(dir.path(), "dev.toml", "name = \"dev-env\"\n", prefix);
+    write(dir.path(), "prod.toml", "name = \"prod-env\"\n", prefix);
+
     let args = ConfigArgs::default()
         .env_prefix(prefix)
         .default_config_dir(dir.path().to_str().unwrap());
@@ -115,16 +126,22 @@ fn env_var_selects_environment() {
 
 #[test]
 fn config_dir_field_overrides_default_config_dir() {
+    let prefix = "HYGIEA_TEST_CONFIGDIR";
     let default_dir = tempfile::tempdir().unwrap();
     write(
         default_dir.path(),
         "dev.toml",
         "name = \"from-default-dir\"\n",
+        prefix,
     );
     let cli_dir = tempfile::tempdir().unwrap();
-    write(cli_dir.path(), "dev.toml", "name = \"from-cli-dir\"\n");
+    write(
+        cli_dir.path(),
+        "dev.toml",
+        "name = \"from-cli-dir\"\n",
+        prefix,
+    );
 
-    let prefix = "HYGIEA_TEST_CONFIGDIR";
     let args = ConfigArgs::default()
         .env_prefix(prefix)
         .default_config_dir(default_dir.path().to_str().unwrap());
@@ -145,9 +162,9 @@ fn config_dir_field_overrides_default_config_dir() {
 #[test]
 fn env_var_parses_numbers_and_booleans() {
     let dir = tempfile::tempdir().unwrap();
-    write(dir.path(), "dev.toml", "");
-
     let prefix = "HYGIEA_TEST_TYPES";
+    write(dir.path(), "dev.toml", "", prefix);
+
     let args = ConfigArgs::default()
         .env_prefix(prefix)
         .default_config_dir(dir.path().to_str().unwrap());
@@ -189,9 +206,47 @@ fn missing_config_file_panics() {
 fn wrong_type_panics() {
     let dir = tempfile::tempdir().unwrap();
     // count 是 i64 字段，给个字符串
-    write(dir.path(), "dev.toml", "count = \"not-a-number\"\n");
+    write(
+        dir.path(),
+        "dev.toml",
+        "count = \"not-a-number\"\n",
+        "HYGIEA_TEST_WRONG_TYPE",
+    );
     let args = ConfigArgs::default()
         .env_prefix("HYGIEA_TEST_WRONG_TYPE")
+        .default_config_dir(dir.path().to_str().unwrap());
+    let _ = Registry::load_config::<AppConfig>(&args);
+}
+
+/// app_name 和环境变量前缀对不上：启动失败
+#[test]
+#[should_panic(expected = "needs env prefix")]
+fn app_name_prefix_mismatch_panics() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "dev.toml", "", "OTHER_APP");
+    let args = ConfigArgs::default()
+        .env_prefix("HYGIEA_TEST_PREFIX_MISMATCH")
+        .default_config_dir(dir.path().to_str().unwrap());
+    let _ = Registry::load_config::<AppConfig>(&args);
+}
+
+/// 不写 app_name：默认 `hygiea`，和默认前缀 `HYGIEA` 对得上；只设了前缀没写 app_name 就对不上
+#[test]
+fn default_app_name_matches_default_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    write_raw(dir.path(), "dev.toml", "name = \"x\"\n");
+    let args = ConfigArgs::default().default_config_dir(dir.path().to_str().unwrap());
+    let (_registry, config) = Registry::load_config::<AppConfig>(&args);
+    assert_eq!(config.registry.app_name, "hygiea");
+}
+
+#[test]
+#[should_panic(expected = "needs env prefix")]
+fn prefix_without_app_name_panics() {
+    let dir = tempfile::tempdir().unwrap();
+    write_raw(dir.path(), "dev.toml", "name = \"x\"\n");
+    let args = ConfigArgs::default()
+        .env_prefix("HYGIEA_TEST_NO_APP_NAME")
         .default_config_dir(dir.path().to_str().unwrap());
     let _ = Registry::load_config::<AppConfig>(&args);
 }
@@ -200,7 +255,12 @@ fn wrong_type_panics() {
 #[should_panic(expected = "failed to parse config")]
 fn unknown_field_panics() {
     let dir = tempfile::tempdir().unwrap();
-    write(dir.path(), "dev.toml", "bogus_field = 1\n");
+    write(
+        dir.path(),
+        "dev.toml",
+        "bogus_field = 1\n",
+        "HYGIEA_TEST_UNKNOWN_FIELD",
+    );
     let args = ConfigArgs::default()
         .env_prefix("HYGIEA_TEST_UNKNOWN_FIELD")
         .default_config_dir(dir.path().to_str().unwrap());

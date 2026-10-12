@@ -18,6 +18,7 @@ async fn debug_client() -> ReqwestClient {
         .default_headers(header_map(&[("x-default", "d")]))
         .unwrap()
         .debug(true),
+        &Default::default(),
     )
     .await
     .unwrap()
@@ -219,7 +220,11 @@ async fn off_keeps_original_logs() {
     let base = serve(echo).await;
     let (out, _guard) = capture();
     RequestConfig::with_params(Method::GET, format!("{base}/echo"), login("t0k"))
-        .send::<Bytes>(&ReqwestClient::from_config(&local_config()).await.unwrap())
+        .send::<Bytes>(
+            &ReqwestClient::from_config(&local_config(), &Default::default())
+                .await
+                .unwrap(),
+        )
         .await
         .unwrap();
     let log = out.text();

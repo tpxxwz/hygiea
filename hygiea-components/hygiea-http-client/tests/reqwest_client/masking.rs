@@ -21,7 +21,9 @@ mod request {
             Json(login("secret-1")),
         )
         .send::<Json<serde_json::Value>>(
-            &ReqwestClient::from_config(&local_config()).await.unwrap(),
+            &ReqwestClient::from_config(&local_config(), &Default::default())
+                .await
+                .unwrap(),
         )
         .await
         .unwrap();
@@ -40,7 +42,11 @@ mod request {
         let base = serve(echo).await;
         let (out, _guard) = capture();
         RequestConfig::with_params(Method::GET, format!("{base}/q"), login("secret-2"))
-            .send::<Bytes>(&ReqwestClient::from_config(&local_config()).await.unwrap())
+            .send::<Bytes>(
+                &ReqwestClient::from_config(&local_config(), &Default::default())
+                    .await
+                    .unwrap(),
+            )
             .await
             .unwrap();
         let log = out.text();
@@ -64,7 +70,9 @@ mod url {
         let (out, _guard) = capture();
         let resp = RequestConfig::with_params(Method::GET, format!("{base}/q"), login("secret-q"))
             .send::<Json<serde_json::Value>>(
-                &ReqwestClient::from_config(&local_config()).await.unwrap(),
+                &ReqwestClient::from_config(&local_config(), &Default::default())
+                    .await
+                    .unwrap(),
             )
             .await
             .unwrap();
@@ -86,7 +94,9 @@ mod url {
     #[tokio::test]
     async fn status_errors_carry_masked_url() {
         let base = serve(|_| Reply::json(500, "{}")).await;
-        let client = ReqwestClient::from_config(&local_config()).await.unwrap();
+        let client = ReqwestClient::from_config(&local_config(), &Default::default())
+            .await
+            .unwrap();
         let url = format!("{base}/fail");
         let expected = format!("{url}?{MASKED_QUERY}");
 
@@ -109,7 +119,11 @@ mod url {
         let base = closed_port_url().await;
         let (out, _guard) = capture();
         let err = RequestConfig::with_params(Method::GET, format!("{base}/x"), login("secret-t"))
-            .send::<Bytes>(&ReqwestClient::from_config(&local_config()).await.unwrap())
+            .send::<Bytes>(
+                &ReqwestClient::from_config(&local_config(), &Default::default())
+                    .await
+                    .unwrap(),
+            )
             .await
             .unwrap_err();
         assert_eq!(err.err_args()["url"], format!("{base}/x?{MASKED_QUERY}"));
@@ -141,7 +155,9 @@ mod url {
         let resp =
             RequestConfig::with_params(Method::GET, format!("{base}/start"), login("secret-r"))
                 .send::<Json<serde_json::Value>>(
-                    &ReqwestClient::from_config(&local_config()).await.unwrap(),
+                    &ReqwestClient::from_config(&local_config(), &Default::default())
+                        .await
+                        .unwrap(),
                 )
                 .await
                 .unwrap();
@@ -167,7 +183,9 @@ mod auth {
     #[tokio::test]
     async fn credentials_do_not_leak_on_failure() {
         let base = serve(|_| Reply::json(500, r#"{"error":"denied"}"#)).await;
-        let client = ReqwestClient::from_config(&local_config()).await.unwrap();
+        let client = ReqwestClient::from_config(&local_config(), &Default::default())
+            .await
+            .unwrap();
         for auth in [
             Auth::Bearer("s3cr3t-token".into()),
             Auth::Basic {
@@ -223,7 +241,11 @@ mod response {
         let base = serve_routes(ROUTES).await;
         let (out, _guard) = capture();
         let result = RequestConfig::plain(Method::GET, format!("{base}{path}"))
-            .send::<Decoder>(&ReqwestClient::from_config(&local_config()).await.unwrap())
+            .send::<Decoder>(
+                &ReqwestClient::from_config(&local_config(), &Default::default())
+                    .await
+                    .unwrap(),
+            )
             .await;
         (result, out.text())
     }
@@ -262,7 +284,11 @@ mod response {
         let gbk = [0xc4, 0xe3, 0xba, 0xc3]; // "你好" 的 GBK 字节
         let base = serve(move |_| Reply::bytes(500, "text/plain; charset=gbk", gbk.to_vec())).await;
         let err = RequestConfig::plain(Method::GET, format!("{base}/gbk-fail"))
-            .send::<Bytes>(&ReqwestClient::from_config(&local_config()).await.unwrap())
+            .send::<Bytes>(
+                &ReqwestClient::from_config(&local_config(), &Default::default())
+                    .await
+                    .unwrap(),
+            )
             .await
             .unwrap_err();
         assert!(err.is(HttpClientErr::NonSuccessStatus));

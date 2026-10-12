@@ -29,7 +29,7 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 | `env` | 常开 | 环境变量 |
 | `string` | 常开 | 缓存的正则、模板渲染，`fmt_tpl!` / `fmt_tpl_once!` / `fmt_pos!` 宏 |
 | `log` | `log` | 日志配置和初始化 |
-| `app` | `app` | 应用框架：组件（`Component` 加上 `ImmediateComponent` / `DeferredComponent` 两种启动方式）、注册、依赖排序、两阶段启动（`before_activate` / `on_ready`）、优雅退出；`ConfigResource` + `ImmediateResourceComponent<R>`（一个配置建一个资源的通用组件，`resource_component.rs`）；`#[component]` 宏从这里导出 |
+| `app` | `app` | 应用框架：组件（`Component` 加上 `ImmediateComponent` / `DeferredComponent` 两种启动方式）、注册、依赖排序、两阶段启动（`before_activate` / `on_ready`）、优雅退出；`ConfigResource` + `ImmediateResourceComponent<R>`（一个配置建一个资源的通用组件，`resource_component.rs`）；`AppContext`（进程级信息，现在是 `[registry] app_name`，`context.rs`，建资源时传给 `from_config`）；`#[component]` 宏从这里导出 |
 | `net` | `ws-client` | WebSocket 客户端 |
 
 ### hygiea-macros
@@ -48,7 +48,7 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 
 | crate | 框架 feature | 其他 feature | facade 的 feature | facade 的路径 |
 |---|---|---|---|---|
-| `hygiea-db` | `sqlx`、`seaorm` | `postgres`、`sqlite` | `db-sqlx`、`db-seaorm`（只开框架）；`db-sqlx-postgres`、`db-sqlx-sqlite`、`db-seaorm-postgres`（组合，依赖前两个） | `hygiea::db` |
+| `hygiea-db` | `sqlx`、`seaorm` | `postgres`、`sqlite` | `db-sqlx`、`db-seaorm`（只开框架）；`db-sqlx-postgres`、`db-sqlx-sqlite`、`db-seaorm-postgres`（组合，依赖前两个）；`db-live-config`（连接池的动态配置） | `hygiea::db` |
 | `hygiea-redis` | `fred` | | `redis-fred` | `hygiea::redis` |
 | `hygiea-http` | `axum` | | `http-axum` | `hygiea::http` |
 | `hygiea-http-client` | `reqwest` | | `http-client-reqwest` | `hygiea::http_client`（实现在 `reqwest_client` 子模块） |
@@ -62,7 +62,9 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 | `hygiea-db/src/seaorm/page.rs`、`model.rs` | `find_page`（取一页再查总数）、`active_models`（`&[Model]` 转成 ActiveModel 给 `insert_many`） |
 | `hygiea-db/src/datetime.rs` | `HyUtcDateTime`：给 `UtcDateTime` 包一层（经 `OffsetDateTime` 转换，对应 `timestamptz`），开 `sqlx` 或 `seaorm` 就有，框架 trait 的实现在各框架模块里 |
 | `hygiea-db/src/page.rs` | `PageRequest` / `Page`：分页的请求和结果，sqlx 和 SeaORM 共用 |
-| `hygiea-db/src/error.rs` | `RepoErr`：按操作分的数据库错误，0x 事务、1x 执行语句（10 兜底，11-14 增删改查）、9x 参数 |
+| `hygiea-db/src/error.rs` | `RepoErr`：按操作分的数据库错误，0x 事务、1x 执行语句（10 兜底，11-14 增删改查）、2x 动态配置、9x 参数 |
+| `hygiea-db/src/config.rs` | 连接池配置的公共部分：`PgConnectConfig` / `SqliteConnectConfig`（`[db.connect]`，连哪个库）、`PoolConfig`（`[db.pool]`，所有数据库、框架共用） |
+| `hygiea-db/src/live_config/` | 连接池的数据库配置表（feature `live-config`）：`mod.rs` 配置和对外导出，`source.rs` 绑定入口，`handle.rs` 句柄（`LiveConfig` / `LiveView`），`worker.rs` 后台任务，`store.rs` 独立小池和查询，`schema.rs` 表结构检查和建表，`sql/` 建表语句。设计说明见 `docs/design/live-config.md` |
 | `hygiea-redis/src/fred_pool.rs` | 连接池组件；锁实现为 SET NX + token + 看门狗续期，释放用 Lua |
 | `hygiea-http/src/axum_server.rs` | HTTP 服务组件 |
 | `hygiea-http-client/src/lib.rs` | 按 feature 声明各实现的模块，不在 crate 根上再导出（以后加别的实现时名字不撞） |
@@ -126,7 +128,7 @@ hygiea 自己各 crate 的测试工具，不发布。名字不带 `hygiea-` 前�
 
 | 目录 | 示例 |
 |---|---|
-| `examples/app/` | `app_basic`、`app_dependencies`、`app_named_instances`、`app_global_state`、`app_background_task`、`app_config`、`app_two_phase` |
+| `examples/app/` | `app_basic`、`app_dependencies`、`app_named_instances`、`app_global_state`、`app_background_task`、`app_config`、`app_two_phase`；`examples/db/`：`db_live_config` |
 | `examples/error/` | `error_basic` |
 | `examples/string/` | `string_template` |
 | `config/<示例名>/` | 读配置文件的示例各用一个目录（`ConfigArgs::default_config_dir` 指定）：`app_basic/dev.toml`；`app_config/` 下 `dev.toml`、`prod.toml`、`local.toml` |

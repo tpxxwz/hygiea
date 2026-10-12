@@ -5,121 +5,74 @@ use std::time::Duration;
 use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 use serde::Deserialize;
 
-use hygiea_core::app::{AppErr, ConfigResource, ImmediateResourceComponent, async_trait};
+use hygiea_core::app::{
+    AppContext, AppErr, ConfigResource, ImmediateResourceComponent, async_trait,
+};
 use hygiea_core::{Result, ResultExt, err};
+
+use crate::config::{PG_POOL_SIZE, PgConnectConfig, PoolConfig};
+#[cfg(feature = "live-config")]
+use crate::live_config::{
+    LiveConfigOptions, LiveConfigSource, Store, impl_live_config, live_config_source_for,
+};
 
 // ---- config -----------------------------------------------------------------
 
-#[derive(Clone, Debug, Deserialize)]
+/// 配置文件里是 `[db.connect]`、`[db.pool]`、`[db.log]`（还有开了 feature 才有的 `[db.live_config]`），各段不写用默认值
+#[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SeaOrmPgConfig {
-    pub scheme: String,
-    pub host: String,
-    pub port: u16,
-    pub username: String,
-    pub password: String,
-    pub database: String,
-    /// Optional URL parameters (e.g., "sslmode=require")
-    pub params: String,
-    /// Schema search path (PostgreSQL only, empty = use database default)
-    pub schema_search_path: String,
-
-    // ========== 连接池 ==========
-    pub max_connections: Option<u32>,
-    pub min_connections: Option<u32>,
-
-    // ========== 超时 ==========
-    pub connect_timeout_secs: Option<u64>,
-    pub acquire_timeout_secs: Option<u64>,
-    pub idle_timeout_secs: Option<u64>,
-    pub max_lifetime_secs: Option<u64>,
-
-    // ========== 连接池行为 ==========
-    pub test_before_acquire: bool,
-    pub connect_lazy: bool,
-
-    // ========== 日志 ==========
-    pub sqlx_logging: bool,
-    pub sqlx_logging_level: String,
-    pub sqlx_slow_statements_logging_level: String,
-    pub sqlx_slow_statements_threshold_secs: u64,
+    pub connect: PgConnectConfig,
+    pub pool: PoolConfig,
+    pub log: SeaOrmLogConfig,
+    #[cfg(feature = "live-config")]
+    pub live_config: LiveConfigOptions,
 }
 
-impl Default for SeaOrmPgConfig {
+/// SeaORM 打的 SQL 日志。级别是 trace / debug / info / warn / error / off
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SeaOrmLogConfig {
+    /// 每条 SQL 都打
+    pub enabled: bool,
+    pub level: String,
+    /// 慢 SQL 单独打的级别，`off` 不打
+    pub slow_statements_level: String,
+    pub slow_statements_threshold_secs: u64,
+}
+
+impl Default for SeaOrmLogConfig {
     fn default() -> Self {
         Self {
-            scheme: "postgres".to_string(),
-            host: "localhost".to_string(),
-            port: 5432,
-            username: "postgres".to_string(),
-            password: "postgres".to_string(),
-            database: "postgres".to_string(),
-            params: String::new(),
-            schema_search_path: String::new(),
-            max_connections: Some(10),
-            min_connections: Some(0),
-            connect_timeout_secs: Some(30),
-            acquire_timeout_secs: Some(30),
-            idle_timeout_secs: Some(600),
-            max_lifetime_secs: Some(1800),
-            test_before_acquire: true,
-            connect_lazy: false,
-            sqlx_logging: true,
-            sqlx_logging_level: "info".to_string(),
-            sqlx_slow_statements_logging_level: "off".to_string(),
-            sqlx_slow_statements_threshold_secs: 1,
+            enabled: true,
+            level: "info".to_string(),
+            slow_statements_level: "off".to_string(),
+            slow_statements_threshold_secs: 1,
         }
     }
 }
 
 impl SeaOrmPgConfig {
-    pub fn url(&self) -> String {
-        let params_part = if self.params.is_empty() { "" } else { "?" };
-        format!(
-            "{}://{}:{}@{}:{}/{}{}{}",
-            self.scheme,
-            self.username,
-            self.password,
-            self.host,
-            self.port,
-            self.database,
-            params_part,
-            self.params
-        )
-    }
-
-    fn connect_options(&self) -> ConnectOptions {
-        let mut opt = ConnectOptions::new(self.url());
-        if !self.schema_search_path.is_empty() {
-            opt.set_schema_search_path(&self.schema_search_path);
+    fn connect_options(&self, app: &AppContext) -> Result<ConnectOptions> {
+        let (connect, pool, log) = (&self.connect, &self.pool, &self.log);
+        let mut opt = ConnectOptions::new(connect.url(app)?);
+        if !connect.schema_search_path.is_empty() {
+            opt.set_schema_search_path(&connect.schema_search_path);
         }
-        if let Some(v) = self.max_connections {
-            opt.max_connections(v);
-        }
-        if let Some(v) = self.min_connections {
-            opt.min_connections(v);
-        }
-        if let Some(v) = self.connect_timeout_secs {
-            opt.connect_timeout(Duration::from_secs(v));
-        }
-        if let Some(v) = self.acquire_timeout_secs {
-            opt.acquire_timeout(Duration::from_secs(v));
-        }
-        if let Some(v) = self.idle_timeout_secs {
-            opt.idle_timeout(Duration::from_secs(v));
-        }
-        if let Some(v) = self.max_lifetime_secs {
-            opt.max_lifetime(Duration::from_secs(v));
-        }
-        opt.test_before_acquire(self.test_before_acquire);
-        opt.connect_lazy(self.connect_lazy);
-        opt.sqlx_logging(self.sqlx_logging);
-        opt.sqlx_logging_level(parse_log_level(&self.sqlx_logging_level));
-        opt.sqlx_slow_statements_logging_settings(
-            parse_log_level(&self.sqlx_slow_statements_logging_level),
-            Duration::from_secs(self.sqlx_slow_statements_threshold_secs),
-        );
-        opt
+        opt.max_connections(pool.max_connections(PG_POOL_SIZE))
+            .min_connections(pool.min_connections(PG_POOL_SIZE))
+            .acquire_timeout(Duration::from_secs(pool.acquire_timeout_secs()))
+            .idle_timeout(Duration::from_secs(pool.idle_timeout_secs()))
+            .max_lifetime(Duration::from_secs(pool.max_lifetime_secs()))
+            .test_before_acquire(pool.test_before_acquire)
+            .connect_lazy(pool.connect_lazy)
+            .sqlx_logging(log.enabled)
+            .sqlx_logging_level(parse_log_level(&log.level))
+            .sqlx_slow_statements_logging_settings(
+                parse_log_level(&log.slow_statements_level),
+                Duration::from_secs(log.slow_statements_threshold_secs),
+            );
+        Ok(opt)
     }
 }
 
@@ -145,37 +98,47 @@ fn parse_log_level(s: &str) -> log::LevelFilter {
 #[derive(Clone, Debug)]
 pub struct SeaOrmPgPool {
     inner: DatabaseConnection,
+    #[cfg(feature = "live-config")]
+    /// 配置里没开是 `None`
+    live_config: Option<LiveConfigSource>,
 }
 
 #[async_trait]
 impl ConfigResource for SeaOrmPgPool {
     type Config = SeaOrmPgConfig;
 
-    async fn from_config(config: &SeaOrmPgConfig) -> Result<Self> {
-        tracing::info!(
-            "Connecting to database: {}@{}:{}/{}",
-            config.username,
-            config.host,
-            config.port,
-            config.database
-        );
-        let conn = Database::connect(config.connect_options())
+    async fn from_config(config: &SeaOrmPgConfig, app: &AppContext) -> Result<Self> {
+        #[cfg(feature = "live-config")]
+        let live_config = live_config_source_for(
+            |tables| {
+                Ok(Store::postgres(
+                    config.connect.sqlx_options(app)?,
+                    &config.pool,
+                    tables,
+                ))
+            },
+            &config.live_config,
+            app,
+        )?;
+        let target = config.connect.target();
+        tracing::info!("Connecting to database: {target}");
+        let conn = Database::connect(config.connect_options(app)?)
             .await
-            .wrap_err(|| {
-                err!(
-                    AppErr::ConnectFailed,
-                    format!(
-                        "postgres {}:{}/{}",
-                        config.host, config.port, config.database
-                    )
-                )
-            })?;
+            .wrap_err(|| err!(AppErr::ConnectFailed, target.clone()))?;
         tracing::info!("Database connection established");
-        Ok(Self { inner: conn })
+        Ok(Self {
+            inner: conn,
+            #[cfg(feature = "live-config")]
+            live_config,
+        })
     }
 
-    /// 等在途查询跑完后关掉连接池
+    /// 等在途查询跑完后关掉连接池；动态配置的后台任务也退出
     async fn close(&self) -> Result<()> {
+        #[cfg(feature = "live-config")]
+        if let Some(live_config) = &self.live_config {
+            live_config.close().await;
+        }
         self.inner
             .close_by_ref()
             .await
@@ -184,6 +147,9 @@ impl ConfigResource for SeaOrmPgPool {
         Ok(())
     }
 }
+
+#[cfg(feature = "live-config")]
+impl_live_config!(SeaOrmPgPool);
 
 impl std::ops::Deref for SeaOrmPgPool {
     type Target = DatabaseConnection;
@@ -201,20 +167,19 @@ pub type SeaOrmPgComponent = ImmediateResourceComponent<SeaOrmPgPool>;
 mod tests {
     use super::*;
 
+    /// 池参数不写时用 PG 的默认值，写了的按写的
     #[test]
-    fn build_url_default_no_params() {
-        let config = SeaOrmPgConfig::default();
-        let url = config.url();
-        assert_eq!(url, "postgres://postgres:postgres@localhost:5432/postgres");
-        assert!(!url.contains('?'));
-    }
-
-    #[test]
-    fn build_url_with_params() {
+    fn pool_options_applied() {
         let config = SeaOrmPgConfig {
-            params: "sslmode=require".to_string(),
-            ..SeaOrmPgConfig::default()
+            pool: PoolConfig {
+                max_connections: Some(3),
+                ..Default::default()
+            },
+            ..Default::default()
         };
-        assert!(config.url().ends_with("?sslmode=require"));
+        let options = config.connect_options(&AppContext::default()).unwrap();
+        assert_eq!(options.get_max_connections(), Some(3));
+        assert_eq!(options.get_min_connections(), Some(0));
+        assert_eq!(options.get_acquire_timeout(), Some(Duration::from_secs(30)));
     }
 }

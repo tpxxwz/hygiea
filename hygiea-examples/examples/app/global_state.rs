@@ -10,7 +10,7 @@
 use std::sync::OnceLock;
 
 use hygiea::app::Registry;
-use hygiea::db::{SqlxSqliteComponent, SqlxSqliteConfig, SqlxSqlitePool};
+use hygiea::db::{SqliteConnectConfig, SqlxSqliteComponent, SqlxSqliteConfig, SqlxSqlitePool};
 use hygiea::{BaseErr, Result, err};
 
 // ---- 全局状态 ----
@@ -52,7 +52,10 @@ fn report() -> Result<()> {
 
 fn memory_db() -> SqlxSqliteConfig {
     SqlxSqliteConfig {
-        database: ":memory:".to_string(),
+        connect: SqliteConnectConfig {
+            database: ":memory:".to_string(),
+            ..Default::default()
+        },
         ..Default::default()
     }
 }

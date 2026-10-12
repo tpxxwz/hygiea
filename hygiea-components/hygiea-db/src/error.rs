@@ -7,6 +7,7 @@
 //! |---|---|---|
 //! | 0x | 事务 | 各框架的 `transaction` 系列函数 |
 //! | 1x | 执行语句失败：10 兜底（原生 SQL、DDL），11-14 增删改查 | `db!` 按语句类型自动选，`.db()` 一律 10；`seaorm::find_page` 是 14，`op` 里写函数名；直接用 sqlx 时自己转 |
+//! | 2x | 动态配置 | 连接池的 `live_config` / `live_config_all`，包括第一次绑定时的建表检查 |
 //! | 9x | 参数不对 | 没执行 SQL 就拦下来的，没有 source |
 //!
 //! 调用方自己写的语句用 1x 的，`op` 写明是哪一步：
@@ -51,6 +52,33 @@ pub enum RepoErr {
     /// 查询失败
     #[error(err_code = "14", err_tpl = "Db query failed: {{ op }}")]
     QueryFailed,
+
+    // ---- 2x 动态配置：连接池的 live_config / live_config_all。查询、写入失败用 1x ----
+    /// 默认值序列化不出 JSON 对象（`bind` 的 `T`、`bind_all` 第一层的每个字段都要是对象）
+    #[error(err_code = "21", err_tpl = "Db live config defaults invalid: {{ ns }}")]
+    LiveConfigDefaultsInvalid,
+    /// 表里的值转不成 struct，比如类型不对
+    #[error(err_code = "22", err_tpl = "Db live config decode failed: {{ ns }}")]
+    LiveConfigDecodeFailed,
+    /// 后台任务已经退出（连接池关了）
+    #[error(err_code = "23", err_tpl = "Db live config closed")]
+    LiveConfigClosed,
+    /// 表缺了、也建不了，多半是没有 DDL 权限。要执行的 DDL 打在日志里
+    #[error(
+        err_code = "24",
+        err_tpl = "Db live config tables create failed: {{ table }}"
+    )]
+    LiveConfigCreateFailed,
+    /// 表结构和代码对不上，或者有同名的、不是 hygiea 建的函数、触发器。不动它们、拒绝启动，
+    /// 对不上的地方和要执行的 DDL 打在日志里，手动调整（或者换前缀）后再启动
+    #[error(
+        err_code = "25",
+        err_tpl = "Db live config schema mismatch: {{ table }}"
+    )]
+    LiveConfigSchemaMismatch,
+    /// 这个连接池没开动态配置（`[..live_config] enabled = true`）就调了 `live_config` / `live_config_all`
+    #[error(err_code = "26", err_tpl = "Db live config not enabled on this pool")]
+    LiveConfigDisabled,
 
     // ---- 9x 参数不对：没执行 SQL 就拦下来 ----
     /// 分页参数超出范围：页号 × 页大小（OFFSET）超过 `i64::MAX`。[`PageRequest::new`](crate::PageRequest::new) 和反序列化时报

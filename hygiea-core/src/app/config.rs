@@ -132,6 +132,11 @@ fn parse_override(raw: &str) -> Result<(String, String), String> {
 #[derive(Deserialize, Clone, Debug)]
 #[serde(default, deny_unknown_fields)]
 pub struct RegistryConfig {
+    /// 应用名，小写下划线 `[a-z][a-z0-9_]*`，默认 [`DEFAULT_APP_NAME`](Self::DEFAULT_APP_NAME)（和默认的环境变量前缀
+    /// `HYGIEA` 对得上）。[`Registry::load_config`] 读配置时检查：格式不对、和环境变量前缀对不上（前缀是它的大写，
+    /// 比如 `dict_jp` 对应 [`ConfigArgs::env_prefix`]`("DICT_JP")`）都报错。进 [`AppContext`](super::AppContext) 给各组件用，
+    /// 比如数据库连接的 `application_name`、动态配置的表名前缀
+    pub app_name: String,
     pub tracing: TracingConfig,
     /// 关闭时**每个组件**最多等多久（秒），默认 15。组件可以用 [`Component::shutdown_timeout`](super::Component::shutdown_timeout)
     /// 单独指定（比如 HTTP 有长请求就给 30 秒）。超时的组件任务会被 abort，接着关下一个。
@@ -146,11 +151,14 @@ pub struct RegistryConfig {
 
 impl RegistryConfig {
     pub const DEFAULT_SHUTDOWN_TIMEOUT_SECS: u64 = 15;
+    /// 默认应用名，和 [`ConfigArgs::DEFAULT_ENV_PREFIX`] 对得上
+    pub const DEFAULT_APP_NAME: &'static str = "hygiea";
 }
 
 impl Default for RegistryConfig {
     fn default() -> Self {
         Self {
+            app_name: Self::DEFAULT_APP_NAME.to_string(),
             tracing: TracingConfig::default(),
             shutdown_timeout_secs: Self::DEFAULT_SHUTDOWN_TIMEOUT_SECS,
             shutdown_delay_secs: 0,
@@ -202,9 +210,33 @@ impl Registry {
             .try_deserialize()
             .unwrap_or_else(|e| plan.fail("parse", &e));
 
-        let registry = Self::with_config(config.registry_config());
+        let registry_config = config.registry_config();
+        if let Err(message) = check_app_name(&registry_config.app_name, &plan.env_prefix) {
+            plan.fail("validate", &config::ConfigError::Message(message));
+        }
+        let registry = Self::with_config(registry_config);
         (registry, config)
     }
+}
+
+/// `[registry] app_name` 的规则：小写下划线 `[a-z][a-z0-9_]*`（各组件拿它当表名前缀、连接名，要是合法的 SQL 标识符）；
+/// 环境变量前缀要是它的大写（比如 `dict_jp` 对应 `DICT_JP`），用 [`ConfigArgs::env_prefix`] 设
+fn check_app_name(app_name: &str, env_prefix: &str) -> std::result::Result<(), String> {
+    let mut chars = app_name.chars();
+    let valid = chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+    if !valid {
+        return Err(format!(
+            "registry.app_name {app_name:?}: only snake_case [a-z][a-z0-9_]*"
+        ));
+    }
+    let expected = app_name.to_ascii_uppercase();
+    if env_prefix != expected {
+        return Err(format!(
+            "registry.app_name {app_name:?} needs env prefix {expected:?} (ConfigArgs::env_prefix), got {env_prefix:?}"
+        ));
+    }
+    Ok(())
 }
 
 /// 本次读配置用到的来源。启动时打到 stdout，出错时连同错误打到 stderr，排查时一眼能看出读了什么。
@@ -303,6 +335,22 @@ impl ConfigPlan {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn app_name_rules() {
+        assert!(check_app_name("dict_jp", "DICT_JP").is_ok());
+        assert!(check_app_name("dict-jp", "DICT_JP").is_err());
+        assert!(check_app_name("dictJp", "DICTJP").is_err());
+        assert!(check_app_name("app_config", "APP_CONFIG").is_ok());
+        assert!(check_app_name("hygiea", "HYGIEA").is_ok());
+        assert!(check_app_name("", "HYGIEA").is_err());
+        assert!(check_app_name("Dict-jp", "DICT_JP").is_err());
+        assert!(check_app_name("1app", "1APP").is_err());
+        assert!(check_app_name("dict jp", "DICT_JP").is_err());
+        let e = check_app_name("dict_jp", "HYGIEA").unwrap_err();
+        assert!(e.contains("\"DICT_JP\"") && e.contains("\"HYGIEA\""), "{e}");
+    }
+
     use super::*;
 
     #[test]

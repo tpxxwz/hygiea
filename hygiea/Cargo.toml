@@ -48,6 +48,8 @@ db-seaorm = ["dep:hygiea-db", "hygiea-db/seaorm"]
 db-sqlx-postgres = ["db-sqlx", "hygiea-db/postgres"]
 db-sqlx-sqlite = ["db-sqlx", "hygiea-db/sqlite"]
 db-seaorm-postgres = ["db-seaorm", "hygiea-db/postgres"]
+# 连接池的数据库配置表（动态配置）能力，和上面的组合一起开
+db-live-config = ["dep:hygiea-db", "hygiea-db/live-config"]
 redis-fred = ["dep:hygiea-redis", "hygiea-redis/fred"]
 http-axum = ["dep:hygiea-http", "hygiea-http/axum"]
 http-client-reqwest = ["dep:hygiea-http-client", "hygiea-http-client/reqwest"]

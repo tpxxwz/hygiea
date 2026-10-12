@@ -2,7 +2,9 @@
 
 use fred::prelude::*;
 use fred::types::config::ClusterDiscoveryPolicy;
-use hygiea_core::app::{AppErr, ConfigResource, ImmediateResourceComponent, async_trait};
+use hygiea_core::app::{
+    AppContext, AppErr, ConfigResource, ImmediateResourceComponent, async_trait,
+};
 use hygiea_core::{Result, ResultExt, err};
 use serde::Deserialize;
 use std::time::Duration;
@@ -105,7 +107,7 @@ pub struct FredRedisPool {
 impl ConfigResource for FredRedisPool {
     type Config = RedisConfig;
 
-    async fn from_config(config: &RedisConfig) -> Result<Self> {
+    async fn from_config(config: &RedisConfig, _app: &AppContext) -> Result<Self> {
         tracing::info!(
             "Connecting to Redis [mode={}] with pool_size={}",
             config.mode,

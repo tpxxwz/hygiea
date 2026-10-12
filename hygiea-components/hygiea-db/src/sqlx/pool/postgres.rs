@@ -1,106 +1,29 @@
 //! PostgreSQL 连接池组件（sqlx），feature `sqlx` + `postgres`
 
-use std::time::Duration;
-
 use serde::Deserialize;
 use sqlx::PgPool;
-use sqlx::postgres::PgPoolOptions;
 
-use hygiea_core::app::{AppErr, ConfigResource, ImmediateResourceComponent, async_trait};
+use hygiea_core::app::{
+    AppContext, AppErr, ConfigResource, ImmediateResourceComponent, async_trait,
+};
 use hygiea_core::{Result, ResultExt, err};
+
+use crate::config::{PG_POOL_SIZE, PgConnectConfig, PoolConfig};
+#[cfg(feature = "live-config")]
+use crate::live_config::{
+    LiveConfigOptions, LiveConfigSource, Store, impl_live_config, live_config_source_for,
+};
 
 // ---- config -----------------------------------------------------------------
 
-#[derive(Clone, Debug, Deserialize)]
+/// 配置文件里是 `[db.connect]`、`[db.pool]`（还有开了 feature 才有的 `[db.live_config]`），各段不写用默认值
+#[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SqlxPgConfig {
-    pub scheme: String,
-    pub host: String,
-    pub port: u16,
-    pub username: String,
-    pub password: String,
-    pub database: String,
-    pub params: String,
-    pub schema_search_path: String,
-
-    // ========== 连接池 ==========
-    pub max_connections: Option<u32>,
-    pub min_connections: Option<u32>,
-
-    // ========== 超时 ==========
-    pub acquire_timeout_secs: Option<u64>,
-    pub idle_timeout_secs: Option<u64>,
-    pub max_lifetime_secs: Option<u64>,
-
-    // ========== 连接池行为 ==========
-    pub test_before_acquire: bool,
-    pub connect_lazy: bool,
-}
-
-impl Default for SqlxPgConfig {
-    fn default() -> Self {
-        Self {
-            scheme: "postgres".to_string(),
-            host: "localhost".to_string(),
-            port: 5432,
-            username: "postgres".to_string(),
-            password: "postgres".to_string(),
-            database: "postgres".to_string(),
-            params: String::new(),
-            schema_search_path: String::new(),
-            max_connections: Some(10),
-            min_connections: Some(0),
-            acquire_timeout_secs: Some(30),
-            idle_timeout_secs: Some(600),
-            max_lifetime_secs: Some(1800),
-            test_before_acquire: true,
-            connect_lazy: false,
-        }
-    }
-}
-
-impl SqlxPgConfig {
-    pub fn url(&self) -> String {
-        let mut parts = vec![];
-        if !self.schema_search_path.is_empty() {
-            parts.push(format!(
-                "options=-c search_path={}",
-                self.schema_search_path
-            ));
-        }
-        if !self.params.is_empty() {
-            parts.push(self.params.clone());
-        }
-        let query = if parts.is_empty() {
-            String::new()
-        } else {
-            format!("?{}", parts.join("&"))
-        };
-        format!(
-            "{}://{}:{}@{}:{}/{}{}",
-            self.scheme, self.username, self.password, self.host, self.port, self.database, query,
-        )
-    }
-
-    fn pool_options(&self) -> PgPoolOptions {
-        let mut opts = PgPoolOptions::new();
-        if let Some(v) = self.max_connections {
-            opts = opts.max_connections(v);
-        }
-        if let Some(v) = self.min_connections {
-            opts = opts.min_connections(v);
-        }
-        if let Some(v) = self.acquire_timeout_secs {
-            opts = opts.acquire_timeout(Duration::from_secs(v));
-        }
-        if let Some(v) = self.idle_timeout_secs {
-            opts = opts.idle_timeout(Duration::from_secs(v));
-        }
-        if let Some(v) = self.max_lifetime_secs {
-            opts = opts.max_lifetime(Duration::from_secs(v));
-        }
-        opts.test_before_acquire(self.test_before_acquire)
-    }
+    pub connect: PgConnectConfig,
+    pub pool: PoolConfig,
+    #[cfg(feature = "live-config")]
+    pub live_config: LiveConfigOptions,
 }
 
 // ---- pool -------------------------------------------------------------------
@@ -109,45 +32,56 @@ impl SqlxPgConfig {
 #[derive(Clone, Debug)]
 pub struct SqlxPgPool {
     inner: PgPool,
+    #[cfg(feature = "live-config")]
+    /// 配置里没开是 `None`
+    live_config: Option<LiveConfigSource>,
 }
 
 #[async_trait]
 impl ConfigResource for SqlxPgPool {
     type Config = SqlxPgConfig;
 
-    async fn from_config(config: &SqlxPgConfig) -> Result<Self> {
-        tracing::info!(
-            "Connecting to database: {}@{}:{}/{}",
-            config.username,
-            config.host,
-            config.port,
-            config.database
-        );
-        let pool = if config.connect_lazy {
-            config.pool_options().connect_lazy(&config.url())
+    async fn from_config(config: &SqlxPgConfig, app: &AppContext) -> Result<Self> {
+        let target = config.connect.target();
+        let options = config.connect.sqlx_options(app)?;
+        #[cfg(feature = "live-config")]
+        let live_config = live_config_source_for(
+            |tables| Ok(Store::postgres(options.clone(), &config.pool, tables)),
+            &config.live_config,
+            app,
+        )?;
+        tracing::info!("Connecting to database: {target}");
+        let pool_options = config.pool.sqlx::<sqlx::Postgres>(PG_POOL_SIZE);
+        let pool = if config.pool.connect_lazy {
+            pool_options.connect_lazy_with(options)
         } else {
-            config.pool_options().connect(&config.url()).await
-        }
-        .wrap_err(|| {
-            err!(
-                AppErr::ConnectFailed,
-                format!(
-                    "postgres {}:{}/{}",
-                    config.host, config.port, config.database
-                )
-            )
-        })?;
+            pool_options
+                .connect_with(options)
+                .await
+                .wrap_err(|| err!(AppErr::ConnectFailed, target.clone()))?
+        };
         tracing::info!("Database connection established");
-        Ok(Self { inner: pool })
+        Ok(Self {
+            inner: pool,
+            #[cfg(feature = "live-config")]
+            live_config,
+        })
     }
 
-    /// 不再发新连接，等借出去的连接还回来（在途查询跑完）后全部关掉
+    /// 不再发新连接，等借出去的连接还回来（在途查询跑完）后全部关掉；动态配置的后台任务也退出
     async fn close(&self) -> Result<()> {
+        #[cfg(feature = "live-config")]
+        if let Some(live_config) = &self.live_config {
+            live_config.close().await;
+        }
         self.inner.close().await;
         tracing::info!("Database connection pool closed");
         Ok(())
     }
 }
+
+#[cfg(feature = "live-config")]
+impl_live_config!(SqlxPgPool);
 
 impl std::ops::Deref for SqlxPgPool {
     type Target = PgPool;
@@ -165,65 +99,27 @@ pub type SqlxPgComponent = ImmediateResourceComponent<SqlxPgPool>;
 mod tests {
     use super::*;
 
-    #[test]
-    fn build_url_default() {
-        let config = SqlxPgConfig::default();
-        assert_eq!(
-            config.url(),
-            "postgres://postgres:postgres@localhost:5432/postgres"
+    #[tokio::test]
+    async fn connect_lazy_to_nonexistent_host_succeeds() {
+        // 连不到的主机，connect_lazy 也能建出池子，第一次用时才连
+        let mut config = SqlxPgConfig::default();
+        config.connect.host = "nonexistent-host-xyz-12345.invalid".to_string();
+        config.pool.connect_lazy = true;
+        assert!(
+            SqlxPgPool::from_config(&config, &Default::default())
+                .await
+                .is_ok()
         );
     }
 
+    /// search_path 带进 sqlx 的连接参数（不在 URL 里）
     #[test]
-    fn build_url_only_schema_search_path() {
-        let config = SqlxPgConfig {
+    fn search_path_goes_into_options() {
+        let connect = PgConnectConfig {
             schema_search_path: "public,custom".to_string(),
             ..Default::default()
         };
-        let url = config.url();
-        assert!(url.contains("?options=-c search_path=public,custom"));
-    }
-
-    #[test]
-    fn build_url_only_params() {
-        let config = SqlxPgConfig {
-            params: "sslmode=require".to_string(),
-            ..Default::default()
-        };
-        let url = config.url();
-        assert!(url.contains("?sslmode=require"));
-        assert!(!url.contains("options=-c"));
-    }
-
-    #[test]
-    fn build_url_with_both_schema_and_params() {
-        let config = SqlxPgConfig {
-            schema_search_path: "public".to_string(),
-            params: "sslmode=require".to_string(),
-            ..Default::default()
-        };
-        let url = config.url();
-        assert!(url.contains("?options=-c search_path=public&sslmode=require"));
-    }
-
-    #[test]
-    fn config_default_values() {
-        let config = SqlxPgConfig::default();
-        assert_eq!(config.acquire_timeout_secs, Some(30));
-        assert_eq!(config.idle_timeout_secs, Some(600));
-        assert!(!config.connect_lazy);
-    }
-
-    #[tokio::test]
-    async fn connect_lazy_to_nonexistent_host_succeeds() {
-        // 即使是连不到的主机，connect_lazy 也应该成功
-        let config = SqlxPgConfig {
-            host: "nonexistent-host-xyz-12345.invalid".to_string(),
-            connect_lazy: true,
-            ..Default::default()
-        };
-        // 不应该报错，因为是 lazy connect
-        let result = SqlxPgPool::from_config(&config).await;
-        assert!(result.is_ok());
+        let options = connect.sqlx_options(&AppContext::default()).unwrap();
+        assert_eq!(options.get_options(), Some("-c search_path=public,custom"));
     }
 }

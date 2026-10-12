@@ -12,11 +12,14 @@
 #[cfg(all(feature = "sqlx", feature = "sqlite"))]
 mod sqlite {
     use hygiea_core::app::{Component, Name, Registry, ResourceId, Resources};
-    use hygiea_db::{SqlxSqliteComponent, SqlxSqliteConfig, SqlxSqlitePool};
+    use hygiea_db::{SqliteConnectConfig, SqlxSqliteComponent, SqlxSqliteConfig, SqlxSqlitePool};
 
     fn memory_config() -> SqlxSqliteConfig {
         SqlxSqliteConfig {
-            database: ":memory:".to_string(),
+            connect: SqliteConnectConfig {
+                database: ":memory:".to_string(),
+                ..Default::default()
+            },
             ..Default::default()
         }
     }

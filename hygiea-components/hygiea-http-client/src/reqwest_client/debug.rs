@@ -39,10 +39,10 @@ impl ReqwestConfig {
 }
 
 impl ReqwestClient {
-    /// 默认配置、打开 debug 日志的 client，就是 `ReqwestClient::from_config(&ReqwestConfig::default().debug(true))`。
+    /// 默认配置、打开 debug 日志的 client，就是 `ReqwestClient::from_config(&ReqwestConfig::default().debug(true), &AppContext::default())`。
     /// 只在 `debug-log` feature 下存在，给测试用；要改别的配置就用 [`ReqwestConfig::debug`](ReqwestConfig::debug) 那条写法
     pub async fn debug() -> Result<Self> {
-        Self::from_config(&ReqwestConfig::default().debug(true)).await
+        Self::from_config(&ReqwestConfig::default().debug(true), &Default::default()).await
     }
 
     /// 打开或关闭 debug 日志，初始值是 [`ReqwestConfig::debug`](ReqwestConfig::debug)。
@@ -338,16 +338,19 @@ mod tests {
         #[tokio::test]
         async fn switch_reaches_client() {
             assert_eq!(
-                ReqwestClient::from_config(&ReqwestConfig::default())
+                ReqwestClient::from_config(&ReqwestConfig::default(), &Default::default())
                     .await
                     .unwrap()
                     .debug
                     .mode(),
                 None
             );
-            let client = ReqwestClient::from_config(&ReqwestConfig::default().debug(true))
-                .await
-                .unwrap();
+            let client = ReqwestClient::from_config(
+                &ReqwestConfig::default().debug(true),
+                &Default::default(),
+            )
+            .await
+            .unwrap();
             assert_eq!(client.debug.mode(), Some(false));
         }
 
@@ -365,7 +368,7 @@ mod tests {
         /// set_debug / set_pretty 原地改，所有 clone 一起变；debug 关时 pretty 不起作用
         #[tokio::test]
         async fn switches_are_shared_by_clones() {
-            let client = ReqwestClient::from_config(&ReqwestConfig::default())
+            let client = ReqwestClient::from_config(&ReqwestConfig::default(), &Default::default())
                 .await
                 .unwrap();
             let clone = client.clone();
@@ -389,7 +392,7 @@ mod tests {
         /// 什么都不配时只有 reqwest 默认的 `Accept: */*`
         #[tokio::test]
         async fn default_headers_start_with_accept() {
-            let client = ReqwestClient::from_config(&ReqwestConfig::default())
+            let client = ReqwestClient::from_config(&ReqwestConfig::default(), &Default::default())
                 .await
                 .unwrap();
             assert_eq!(
@@ -403,11 +406,14 @@ mod tests {
         async fn default_headers_follow_reqwest_rules() {
             let mut configured = header_map(&[("accept", "text/plain"), ("x-a", "1")]);
             configured.append("x-a", "2".parse().unwrap());
-            let client = ReqwestClient::from_config(&ReqwestConfig {
-                user_agent: Some("ua".into()),
-                default_headers: configured.into(),
-                ..ReqwestConfig::default()
-            })
+            let client = ReqwestClient::from_config(
+                &ReqwestConfig {
+                    user_agent: Some("ua".into()),
+                    default_headers: configured.into(),
+                    ..ReqwestConfig::default()
+                },
+                &Default::default(),
+            )
             .await
             .unwrap();
             assert_eq!(
@@ -415,11 +421,14 @@ mod tests {
                 header_map(&[("accept", "text/plain"), ("user-agent", "ua"), ("x-a", "2")])
             );
 
-            let client = ReqwestClient::from_config(&ReqwestConfig {
-                user_agent: Some("ua".into()),
-                default_headers: header_map(&[("user-agent", "override")]).into(),
-                ..ReqwestConfig::default()
-            })
+            let client = ReqwestClient::from_config(
+                &ReqwestConfig {
+                    user_agent: Some("ua".into()),
+                    default_headers: header_map(&[("user-agent", "override")]).into(),
+                    ..ReqwestConfig::default()
+                },
+                &Default::default(),
+            )
             .await
             .unwrap();
             assert_eq!(client.debug.default_headers["user-agent"], "override");

@@ -672,7 +672,7 @@ mod tests {
     };
 
     async fn client() -> ReqwestClient {
-        ReqwestClient::from_config(&ReqwestConfig::default())
+        ReqwestClient::from_config(&ReqwestConfig::default(), &Default::default())
             .await
             .unwrap()
     }
@@ -926,6 +926,7 @@ mod tests {
                 .default_headers(header_map(&[("x-default", "d"), ("x-both", "client")]))
                 .unwrap()
                 .debug(true),
+                &Default::default(),
             )
             .await
             .unwrap()

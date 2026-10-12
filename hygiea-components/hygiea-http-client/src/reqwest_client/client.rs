@@ -6,7 +6,9 @@ use std::time::Duration;
 use reqwest::redirect::Policy;
 use serde::Deserialize;
 
-use hygiea_core::app::{AppErr, ConfigResource, ImmediateResourceComponent, async_trait};
+use hygiea_core::app::{
+    AppContext, AppErr, ConfigResource, ImmediateResourceComponent, async_trait,
+};
 use hygiea_core::{Result, err};
 
 use super::HeaderMap;
@@ -280,7 +282,7 @@ impl ConfigResource for ReqwestClient {
 
     /// 请求头无效时返回 `InvalidConfig`；代理 URL 或 reqwest 构建失败时返回
     /// [`ClientBuildFailed`](super::HttpClientErr::ClientBuildFailed)，reqwest 错误保留在 source 上
-    async fn from_config(config: &ReqwestConfig) -> Result<Self> {
+    async fn from_config(config: &ReqwestConfig, _app: &AppContext) -> Result<Self> {
         // reqwest 先校验（UA 不合法时报 ClientBuildFailed），再算 debug 状态
         let inner = client_builder(config.clone())?
             .build()
@@ -422,7 +424,7 @@ mod tests {
         /// 默认配置能造出 Client
         #[tokio::test]
         async fn default_config_builds() {
-            ReqwestClient::from_config(&ReqwestConfig::default())
+            ReqwestClient::from_config(&ReqwestConfig::default(), &Default::default())
                 .await
                 .unwrap();
         }
@@ -431,22 +433,25 @@ mod tests {
         #[tokio::test]
         async fn configured_fields_build() {
             let addr: SocketAddr = "127.0.0.1:80".parse().unwrap();
-            ReqwestClient::from_config(&ReqwestConfig {
-                user_agent: Some("hygiea-test".into()),
-                default_headers: header_map(&[("x-a", "1")]).into(),
-                cookie_store: true,
-                transparent_compression: false,
-                max_redirects: 0,
-                referer: false,
-                proxies: vec![ProxyConfig::all("http://127.0.0.1:1")],
-                no_proxy: true,
-                timeout: None,
-                read_timeout: None,
-                connect_timeout: None,
-                resolve: vec![("a.test".into(), vec![addr])],
-                #[cfg(feature = "debug-log")]
-                debug: true,
-            })
+            ReqwestClient::from_config(
+                &ReqwestConfig {
+                    user_agent: Some("hygiea-test".into()),
+                    default_headers: header_map(&[("x-a", "1")]).into(),
+                    cookie_store: true,
+                    transparent_compression: false,
+                    max_redirects: 0,
+                    referer: false,
+                    proxies: vec![ProxyConfig::all("http://127.0.0.1:1")],
+                    no_proxy: true,
+                    timeout: None,
+                    read_timeout: None,
+                    connect_timeout: None,
+                    resolve: vec![("a.test".into(), vec![addr])],
+                    #[cfg(feature = "debug-log")]
+                    debug: true,
+                },
+                &Default::default(),
+            )
             .await
             .unwrap();
         }
@@ -454,10 +459,13 @@ mod tests {
         /// reqwest 在构建 Client 时校验 User-Agent，错误保留为 source
         #[tokio::test]
         async fn invalid_user_agent_is_client_build_failed() {
-            let err = ReqwestClient::from_config(&ReqwestConfig {
-                user_agent: Some("bad\nvalue".into()),
-                ..ReqwestConfig::default()
-            })
+            let err = ReqwestClient::from_config(
+                &ReqwestConfig {
+                    user_agent: Some("bad\nvalue".into()),
+                    ..ReqwestConfig::default()
+                },
+                &Default::default(),
+            )
             .await
             .unwrap_err();
             assert!(err.is(HttpClientErr::ClientBuildFailed));
@@ -516,7 +524,11 @@ mod tests {
             assert_eq!(config.proxies.len(), 1);
             assert_eq!(config.resolve[0].0, "example.com");
             assert_eq!(config.resolve[0].1[0].to_string(), "127.0.0.1:80");
-            assert!(ReqwestClient::from_config(&config).await.is_ok());
+            assert!(
+                ReqwestClient::from_config(&config, &Default::default())
+                    .await
+                    .is_ok()
+            );
         }
 
         /// 请求头的三种写法：字符串、同名头列表、带 sensitive 的文本或字节
@@ -554,7 +566,12 @@ mod tests {
 
             async fn build_err(toml: &str) {
                 let config: ReqwestConfig = toml::from_str(toml).unwrap();
-                assert!(ReqwestClient::from_config(&config).await.is_err(), "{toml}");
+                assert!(
+                    ReqwestClient::from_config(&config, &Default::default())
+                        .await
+                        .is_err(),
+                    "{toml}"
+                );
             }
 
             #[tokio::test]

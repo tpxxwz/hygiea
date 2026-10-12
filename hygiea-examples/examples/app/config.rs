@@ -59,9 +59,9 @@ async fn main() -> Result<()> {
     let (registry, config) = Registry::load_config::<AppConfig>(&args);
 
     tracing::info!(
-        "greeting = {:?}, db.database = {:?}, shutdown_timeout_secs = {}",
+        "greeting = {:?}, db.connect.database = {:?}, shutdown_timeout_secs = {}",
         config.greeting,
-        config.db.database,
+        config.db.connect.database,
         config.registry.shutdown_timeout_secs
     );
     if cli.dry_run {

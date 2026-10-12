@@ -10,7 +10,9 @@ shutdown_timeout_secs = 30
 [registry.tracing]
 root_env_filter = "warn,app_config=info"
 
-# SqlxSqliteComponent 的配置（SqlxSqliteConfig）
-[db]
+# SqlxSqliteComponent 的配置（SqlxSqliteConfig）：连哪个库在 [db.connect]，池在 [db.pool]
+[db.connect]
 database = ":memory:"   # 数据库文件路径；":memory:" 是内存库
+
+[db.pool]
 max_connections = 8

@@ -20,7 +20,9 @@ use std::sync::Arc;
 use axum::Router;
 use axum::routing::get;
 use hygiea::app::Registry;
-use hygiea::db::{SqlxSqliteComponent, SqlxSqliteConfig, SqlxSqlitePool};
+use hygiea::db::{
+    PoolConfig, SqliteConnectConfig, SqlxSqliteComponent, SqlxSqliteConfig, SqlxSqlitePool,
+};
 use hygiea::http::{AxumComponent, AxumConfig, arity0_state};
 use hygiea::{BaseErr, Result, ResultExt, err};
 
@@ -62,10 +64,16 @@ async fn list_users(state: Arc<AppState>) -> Result<Vec<String>> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let db = SqlxSqliteConfig {
-        database: ":memory:".to_string(),
+        connect: SqliteConnectConfig {
+            database: ":memory:".to_string(),
+            ..Default::default()
+        },
         // 内存库每个连接各是一个库，只留一个连接，建的表 handler 才看得到
-        max_connections: Some(1),
-        min_connections: Some(1),
+        pool: PoolConfig {
+            max_connections: Some(1),
+            min_connections: Some(1),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let http = AxumConfig {

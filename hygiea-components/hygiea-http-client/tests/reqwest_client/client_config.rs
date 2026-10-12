@@ -25,10 +25,13 @@ mod headers {
     #[tokio::test]
     async fn user_agent_is_sent() {
         let base = serve(echo).await;
-        let client = ReqwestClient::from_config(&ReqwestConfig {
-            user_agent: Some("hygiea-test/1.0".into()),
-            ..local_config()
-        })
+        let client = ReqwestClient::from_config(
+            &ReqwestConfig {
+                user_agent: Some("hygiea-test/1.0".into()),
+                ..local_config()
+            },
+            &Default::default(),
+        )
         .await
         .unwrap();
         let seen = echo_via(&client, format!("{base}/echo")).await;
@@ -43,6 +46,7 @@ mod headers {
             &local_config()
                 .default_headers(header_map(&[("x-a", "1"), ("x-b", "1")]))
                 .unwrap(),
+            &Default::default(),
         )
         .await
         .unwrap();
@@ -62,17 +66,22 @@ mod headers {
     async fn transparent_compression_toggles_accept_encoding() {
         let base = serve(echo).await;
 
-        let on = ReqwestClient::from_config(&local_config()).await.unwrap();
+        let on = ReqwestClient::from_config(&local_config(), &Default::default())
+            .await
+            .unwrap();
         let seen = echo_via(&on, format!("{base}/echo")).await;
         let accept = seen["headers"]["accept-encoding"].as_str().unwrap();
         for algo in ["gzip", "br", "zstd", "deflate"] {
             assert!(accept.contains(algo), "{accept}");
         }
 
-        let off = ReqwestClient::from_config(&ReqwestConfig {
-            transparent_compression: false,
-            ..local_config()
-        })
+        let off = ReqwestClient::from_config(
+            &ReqwestConfig {
+                transparent_compression: false,
+                ..local_config()
+            },
+            &Default::default(),
+        )
         .await
         .unwrap();
         let seen = echo_via(&off, format!("{base}/echo")).await;
@@ -100,7 +109,9 @@ mod redirects {
         let base = redirect_server().await;
         let resp = RequestConfig::plain(Method::GET, format!("{base}/redirect"))
             .send::<Json<serde_json::Value>>(
-                &ReqwestClient::from_config(&local_config()).await.unwrap(),
+                &ReqwestClient::from_config(&local_config(), &Default::default())
+                    .await
+                    .unwrap(),
             )
             .await
             .unwrap();
@@ -113,10 +124,13 @@ mod redirects {
     #[tokio::test]
     async fn disabled_returns_3xx() {
         let base = redirect_server().await;
-        let client = ReqwestClient::from_config(&ReqwestConfig {
-            max_redirects: 0,
-            ..local_config()
-        })
+        let client = ReqwestClient::from_config(
+            &ReqwestConfig {
+                max_redirects: 0,
+                ..local_config()
+            },
+            &Default::default(),
+        )
         .await
         .unwrap();
         // 不跟随时 302 原样回来，按非 2xx 报错
@@ -132,10 +146,13 @@ mod redirects {
     #[tokio::test]
     async fn exceeding_limit_is_error() {
         let base = redirect_server().await;
-        let client = ReqwestClient::from_config(&ReqwestConfig {
-            max_redirects: 2,
-            ..local_config()
-        })
+        let client = ReqwestClient::from_config(
+            &ReqwestConfig {
+                max_redirects: 2,
+                ..local_config()
+            },
+            &Default::default(),
+        )
         .await
         .unwrap();
         let err = RequestConfig::plain(Method::GET, format!("{base}/loop"))
@@ -172,10 +189,13 @@ mod cookies {
     #[tokio::test]
     async fn enabled_sends_cookie_back() {
         let base = cookie_server().await;
-        let client = ReqwestClient::from_config(&ReqwestConfig {
-            cookie_store: true,
-            ..local_config()
-        })
+        let client = ReqwestClient::from_config(
+            &ReqwestConfig {
+                cookie_store: true,
+                ..local_config()
+            },
+            &Default::default(),
+        )
         .await
         .unwrap();
         assert_eq!(cookie_seen_after_login(&client, &base).await, "sid=abc");
@@ -185,7 +205,9 @@ mod cookies {
     #[tokio::test]
     async fn disabled_by_default() {
         let base = cookie_server().await;
-        let client = ReqwestClient::from_config(&local_config()).await.unwrap();
+        let client = ReqwestClient::from_config(&local_config(), &Default::default())
+            .await
+            .unwrap();
         assert!(cookie_seen_after_login(&client, &base).await.is_null());
     }
 }
@@ -201,6 +223,7 @@ mod resolve {
         let addr: SocketAddr = base.trim_start_matches("http://").parse().unwrap();
         let client = ReqwestClient::from_config(
             &local_config().resolve("hygiea.test", vec![SocketAddr::new(addr.ip(), 1)]),
+            &Default::default(),
         )
         .await
         .unwrap();
@@ -225,10 +248,13 @@ mod timeouts {
     #[tokio::test]
     async fn client_timeout_applies() {
         let base = slow_server().await;
-        let client = ReqwestClient::from_config(&ReqwestConfig {
-            timeout: Some(Duration::from_millis(50)),
-            ..local_config()
-        })
+        let client = ReqwestClient::from_config(
+            &ReqwestConfig {
+                timeout: Some(Duration::from_millis(50)),
+                ..local_config()
+            },
+            &Default::default(),
+        )
         .await
         .unwrap();
         let err = RequestConfig::plain(Method::GET, format!("{base}/slow"))
@@ -243,10 +269,13 @@ mod timeouts {
     #[tokio::test]
     async fn request_timeout_can_extend() {
         let base = slow_server().await;
-        let client = ReqwestClient::from_config(&ReqwestConfig {
-            timeout: Some(Duration::from_millis(50)),
-            ..local_config()
-        })
+        let client = ReqwestClient::from_config(
+            &ReqwestConfig {
+                timeout: Some(Duration::from_millis(50)),
+                ..local_config()
+            },
+            &Default::default(),
+        )
         .await
         .unwrap();
         RequestConfig::plain(Method::GET, format!("{base}/slow"))
@@ -260,7 +289,9 @@ mod timeouts {
     #[tokio::test]
     async fn request_timeout_can_shrink() {
         let base = slow_server().await;
-        let client = ReqwestClient::from_config(&local_config()).await.unwrap();
+        let client = ReqwestClient::from_config(&local_config(), &Default::default())
+            .await
+            .unwrap();
         let err = RequestConfig::plain(Method::GET, format!("{base}/slow"))
             .timeout(Duration::from_millis(50))
             .send::<Bytes>(&client)
@@ -274,12 +305,15 @@ mod timeouts {
     #[tokio::test]
     async fn read_timeout_fires_when_body_is_delayed_after_headers() {
         let base = serve(|req| echo(req).body_delay(Duration::from_secs(2))).await;
-        let client = ReqwestClient::from_config(&ReqwestConfig {
-            timeout: None,
-            connect_timeout: None,
-            read_timeout: Some(Duration::from_millis(100)),
-            ..local_config()
-        })
+        let client = ReqwestClient::from_config(
+            &ReqwestConfig {
+                timeout: None,
+                connect_timeout: None,
+                read_timeout: Some(Duration::from_millis(100)),
+                ..local_config()
+            },
+            &Default::default(),
+        )
         .await
         .unwrap();
         let err = RequestConfig::plain(Method::GET, format!("{base}/slow-body"))
@@ -296,10 +330,13 @@ mod timeouts {
     #[tokio::test]
     async fn connect_timeout_fires_when_tls_handshake_stalls() {
         let target = hygiea_test::tcp::silent();
-        let client = ReqwestClient::from_config(&ReqwestConfig {
-            connect_timeout: Some(Duration::from_millis(200)),
-            ..local_config()
-        })
+        let client = ReqwestClient::from_config(
+            &ReqwestConfig {
+                connect_timeout: Some(Duration::from_millis(200)),
+                ..local_config()
+            },
+            &Default::default(),
+        )
         .await
         .unwrap();
         let err = RequestConfig::plain(Method::GET, format!("{}/x", target.https_url()))
@@ -331,7 +368,11 @@ mod retries {
         })
         .await;
         let _ = RequestConfig::plain(Method::GET, format!("{base}/fail"))
-            .send::<Bytes>(&ReqwestClient::from_config(&local_config()).await.unwrap())
+            .send::<Bytes>(
+                &ReqwestClient::from_config(&local_config(), &Default::default())
+                    .await
+                    .unwrap(),
+            )
             .await;
         assert_eq!(count.load(Ordering::SeqCst), 1);
     }
@@ -347,7 +388,11 @@ mod retries {
         })
         .await;
         let _ = RequestConfig::plain(Method::GET, format!("{base}/reset"))
-            .send::<Bytes>(&ReqwestClient::from_config(&local_config()).await.unwrap())
+            .send::<Bytes>(
+                &ReqwestClient::from_config(&local_config(), &Default::default())
+                    .await
+                    .unwrap(),
+            )
             .await;
         assert_eq!(count.load(Ordering::SeqCst), 1);
     }
@@ -384,7 +429,7 @@ mod proxies {
         let proxy = proxy_server().await;
         let client = ReqwestClient::from_config(&proxied(format!(
             "kind = \"http\"\nurl = \"{proxy}\"\ncustom_http_auth = \"Bearer proxy-token\"\nheaders = {{ x-proxy-tag = \"app\" }}"
-        ))).await
+        )), &Default::default()).await
         .unwrap();
         let seen = echo_via(&client, "http://example.invalid/path".into()).await;
         assert_eq!(seen["via"], "proxy");
@@ -396,9 +441,12 @@ mod proxies {
     #[tokio::test]
     async fn basic_auth_is_sent_to_proxy() {
         let proxy = proxy_server().await;
-        let client = ReqwestClient::from_config(&proxied(format!(
-            "url = \"{proxy}\"\nbasic_auth = {{ username = \"user\", password = \"pass\" }}"
-        )))
+        let client = ReqwestClient::from_config(
+            &proxied(format!(
+                "url = \"{proxy}\"\nbasic_auth = {{ username = \"user\", password = \"pass\" }}"
+            )),
+            &Default::default(),
+        )
         .await
         .unwrap();
         let seen = echo_via(&client, "http://example.invalid/path".into()).await;
@@ -410,9 +458,10 @@ mod proxies {
     async fn proxy_exclusion_connects_directly() {
         let target = serve(echo).await;
         let proxy = proxy_server().await;
-        let client = ReqwestClient::from_config(&proxied(format!(
-            "url = \"{proxy}\"\nno_proxy = \"127.0.0.1\""
-        )))
+        let client = ReqwestClient::from_config(
+            &proxied(format!("url = \"{proxy}\"\nno_proxy = \"127.0.0.1\"")),
+            &Default::default(),
+        )
         .await
         .unwrap();
         let seen = echo_via(&client, format!("{target}/direct")).await;
@@ -424,10 +473,12 @@ mod proxies {
     async fn https_proxy_ignores_http_requests() {
         let target = serve(echo).await;
         let proxy = proxy_server().await;
-        let client =
-            ReqwestClient::from_config(&proxied(format!("kind = \"https\"\nurl = \"{proxy}\"")))
-                .await
-                .unwrap();
+        let client = ReqwestClient::from_config(
+            &proxied(format!("kind = \"https\"\nurl = \"{proxy}\"")),
+            &Default::default(),
+        )
+        .await
+        .unwrap();
         let seen = echo_via(&client, format!("{target}/direct")).await;
         assert!(seen.get("via").is_none(), "{seen}");
     }
@@ -437,10 +488,13 @@ mod proxies {
     async fn global_no_proxy_overrides_proxies() {
         let target = serve(echo).await;
         let proxy = proxy_server().await;
-        let client = ReqwestClient::from_config(&ReqwestConfig {
-            no_proxy: true,
-            ..proxied(format!("url = \"{proxy}\""))
-        })
+        let client = ReqwestClient::from_config(
+            &ReqwestConfig {
+                no_proxy: true,
+                ..proxied(format!("url = \"{proxy}\""))
+            },
+            &Default::default(),
+        )
         .await
         .unwrap();
         let seen = echo_via(&client, format!("{target}/direct")).await;

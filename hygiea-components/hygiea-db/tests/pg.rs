@@ -15,7 +15,8 @@ mod postgres {
     use hygiea_core::datetime::{HygieaDateTimeExt, UtcDateTime};
     use hygiea_db::HyUtcDateTime;
     use hygiea_db::{
-        SeaOrmPgComponent, SeaOrmPgConfig, SeaOrmPgPool, SqlxPgComponent, SqlxPgConfig, SqlxPgPool,
+        PgConnectConfig, SeaOrmPgComponent, SeaOrmPgConfig, SeaOrmPgPool, SqlxPgComponent,
+        SqlxPgConfig, SqlxPgPool,
     };
     use hygiea_test::container::{ContainerSpec, RunningContainer};
     use sea_orm::{ActiveModelTrait, ConnectionTrait, DbBackend, EntityTrait, Set, Statement};
@@ -29,7 +30,7 @@ mod postgres {
 
     /// 镜像固定版本。启动时先起临时实例跑初始化再重启，就绪日志会出现两次，第二次才是正式实例
     async fn start() -> RunningContainer {
-        ContainerSpec::new("postgres", "17")
+        ContainerSpec::new("postgres", "18")
             .env("POSTGRES_USER", USER)
             .env("POSTGRES_PASSWORD", PASSWORD)
             .env("POSTGRES_DB", DATABASE)
@@ -39,31 +40,36 @@ mod postgres {
             .await
     }
 
-    fn sqlx_config(server: &RunningContainer) -> SqlxPgConfig {
-        SqlxPgConfig {
+    fn connect(server: &RunningContainer) -> PgConnectConfig {
+        PgConnectConfig {
             host: server.host().to_string(),
             port: server.port(PORT),
             username: USER.to_string(),
             password: PASSWORD.to_string(),
             database: DATABASE.to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn sqlx_config(server: &RunningContainer) -> SqlxPgConfig {
+        SqlxPgConfig {
+            connect: connect(server),
             ..Default::default()
         }
     }
 
     fn seaorm_config(server: &RunningContainer) -> SeaOrmPgConfig {
         SeaOrmPgConfig {
-            host: server.host().to_string(),
-            port: server.port(PORT),
-            username: USER.to_string(),
-            password: PASSWORD.to_string(),
-            database: DATABASE.to_string(),
+            connect: connect(server),
             ..Default::default()
         }
     }
 
     /// 用默认配置连上去建好 [`SCHEMA`]，search_path 指向不存在的 schema 时 current_schema() 是 NULL
     async fn create_schema(server: &RunningContainer) {
-        let pool = SqlxPgPool::from_config(&sqlx_config(server)).await.unwrap();
+        let pool = SqlxPgPool::from_config(&sqlx_config(server), &Default::default())
+            .await
+            .unwrap();
         sqlx::query("CREATE SCHEMA hygiea_test")
             .execute(&*pool)
             .await
@@ -99,7 +105,7 @@ mod postgres {
     #[tokio::test]
     async fn sqlx_connect_success() {
         let server = start().await;
-        let pool = SqlxPgPool::from_config(&sqlx_config(&server))
+        let pool = SqlxPgPool::from_config(&sqlx_config(&server), &Default::default())
             .await
             .unwrap();
 
@@ -115,11 +121,11 @@ mod postgres {
         let server = start().await;
         create_schema(&server).await;
 
-        let config = SqlxPgConfig {
-            schema_search_path: SCHEMA.to_string(),
-            ..sqlx_config(&server)
-        };
-        let pool = SqlxPgPool::from_config(&config).await.unwrap();
+        let mut config = sqlx_config(&server);
+        config.connect.schema_search_path = SCHEMA.to_string();
+        let pool = SqlxPgPool::from_config(&config, &Default::default())
+            .await
+            .unwrap();
 
         let schema: Option<String> = sqlx::query_scalar("SELECT current_schema()")
             .fetch_one(&*pool)
@@ -131,11 +137,11 @@ mod postgres {
     #[tokio::test]
     async fn sqlx_stop_closes_pool() {
         let server = start().await;
-        let config = SqlxPgConfig {
-            max_connections: Some(2),
-            ..sqlx_config(&server)
-        };
-        let pool = SqlxPgPool::from_config(&config).await.unwrap();
+        let mut config = sqlx_config(&server);
+        config.pool.max_connections = Some(2);
+        let pool = SqlxPgPool::from_config(&config, &Default::default())
+            .await
+            .unwrap();
 
         sqlx::query("SELECT 1").fetch_one(&*pool).await.unwrap();
 
@@ -149,7 +155,7 @@ mod postgres {
     #[tokio::test]
     async fn seaorm_connect_success() {
         let server = start().await;
-        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server))
+        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server), &Default::default())
             .await
             .unwrap();
 
@@ -162,11 +168,11 @@ mod postgres {
         let server = start().await;
         create_schema(&server).await;
 
-        let config = SeaOrmPgConfig {
-            schema_search_path: SCHEMA.to_string(),
-            ..seaorm_config(&server)
-        };
-        let pool = SeaOrmPgPool::from_config(&config).await.unwrap();
+        let mut config = seaorm_config(&server);
+        config.connect.schema_search_path = SCHEMA.to_string();
+        let pool = SeaOrmPgPool::from_config(&config, &Default::default())
+            .await
+            .unwrap();
 
         let row = pool
             .query_one_raw(sql("SELECT current_schema()"))
@@ -184,7 +190,7 @@ mod postgres {
     #[tokio::test]
     async fn seaorm_stop_closes_connection() {
         let server = start().await;
-        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server))
+        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server), &Default::default())
             .await
             .unwrap();
 
@@ -266,7 +272,7 @@ mod postgres {
     #[tokio::test]
     async fn sqlx_hy_utc_datetime_round_trip() {
         let server = start().await;
-        let pool = SqlxPgPool::from_config(&sqlx_config(&server))
+        let pool = SqlxPgPool::from_config(&sqlx_config(&server), &Default::default())
             .await
             .unwrap();
         sqlx::query(CREATE_RECORD).execute(&*pool).await.unwrap();
@@ -305,7 +311,7 @@ mod postgres {
     #[tokio::test]
     async fn seaorm_hy_utc_datetime_round_trip() {
         let server = start().await;
-        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server))
+        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server), &Default::default())
             .await
             .unwrap();
         pool.execute_unprepared(CREATE_RECORD).await.unwrap();
@@ -350,7 +356,7 @@ mod postgres {
         use hygiea_db::RepoErr;
 
         let server = start().await;
-        let pool = SqlxPgPool::from_config(&sqlx_config(&server))
+        let pool = SqlxPgPool::from_config(&sqlx_config(&server), &Default::default())
             .await
             .unwrap();
         sqlx::query("CREATE TABLE item (id INT PRIMARY KEY)")
@@ -397,7 +403,7 @@ mod postgres {
         use hygiea_db::RepoErr;
 
         let server = start().await;
-        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server))
+        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server), &Default::default())
             .await
             .unwrap();
         pool.execute_unprepared("CREATE TABLE item (id INT PRIMARY KEY)")
@@ -462,7 +468,7 @@ mod postgres {
         use sea_orm::{QueryOrder, QuerySelect};
 
         let server = start().await;
-        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server))
+        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server), &Default::default())
             .await
             .unwrap();
         pool.execute_unprepared(CREATE_RECORD).await.unwrap();
@@ -502,7 +508,7 @@ mod postgres {
         use sea_orm::{IntoActiveModel, TryInsertResult, sea_query::OnConflict};
 
         let server = start().await;
-        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server))
+        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server), &Default::default())
             .await
             .unwrap();
         pool.execute_unprepared(CREATE_RECORD).await.unwrap();
@@ -575,7 +581,7 @@ mod postgres {
         use sea_orm::{ActiveModelTrait, IntoActiveModel, ModelTrait, PaginatorTrait, QuerySelect};
 
         let server = start().await;
-        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server))
+        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server), &Default::default())
             .await
             .unwrap();
         let db = &*pool;
@@ -711,7 +717,7 @@ mod postgres {
         use sea_orm::{ColumnTrait, IntoActiveModel, QueryFilter, QueryOrder};
 
         let server = start().await;
-        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server))
+        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server), &Default::default())
             .await
             .unwrap();
         pool.execute_unprepared(CREATE_RECORD).await.unwrap();
@@ -769,7 +775,7 @@ mod postgres {
         use hygiea_db::{Page, PageRequest};
 
         let server = start().await;
-        let pool = SqlxPgPool::from_config(&sqlx_config(&server))
+        let pool = SqlxPgPool::from_config(&sqlx_config(&server), &Default::default())
             .await
             .unwrap();
         sqlx::query(CREATE_RECORD).execute(&*pool).await.unwrap();
@@ -804,7 +810,7 @@ mod postgres {
         use hygiea_db::RepoErr;
 
         let server = start().await;
-        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server))
+        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server), &Default::default())
             .await
             .unwrap();
         pool.execute_unprepared(CREATE_RECORD).await.unwrap();

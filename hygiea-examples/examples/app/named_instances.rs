@@ -8,11 +8,14 @@
 
 use hygiea::Result;
 use hygiea::app::Registry;
-use hygiea::db::{SqlxSqliteComponent, SqlxSqliteConfig, SqlxSqlitePool};
+use hygiea::db::{SqliteConnectConfig, SqlxSqliteComponent, SqlxSqliteConfig, SqlxSqlitePool};
 
 fn memory_db() -> SqlxSqliteConfig {
     SqlxSqliteConfig {
-        database: ":memory:".to_string(),
+        connect: SqliteConnectConfig {
+            database: ":memory:".to_string(),
+            ..Default::default()
+        },
         ..Default::default()
     }
 }

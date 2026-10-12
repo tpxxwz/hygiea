@@ -77,7 +77,7 @@ mod redis {
     #[tokio::test]
     async fn connect_to_redis_success() {
         let redis = start().await;
-        FredRedisPool::from_config(&config(&redis, 0))
+        FredRedisPool::from_config(&config(&redis, 0), &Default::default())
             .await
             .expect("应该能连接到 Redis");
     }
@@ -85,7 +85,7 @@ mod redis {
     #[tokio::test]
     async fn set_and_get_value() {
         let redis = start().await;
-        let pool = FredRedisPool::from_config(&config(&redis, 0))
+        let pool = FredRedisPool::from_config(&config(&redis, 0), &Default::default())
             .await
             .unwrap();
 
@@ -100,7 +100,7 @@ mod redis {
     #[tokio::test]
     async fn select_database() {
         let redis = start().await;
-        let pool = FredRedisPool::from_config(&config(&redis, 1))
+        let pool = FredRedisPool::from_config(&config(&redis, 1), &Default::default())
             .await
             .unwrap();
 

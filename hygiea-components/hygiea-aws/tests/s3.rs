@@ -109,7 +109,7 @@ mod rustfs {
     #[tokio::test]
     async fn put_get_delete_object() {
         let server = start().await;
-        let client = AwsS3Client::from_config(&config(&server, SECRET_KEY))
+        let client = AwsS3Client::from_config(&config(&server, SECRET_KEY), &Default::default())
             .await
             .unwrap();
         client.create_bucket().bucket("test").send().await.unwrap();
@@ -120,9 +120,10 @@ mod rustfs {
     #[tokio::test]
     async fn wrong_secret_is_rejected() {
         let server = start().await;
-        let client = AwsS3Client::from_config(&config(&server, "wrong-secret"))
-            .await
-            .unwrap();
+        let client =
+            AwsS3Client::from_config(&config(&server, "wrong-secret"), &Default::default())
+                .await
+                .unwrap();
         let err = client.list_buckets().send().await.unwrap_err();
         assert_eq!(
             err.as_service_error().and_then(|e| e.meta().code()),
@@ -161,7 +162,9 @@ mod own_bucket {
 
     #[tokio::test]
     async fn put_get_delete_object() {
-        let client = AwsS3Client::from_config(&config()).await.unwrap();
+        let client = AwsS3Client::from_config(&config(), &Default::default())
+            .await
+            .unwrap();
         put_get_delete(&client, &env("S3_BUCKET")).await;
     }
 }

@@ -21,6 +21,9 @@
 # 框架：RegistryConfig（hygiea::app）
 # =====================================================================================
 [registry]
+# 应用名，小写下划线 [a-z][a-z0-9_]*。环境变量前缀要是它的大写（比如 dict_jp 对应 ConfigArgs::env_prefix("DICT_JP")），
+# 对不上启动时报错。数据库连接的 application_name、动态配置的表名前缀用它
+app_name = "hygiea"
 # 关闭时每个组件最多等多久（秒），超时的组件任务会被 abort，接着关下一个。
 # 组件自己配了 shutdown_timeout_secs 的以组件为准
 shutdown_timeout_secs = 15
@@ -81,8 +84,9 @@ env_filter = ""
 
 # =====================================================================================
 # 组件：SqlxPgConfig（hygiea::db，feature db-sqlx-postgres）
+# 连哪个库在 connect 段（PgConnectConfig，和 SeaORM 共用），池在 pool 段（PoolConfig，各数据库、框架共用）
 # =====================================================================================
-[db_pg]
+[db_pg.connect]
 scheme = "postgres"
 host = "localhost"
 port = 5432
@@ -93,54 +97,80 @@ database = "postgres"
 params = ""
 # 连接后的 search_path，比如 "myschema,public"；空字符串表示用数据库的默认值
 schema_search_path = ""
-# 连接池
-max_connections = 10
-min_connections = 0
+
+[db_pg.pool]
+# 连接池。数字项不写时用默认值（注释里的值）
+# max_connections = 10
+# min_connections = 0
 # 从连接池拿连接最多等多久（秒），拿不到就报错
-acquire_timeout_secs = 30
+# acquire_timeout_secs = 30
 # 空闲连接多久（秒）没用就关掉
-idle_timeout_secs = 600
+# idle_timeout_secs = 600
 # 一个连接最多用多久（秒）就换新的
-max_lifetime_secs = 1800
+# max_lifetime_secs = 1800
 # 从连接池拿出连接前先检查一下它还能不能用
 test_before_acquire = true
 # true：启动时不连数据库，第一次用到时才连（数据库暂时连不上也能启动）
 connect_lazy = false
 
+[db_pg.live_config]
+# 连接池的数据库配置表（动态配置，feature db-live-config）。默认不开，要用的连接池写 true。
+# 表名前缀是 [registry] app_name 加 _（比如 hygiea_config），见 docs/design/live-config.md
+enabled = false
+# 对一遍版本号的间隔（秒）。不写：PostgreSQL 60（兜底，变更靠 NOTIFY 推过来），SQLite 1（主要靠它）
+# poll_interval_secs = 60
+
 # =====================================================================================
 # 组件：SeaOrmPgConfig（hygiea::db，feature db-seaorm-postgres）
+# connect、pool 段和 SqlxPgConfig 的一样，另外有 SeaORM 的 SQL 日志 log 段
 # =====================================================================================
-[db_seaorm]
+[db_seaorm.connect]
 scheme = "postgres"
 host = "localhost"
 port = 5432
 username = "postgres"
 password = "postgres"
 database = "postgres"
-# 追加到连接 url 上的参数，不带开头的 ?，比如 "sslmode=require"
+# 追加到连接 url 上的参数，不带开头的 ?，比如 "sslmode=require&application_name=myapp"
 params = ""
-# 连接后的 search_path；空字符串表示用数据库的默认值
+# 连接后的 search_path，比如 "myschema,public"；空字符串表示用数据库的默认值
 schema_search_path = ""
-max_connections = 10
-min_connections = 0
-# 建立连接最多等多久（秒）
-connect_timeout_secs = 30
-acquire_timeout_secs = 30
-idle_timeout_secs = 600
-max_lifetime_secs = 1800
+
+[db_seaorm.pool]
+# 连接池。数字项不写时用默认值（注释里的值）
+# max_connections = 10
+# min_connections = 0
+# 从连接池拿连接最多等多久（秒），拿不到就报错
+# acquire_timeout_secs = 30
+# 空闲连接多久（秒）没用就关掉
+# idle_timeout_secs = 600
+# 一个连接最多用多久（秒）就换新的
+# max_lifetime_secs = 1800
+# 从连接池拿出连接前先检查一下它还能不能用
 test_before_acquire = true
+# true：启动时不连数据库，第一次用到时才连（数据库暂时连不上也能启动）
 connect_lazy = false
-# SeaORM 的 SQL 日志开关和级别。级别可选：trace / debug / info / warn / error / off，写错启动时 panic
-sqlx_logging = true
-sqlx_logging_level = "info"
-# 慢查询日志：执行超过 sqlx_slow_statements_threshold_secs 秒的语句按这个级别打出来；off 表示不打
-sqlx_slow_statements_logging_level = "off"
-sqlx_slow_statements_threshold_secs = 1
+
+[db_seaorm.log]
+# 每条 SQL 都打日志。级别可选：trace / debug / info / warn / error / off，写错启动时 panic
+enabled = true
+level = "info"
+# 慢查询日志：执行超过 slow_statements_threshold_secs 秒的语句按这个级别打出来；off 表示不打
+slow_statements_level = "off"
+slow_statements_threshold_secs = 1
+
+[db_seaorm.live_config]
+# 连接池的数据库配置表（动态配置，feature db-live-config）。默认不开，要用的连接池写 true。
+# 表名前缀是 [registry] app_name 加 _（比如 hygiea_config），见 docs/design/live-config.md
+enabled = false
+# 对一遍版本号的间隔（秒）。不写：PostgreSQL 60（兜底，变更靠 NOTIFY 推过来），SQLite 1（主要靠它）
+# poll_interval_secs = 60
 
 # =====================================================================================
 # 组件：SqlxSqliteConfig（hygiea::db，feature db-sqlx-sqlite）
+# 连哪个库和打开方式在 connect 段（SqliteConnectConfig），池在 pool 段（PoolConfig）
 # =====================================================================================
-[db_sqlite]
+[db_sqlite.connect]
 # 数据库文件路径；":memory:" 是内存库（进程退出数据就没了）
 database = "hygiea.db"
 # 追加到连接 url 上的参数，不带开头的 ?（写了 ? 也会被去掉）
@@ -161,13 +191,28 @@ synchronous = "full"
 busy_timeout_millis = 5000
 # 每个连接缓存多少条预编译语句
 statement_cache_capacity = 100
-max_connections = 4
-min_connections = 1
-acquire_timeout_secs = 30
-idle_timeout_secs = 600
-max_lifetime_secs = 1800
+
+[db_sqlite.pool]
+# 连接池。数字项不写时用默认值（注释里的值）
+# max_connections = 4
+# min_connections = 1
+# 从连接池拿连接最多等多久（秒），拿不到就报错
+# acquire_timeout_secs = 30
+# 空闲连接多久（秒）没用就关掉
+# idle_timeout_secs = 600
+# 一个连接最多用多久（秒）就换新的
+# max_lifetime_secs = 1800
+# 从连接池拿出连接前先检查一下它还能不能用
 test_before_acquire = true
+# true：启动时不连数据库，第一次用到时才连（数据库暂时连不上也能启动）
 connect_lazy = false
+
+[db_sqlite.live_config]
+# 连接池的数据库配置表（动态配置，feature db-live-config）。默认不开，要用的连接池写 true。
+# 表名前缀是 [registry] app_name 加 _（比如 hygiea_config），见 docs/design/live-config.md
+enabled = false
+# 对一遍版本号的间隔（秒）。不写：PostgreSQL 60（兜底，变更靠 NOTIFY 推过来），SQLite 1（主要靠它）
+# poll_interval_secs = 60
 
 # =====================================================================================
 # 组件：RedisConfig（hygiea::redis，feature redis-fred）

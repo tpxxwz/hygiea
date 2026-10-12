@@ -77,7 +77,9 @@ mod attempts {
         let recorder = Recorder::default();
         let resp = RequestConfig::plain(Method::GET, format!("{base}/x"))
             .send::<Json<Item>>((
-                &ReqwestClient::from_config(&local_config()).await.unwrap(),
+                &ReqwestClient::from_config(&local_config(), &Default::default())
+                    .await
+                    .unwrap(),
                 RetryCtx::new(5, recorder.clone()),
             ))
             .await
@@ -94,7 +96,9 @@ mod attempts {
         let recorder = Recorder::default();
         let err = RequestConfig::plain(Method::GET, format!("{base}/x"))
             .send::<Bytes>((
-                &ReqwestClient::from_config(&local_config()).await.unwrap(),
+                &ReqwestClient::from_config(&local_config(), &Default::default())
+                    .await
+                    .unwrap(),
                 RetryCtx::new(2, recorder.clone()),
             ))
             .await
@@ -112,7 +116,9 @@ mod attempts {
         let recorder = Recorder::default();
         let err = RequestConfig::plain(Method::GET, format!("{base}/x"))
             .send::<Bytes>((
-                &ReqwestClient::from_config(&local_config()).await.unwrap(),
+                &ReqwestClient::from_config(&local_config(), &Default::default())
+                    .await
+                    .unwrap(),
                 RetryCtx::new(0, recorder.clone()),
             ))
             .await
@@ -129,7 +135,9 @@ mod attempts {
         let recorder = Recorder::default();
         RequestConfig::plain(Method::GET, format!("{base}/x"))
             .send::<Json<Item>>((
-                &ReqwestClient::from_config(&local_config()).await.unwrap(),
+                &ReqwestClient::from_config(&local_config(), &Default::default())
+                    .await
+                    .unwrap(),
                 RetryCtx::new(3, recorder.clone()),
             ))
             .await
@@ -155,7 +163,9 @@ mod stages {
         let record = seen.clone();
         RequestConfig::plain(Method::GET, format!("{base}/x"))
             .send::<Bytes>((
-                &ReqwestClient::from_config(&local_config()).await.unwrap(),
+                &ReqwestClient::from_config(&local_config(), &Default::default())
+                    .await
+                    .unwrap(),
                 RetryCtx::new(1, move |_: usize, cfg: RequestConfig, f: SendFailure| {
                     let record = record.clone();
                     async move {
@@ -192,7 +202,9 @@ mod stages {
         let record = seen.clone();
         let resp = RequestConfig::plain(Method::GET, format!("{base}/x"))
             .send::<Json<Item>>((
-                &ReqwestClient::from_config(&local_config()).await.unwrap(),
+                &ReqwestClient::from_config(&local_config(), &Default::default())
+                    .await
+                    .unwrap(),
                 RetryCtx::new(1, move |_: usize, cfg: RequestConfig, f: SendFailure| {
                     let record = record.clone();
                     async move {
@@ -221,7 +233,9 @@ mod stages {
         let record = seen.clone();
         let err = RequestConfig::plain(Method::GET, format!("{base}/x"))
             .send::<Bytes>((
-                &ReqwestClient::from_config(&local_config()).await.unwrap(),
+                &ReqwestClient::from_config(&local_config(), &Default::default())
+                    .await
+                    .unwrap(),
                 RetryCtx::new(1, move |_: usize, _: RequestConfig, f: SendFailure| {
                     let record = record.clone();
                     async move {
@@ -255,7 +269,9 @@ mod stages {
         RequestConfig::plain(Method::GET, format!("{base}/x"))
             .timeout(std::time::Duration::from_millis(100))
             .send::<Bytes>((
-                &ReqwestClient::from_config(&local_config()).await.unwrap(),
+                &ReqwestClient::from_config(&local_config(), &Default::default())
+                    .await
+                    .unwrap(),
                 RetryCtx::new(1, recorder.clone()),
             ))
             .await
@@ -275,7 +291,9 @@ mod decisions {
         let (base, count) = counted(|_, _| Reply::json(500, "{}")).await;
         let err = RequestConfig::plain(Method::GET, format!("{base}/x"))
             .send::<Bytes>((
-                &ReqwestClient::from_config(&local_config()).await.unwrap(),
+                &ReqwestClient::from_config(&local_config(), &Default::default())
+                    .await
+                    .unwrap(),
                 RetryCtx::new(5, |_: usize, _: RequestConfig, f: SendFailure| async move {
                     RetryDecision::Stop(f.err)
                 }),
@@ -301,7 +319,9 @@ mod decisions {
             .headers(header_map(&[("x-token", "stale")]))
             .unwrap()
             .send::<Bytes>((
-                &ReqwestClient::from_config(&local_config()).await.unwrap(),
+                &ReqwestClient::from_config(&local_config(), &Default::default())
+                    .await
+                    .unwrap(),
                 RetryCtx::new(
                     1,
                     |_: usize, cfg: RequestConfig, f: SendFailure| async move {
@@ -331,7 +351,9 @@ mod decisions {
         let (base, count) = counted(|_, _| Reply::json(500, "{}")).await;
         let err = RequestConfig::plain(Method::GET, format!("{base}/x"))
             .send::<Bytes>((
-                &ReqwestClient::from_config(&local_config()).await.unwrap(),
+                &ReqwestClient::from_config(&local_config(), &Default::default())
+                    .await
+                    .unwrap(),
                 RetryCtx::new(
                     3,
                     |n: usize, cfg: RequestConfig, _: SendFailure| async move {
@@ -355,7 +377,9 @@ mod decisions {
         let recorder = Recorder::default();
         let err = RequestConfig::plain(Method::GET, "not a url")
             .send::<Bytes>((
-                &ReqwestClient::from_config(&local_config()).await.unwrap(),
+                &ReqwestClient::from_config(&local_config(), &Default::default())
+                    .await
+                    .unwrap(),
                 RetryCtx::new(3, recorder.clone()),
             ))
             .await
@@ -388,7 +412,9 @@ mod bodies {
         let recorder = Recorder::default();
         RequestConfig::with_body(Method::POST, format!("{base}/x"), body)
             .send::<Bytes>((
-                &ReqwestClient::from_config(&local_config()).await.unwrap(),
+                &ReqwestClient::from_config(&local_config(), &Default::default())
+                    .await
+                    .unwrap(),
                 RetryCtx::new(2, recorder.clone()),
             ))
             .await

@@ -63,6 +63,7 @@
 | `db-sqlx-postgres` | `hygiea-db`（`sqlx` + `postgres`） | `hygiea::db::SqlxPgComponent` / `SqlxPgPool` |
 | `db-sqlx-sqlite` | `hygiea-db`（`sqlx` + `sqlite`） | `hygiea::db::SqlxSqliteComponent` / `SqlxSqlitePool` |
 | `db-seaorm-postgres` | `hygiea-db`（`seaorm` + `postgres`） | `hygiea::db::SeaOrmPgComponent` / `SeaOrmPgPool` |
+| `db-live-config` | `hygiea-db`（`live-config`），和上面的连接池组合一起开 | 连接池上的 `live_config` / `live_config_all`：数据库配置表，改了表程序自动拿到新值（`hygiea::db::LiveConfig` 等） |
 | `redis-fred` | `hygiea-redis`（`fred`） | `hygiea::redis::RedisComponent` / `FredRedisPool` |
 | `http-axum` | `hygiea-http`（`axum`） | `hygiea::http::AxumComponent` |
 | `http-client-reqwest` | `hygiea-http-client`（`reqwest`） | `hygiea::http_client::reqwest_client::ReqwestComponent` / `ReqwestConfig`，请求 API 也在这个模块；在 `Resources` 中提供 `ReqwestClient` |
@@ -105,8 +106,8 @@ cargo add hygiea@0.1.1-alpha.5 --features app,db-sqlx-postgres,http-axum
 [registry.tracing]
 root_env_filter = "info"
 
-# SqlxSqliteComponent 的配置（SqlxSqliteConfig）
-[db]
+# SqlxSqliteComponent 的配置（SqlxSqliteConfig）：连哪个库在 [db.connect]，池的参数在 [db.pool]
+[db.connect]
 database = ":memory:"   # 数据库文件路径；":memory:" 是内存库，不需要装数据库服务
 
 # AxumComponent 的配置（AxumConfig）
@@ -154,6 +155,7 @@ async fn main() -> Result<()> {
 }
 ```
 
+- 应用名是 `[registry] app_name`（小写下划线，默认 `hygiea`），环境变量前缀要是它的大写：自己的应用写 `app_name = "my_app"`，代码里配 `ConfigArgs::from_cli().env_prefix("MY_APP")`，对不上启动时报错。组件从 `AppContext` 拿到它，比如数据库连接的 `application_name`。
 - 环境名默认 `dev`，用 `--env prod` 或 `HYGIEA_ENV=prod` 切换到 `config/prod.toml`；`-f local` 叠加 `config/local.toml`，`HYGIEA__HTTP__PORT=9090` 或 `--set http.port=9090` 覆盖单个配置项。配置项的层级就是 `AppConfig` 的字段层级，比如日志级别是 `registry.tracing.root_env_filter`。
 - 启动分两个阶段：先连上 SQLite、HTTP 绑好端口，然后 HTTP 才开始接请求；要在接请求之前做的初始化放进 `before_activate`（见 `app_two_phase`）。
 - 按 Ctrl+C 退出时，先停 HTTP（处理完手上的请求），再按启动的逆序关连接池。
@@ -240,7 +242,7 @@ async fn login(client: &ReqwestClient) -> Result<String> {
 }
 
 // client 只建一次并共享：连接池在它里面
-// let client = ReqwestClient::from_config(&ReqwestConfig::default()).await?; // from_config 来自 hygiea::app::ConfigResource
+// let client = ReqwestClient::from_config(&ReqwestConfig::default(), &AppContext::default()).await?; // from_config 来自 hygiea::app::ConfigResource
 ```
 
 `send::<Decoder>` 的 `Decoder` 是解码器：`Json<T>` 解出 `T`，`String` / `Bytes` / `()` / `BodyStream` 解出它们自己。`resp.body` 的类型是解码器的输出，所以解码器要写在 turbofish 里，不能靠接收处的类型标注推断。自定义解码（拆 `{code, msg, data}` 外壳、解密……）实现 `FromBytes`，`Output` 可以是拆出来的业务数据。
@@ -293,8 +295,8 @@ let resp = RequestConfig::plain(Method::GET, url)
 测试里排查问题时，开 `http-client-reqwest-debug-log` feature（只放在 dev-dependencies 里），给 client 打开 `debug`：
 
 ```rust
-let client = ReqwestClient::debug().await?; // 默认配置加 debug，等于 ReqwestClient::from_config(&ReqwestConfig::default().debug(true)).await
-let client = ReqwestClient::from_config(&ReqwestConfig { timeout: Some(t), ..Default::default() }.debug(true)).await?; // 要改别的配置时
+let client = ReqwestClient::debug().await?; // 默认配置加 debug，等于 ReqwestClient::from_config(&ReqwestConfig::default().debug(true), &AppContext::default()).await
+let client = ReqwestClient::from_config(&ReqwestConfig { timeout: Some(t), ..Default::default() }.debug(true), &AppContext::default()).await?; // 要改别的配置时
 // 配置文件里是 debug = true
 
 // 建好之后也能改，原地生效，这个 client 的所有 clone（包括 Resources 里那份）一起变，下一次请求起按新值打
@@ -325,7 +327,7 @@ hygiea                         facade：重新导出全部内容，按 feature �
 | `hygiea` | 是 | 使用方唯一需要依赖的 crate。重新导出 core 和各组件，由 feature 决定编译哪些 |
 | `hygiea-core` | 是 | 应用框架；错误处理、日志、打码、日期时间、环境变量、字符串、WebSocket 客户端 |
 | `hygiea-macros` | 是 | `#[derive(hy_err)]` 和 `#[redact]` |
-| `hygiea-db` | 是 | 数据库连接池组件（PostgreSQL、SQLite）；SeaORM 的错误转换（`db!`）、事务、分页，用法见 crate 文档 |
+| `hygiea-db` | 是 | 数据库连接池组件（PostgreSQL、SQLite）；SeaORM 的错误转换（`db!`）、事务、分页；连接池的数据库配置表（动态配置，[设计说明](docs/design/live-config.md)）。用法见 crate 文档 |
 | `hygiea-redis` | 是 | Redis 连接池组件 |
 | `hygiea-http` | 是 | HTTP 服务组件 |
 | `hygiea-http-client` | 是 | reqwest HTTP 客户端及组件 |
@@ -410,6 +412,12 @@ pub enum LegacyErrors {
 | `99910012` | `RepoErr::DeleteFailed` | Db delete failed: {{ op }} |
 | `99910013` | `RepoErr::UpdateFailed` | Db update failed: {{ op }} |
 | `99910014` | `RepoErr::QueryFailed` | Db query failed: {{ op }} |
+| `99910021` | `RepoErr::LiveConfigDefaultsInvalid` | Db live config defaults invalid: {{ ns }} |
+| `99910022` | `RepoErr::LiveConfigDecodeFailed` | Db live config decode failed: {{ ns }} |
+| `99910023` | `RepoErr::LiveConfigClosed` | Db live config closed |
+| `99910024` | `RepoErr::LiveConfigCreateFailed` | Db live config tables create failed: {{ table }} |
+| `99910025` | `RepoErr::LiveConfigSchemaMismatch` | Db live config schema mismatch: {{ table }} |
+| `99910026` | `RepoErr::LiveConfigDisabled` | Db live config not enabled on this pool |
 | `99910091` | `RepoErr::PageOutOfRange` | Db page out of range: page {{ page }}, page_size {{ page_size }} |
 | `99910101` | `HttpClientErr::ClientBuildFailed` | Http client build failed |
 | `99910111` | `HttpClientErr::InvalidUrl` | Invalid url: {{ url }} |
@@ -435,6 +443,7 @@ pub enum LegacyErrors {
 | `app_two_phase` | 两阶段启动：`before_activate` 在 HTTP 开始接请求之前建表、把 `AppState` 放进 Resources，router 函数取出它交给 `with_state`，handler 用 `arity0_state` 拿到连接池 |
 | `app_background_task` | 后台任务、优雅关闭、超时强制结束、`stop` 收尾 |
 | `app_config` | 配置文件、`-f`、环境变量、`--set` 的合并，框架参数合进自己的命令行 |
+| `db_live_config` | 连接池的数据库配置表：绑定到 struct、改表后程序自动拿到新值（SQLite 文件库） |
 | `error_basic` | 错误 enum、`err!` 的写法、错误码 |
 | `string_template` | `fmt_tpl!`、`fmt_tpl_once!`、`fmt_pos!` |
 | `log_basic` | 控制台 + 文件双输出、按 layer 设置 filter、日志时间用 UTC |

@@ -5,6 +5,6 @@ greeting = "hello from dev"   # app_config 示例自己的配置
 [registry.tracing]
 root_env_filter = "info"
 
-# SqlxSqliteComponent 的配置（SqlxSqliteConfig）
-[db]
+# SqlxSqliteComponent 的配置（SqlxSqliteConfig）：连哪个库在 [db.connect]，池在 [db.pool]
+[db.connect]
 database = ":memory:"   # 数据库文件路径；":memory:" 是内存库，不需要装数据库服务

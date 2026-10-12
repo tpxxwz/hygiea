@@ -104,7 +104,7 @@ async fn main() -> Result<()> {
         let _ = axum::serve(listener, router).await;
     });
 
-    let client = ReqwestClient::from_config(&ReqwestConfig::default()).await?;
+    let client = ReqwestClient::from_config(&ReqwestConfig::default(), &Default::default()).await?;
     let url = |path: &str| format!("http://{addr}{path}");
 
     // 1. 正常返回

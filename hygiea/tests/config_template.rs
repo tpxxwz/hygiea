@@ -9,6 +9,7 @@
     feature = "db-sqlx-postgres",
     feature = "db-sqlx-sqlite",
     feature = "db-seaorm-postgres",
+    feature = "db-live-config",
     feature = "redis-fred",
     feature = "http-axum",
     feature = "http-client-reqwest",

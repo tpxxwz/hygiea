@@ -9,10 +9,17 @@
 //! | `seaorm` + `postgres` | [`SeaOrmPgComponent`] | [`SeaOrmPgPool`] |
 //! | `mysql` | 预留，还没有实现 | |
 //!
+//! 连接池的配置分段：`[db.connect]` 连哪个库（[`PgConnectConfig`] / [`SqliteConnectConfig`]），`[db.pool]` 池的参数
+//! （[`PoolConfig`]，各数据库、框架共用），SeaORM 另有 `[db.log]`。PG 连接的 `application_name` 用 `[registry] app_name`
+//! （建连接池时从 `AppContext` 拿到），不能在 `connect.params` 里自己写。
+//!
+//! 开了 `live-config` 后，各连接池多了 `live_config` / `live_config_all`：数据库配置表，改了表程序自动拿到新值，
+//! 配置在 `[db.live_config]`（默认不开），见 [`live_config`] 模块文档。
+//!
 //! 和框架无关、开 `sqlx` 或 `seaorm` 就有的：
 //! - UTC 时间列类型 [`HyUtcDateTime`]，两个框架同时开也是同一个类型
 //! - 分页的请求和结果 [`PageRequest`]、[`Page`]
-//! - 数据库错误 [`RepoErr`]，按操作分：0x 事务、1x 执行语句（10 兜底，11-14 增删改查）、9x 参数
+//! - 数据库错误 [`RepoErr`]，按操作分：0x 事务、1x 执行语句（10 兜底，11-14 增删改查）、2x 动态配置、9x 参数
 //!
 //! 各框架专用的在 [`sqlx`](mod@sqlx) / [`seaorm`] 模块里，比如事务函数 `sqlx::transaction`、`seaorm::transaction`；
 //! 连接池组件也在里面，再导出到 crate 根。
@@ -75,9 +82,13 @@
 //! ```
 
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]
+mod config;
+#[cfg(any(feature = "sqlx", feature = "seaorm"))]
 mod datetime;
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]
 mod error;
+#[cfg(all(feature = "live-config", any(feature = "postgres", feature = "sqlite")))]
+pub mod live_config;
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]
 mod page;
 #[cfg(feature = "seaorm")]
@@ -89,10 +100,18 @@ pub mod sqlx;
 pub use self::sqlx::pool::postgres::*;
 #[cfg(all(feature = "sqlx", feature = "sqlite"))]
 pub use self::sqlx::pool::sqlite::*;
+#[cfg(all(any(feature = "sqlx", feature = "seaorm"), feature = "postgres"))]
+pub use config::PgConnectConfig;
+#[cfg(any(feature = "sqlx", feature = "seaorm"))]
+pub use config::PoolConfig;
+#[cfg(all(feature = "sqlx", feature = "sqlite"))]
+pub use config::SqliteConnectConfig;
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]
 pub use datetime::HyUtcDateTime;
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]
 pub use error::RepoErr;
+#[cfg(all(feature = "live-config", any(feature = "postgres", feature = "sqlite")))]
+pub use live_config::{LiveConfig, LiveConfigOptions, LiveRef, LiveView};
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]
 pub use page::{Page, PageRequest};
 #[cfg(all(feature = "seaorm", feature = "postgres"))]

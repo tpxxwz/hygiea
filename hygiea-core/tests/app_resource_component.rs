@@ -8,8 +8,8 @@
 use std::sync::{Arc, Mutex};
 
 use hygiea_core::app::{
-    AppErr, ConfigResource, ImmediateResourceComponent, Registry, ResourceId, Resources,
-    async_trait,
+    AppContext, AppErr, ConfigResource, ImmediateResourceComponent, Registry, RegistryConfig,
+    ResourceId, Resources, async_trait,
 };
 use hygiea_core::{Result, err};
 
@@ -27,6 +27,8 @@ struct FakeConfig {
 #[derive(Clone, Debug)]
 struct FakeResource {
     value: String,
+    /// from_config 拿到的应用名
+    app_name: String,
     events: EventLog,
 }
 
@@ -34,7 +36,7 @@ struct FakeResource {
 impl ConfigResource for FakeResource {
     type Config = FakeConfig;
 
-    async fn from_config(config: &FakeConfig) -> Result<Self> {
+    async fn from_config(config: &FakeConfig, app: &AppContext) -> Result<Self> {
         config
             .events
             .lock()
@@ -45,6 +47,7 @@ impl ConfigResource for FakeResource {
         }
         Ok(Self {
             value: config.value.clone(),
+            app_name: app.app_name.clone(),
             events: config.events.clone(),
         })
     }
@@ -117,6 +120,33 @@ async fn anonymous_instance_is_got_without_name() {
     assert_eq!(snapshot(&events), vec!["only:from_config", "only:close"]);
 }
 
+/// Registry 按 `[registry] app_name` 建 AppContext，组件 from_config 时拿到；`Registry::new()` 时是默认的 `hygiea`
+#[tokio::test]
+async fn from_config_gets_app_name() {
+    let events = EventLog::default();
+    let registry = Registry::with_config(RegistryConfig {
+        app_name: "demo".to_string(),
+        ..Default::default()
+    })
+    .add::<FakeComponent>(config(&events, "only"))
+    .on_ready(|res: Resources| async move {
+        assert_eq!(res.require::<FakeResource>()?.app_name, "demo");
+        assert_eq!(res.require::<AppContext>()?.app_name, "demo");
+        Err(shutdown_err())
+    });
+    let (result, _guard) = registry.run().await;
+    assert!(result.unwrap_err().is(AppErr::ComponentError));
+
+    let registry = Registry::new()
+        .add::<FakeComponent>(config(&events, "unnamed"))
+        .on_ready(|res: Resources| async move {
+            assert_eq!(res.require::<FakeResource>()?.app_name, "hygiea");
+            Err(shutdown_err())
+        });
+    let (result, _guard) = registry.run().await;
+    assert!(result.unwrap_err().is(AppErr::ComponentError));
+}
+
 /// 依赖方声明 `ResourceId::named::<R>(名字)`，Registry 把资源组件排在前面
 #[tokio::test]
 async fn provides_named_resource_for_dependency_ordering() {
@@ -184,6 +214,9 @@ async fn from_config_failure_fails_startup() {
     let (result, _guard) = registry.run().await;
     let err = result.unwrap_err();
     assert!(err.is(AppErr::ComponentStartFailed), "{err:#}");
-    assert!(format!("{err:#}").contains("test connect failure"), "{err:#}");
+    assert!(
+        format!("{err:#}").contains("test connect failure"),
+        "{err:#}"
+    );
     assert_eq!(snapshot(&events), vec!["p:from_config"]);
 }

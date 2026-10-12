@@ -128,7 +128,11 @@ async fn fetch<T: DeserializeOwned + Serialize + Send>(
     path: &str,
 ) -> Result<HttpResponse<ApiResult<T>>> {
     RequestConfig::plain(Method::GET, format!("{base}{path}"))
-        .send::<ApiResult<T>>(&ReqwestClient::from_config(&local_config()).await.unwrap())
+        .send::<ApiResult<T>>(
+            &ReqwestClient::from_config(&local_config(), &Default::default())
+                .await
+                .unwrap(),
+        )
         .await
 }
 

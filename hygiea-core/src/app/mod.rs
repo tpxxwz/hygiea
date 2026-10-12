@@ -156,6 +156,7 @@ use std::borrow::Cow;
 
 mod component;
 mod config;
+mod context;
 mod error;
 mod registry;
 mod resource_component;
@@ -164,6 +165,7 @@ mod signal;
 
 pub use component::{Component, Deferred, DeferredComponent, Immediate, ImmediateComponent};
 pub use config::{ConfigArgs, IntoRegistryConfig, RegistryConfig};
+pub use context::AppContext;
 pub use error::AppErr;
 /// 标在 `impl ImmediateComponent for ..` / `impl DeferredComponent for ..` 上，把 [`Component`] 的项
 /// （`Config`、`build`、`provides`、`depends_on`、`stop`、`shutdown_timeout`）和启动方法写在一个 impl 块里，

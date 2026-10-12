@@ -15,8 +15,9 @@ err_code_project_prefix = "001"
 
 [dev-dependencies]
 # db-sqlx-sqlite / http-axum：app 示例用的现成组件，SQLite 用内存库，不需要装数据库服务；
+# db-live-config：db_live_config 示例用的连接池动态配置能力；
 # full 带上 log、datetime-iana、redact 等 core feature；HTTP 客户端另开组件 feature
-hygiea = { workspace = true, features = ["full", "db-sqlx-sqlite", "http-axum", "http-client-reqwest"] }
+hygiea = { workspace = true, features = ["full", "db-sqlx-sqlite", "db-live-config", "http-axum", "http-client-reqwest"] }
 # app_basic / http_client_basic / http_axum_response 写 HTTP 路由用
 axum = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
@@ -55,6 +56,10 @@ path = "examples/app/config.rs"
 [[example]]
 name = "app_two_phase"
 path = "examples/app/two_phase.rs"
+
+[[example]]
+name = "db_live_config"
+path = "examples/db/live_config.rs"
 
 [[example]]
 name = "error_basic"

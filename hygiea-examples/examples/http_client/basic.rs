@@ -54,7 +54,7 @@ async fn main() -> Result<()> {
         let _ = axum::serve(listener, router).await;
     });
 
-    let client = ReqwestClient::from_config(&ReqwestConfig::default()).await?;
+    let client = ReqwestClient::from_config(&ReqwestConfig::default(), &Default::default()).await?;
     let params = LoginParams {
         username: "alice".to_string(),
         password: "s3cr3t".to_string(),
