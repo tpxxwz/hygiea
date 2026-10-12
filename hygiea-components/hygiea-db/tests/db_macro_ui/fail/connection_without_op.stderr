@@ -1,0 +1,74 @@
+error[E0277]: db! 拿不到 `&impl ConnectionTrait` 的表名，写成 db!(.., "op")
+ --> tests/db_macro_ui/fail/connection_without_op.rs:6:5
+  |
+6 |     db!(db.execute_unprepared("SELECT 1"))?;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |     |
+  |     into_model / into_tuple / into_json / find_by_statement / paginate 之后、连接上直接执行时没有实体，要自己写 op
+  |     required by a bound introduced by this call
+  |
+  = help: the trait `hygiea_db::seaorm::__private::TableStmt` is not implemented for `&impl ConnectionTrait`
+  = help: the following other types implement trait `hygiea_db::seaorm::__private::TableStmt`:
+            DeleteMany<E>
+            DeleteOne<E>
+            InsertMany<A>
+            SelectFive<E, F, G, H, I, TOP>
+            SelectFour<E, F, G, H, TOP>
+            SelectFourMany<E, F, G, H, TOP>
+            SelectSix<E, F, G, H, I, J, TOP>
+            SelectThree<E, F, G, TOP>
+          and $N others
+note: required by a bound in `hygiea_db::seaorm::__private::stmt_err`
+ --> src/seaorm/db.rs
+  |
+  |     pub fn stmt_err<S: TableStmt>(_: &S, at: &'static str) -> impl FnOnce() -> HyErr + use<S> {
+  |                        ^^^^^^^^^ required by this bound in `stmt_err`
+  = note: this error originates in the macro `$crate::db` which comes from the expansion of the macro `db` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: db! 拿不到 `&impl ConnectionTrait` 的表名，写成 db!(.., "op")
+ --> tests/db_macro_ui/fail/connection_without_op.rs:6:5
+  |
+6 |     db!(db.execute_unprepared("SELECT 1"))?;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ into_model / into_tuple / into_json / find_by_statement / paginate 之后、连接上直接执行时没有实体，要自己写 op
+  |
+  = help: the trait `hygiea_db::seaorm::__private::TableStmt` is not implemented for `&impl ConnectionTrait`
+  = help: the following other types implement trait `hygiea_db::seaorm::__private::TableStmt`:
+            DeleteMany<E>
+            DeleteOne<E>
+            InsertMany<A>
+            SelectFive<E, F, G, H, I, TOP>
+            SelectFour<E, F, G, H, TOP>
+            SelectFourMany<E, F, G, H, TOP>
+            SelectSix<E, F, G, H, I, J, TOP>
+            SelectThree<E, F, G, TOP>
+          and $N others
+note: required by a bound in `hygiea_db::seaorm::__private::stmt_err`
+ --> src/seaorm/db.rs
+  |
+  |     pub fn stmt_err<S: TableStmt>(_: &S, at: &'static str) -> impl FnOnce() -> HyErr + use<S> {
+  |                        ^^^^^^^^^ required by this bound in `stmt_err`
+  = note: this error originates in the macro `$crate::db` which comes from the expansion of the macro `db` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: db! 拿不到 `&impl ConnectionTrait` 的表名，写成 db!(.., "op")
+ --> tests/db_macro_ui/fail/connection_without_op.rs:6:5
+  |
+6 |     db!(db.execute_unprepared("SELECT 1"))?;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ into_model / into_tuple / into_json / find_by_statement / paginate 之后、连接上直接执行时没有实体，要自己写 op
+  |
+  = help: the trait `hygiea_db::seaorm::__private::TableStmt` is not implemented for `&impl ConnectionTrait`
+  = help: the following other types implement trait `hygiea_db::seaorm::__private::TableStmt`:
+            DeleteMany<E>
+            DeleteOne<E>
+            InsertMany<A>
+            SelectFive<E, F, G, H, I, TOP>
+            SelectFour<E, F, G, H, TOP>
+            SelectFourMany<E, F, G, H, TOP>
+            SelectSix<E, F, G, H, I, J, TOP>
+            SelectThree<E, F, G, TOP>
+          and $N others
+note: required by a bound in `hygiea_db::seaorm::__private::stmt_err`
+ --> src/seaorm/db.rs
+  |
+  |     pub fn stmt_err<S: TableStmt>(_: &S, at: &'static str) -> impl FnOnce() -> HyErr + use<S> {
+  |                        ^^^^^^^^^ required by this bound in `stmt_err`
+  = note: this error originates in the macro `$crate::db` which comes from the expansion of the macro `db` (in Nightly builds, run with -Z macro-backtrace for more info)

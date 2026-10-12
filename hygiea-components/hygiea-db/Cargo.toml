@@ -41,6 +41,8 @@ tempfile = { workspace = true }
 # #[container] 和启动容器。hygiea-test 只依赖 core，cargo publish --workspace 会把它排在组件前面发布，
 # 所以可以带版本号
 hygiea-test = { workspace = true, features = ["container"] }
+# db! 的编译期检查（tests/db_macro_ui.rs）
+trybuild = { workspace = true }
 
 [package.metadata.docs.rs]
 all-features = true

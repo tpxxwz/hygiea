@@ -1,0 +1,7 @@
+error: db! 的最后一步要是执行方法，比如 db!(user::Entity::find().all(db))
+  --> tests/db_macro_ui/fail/no_exec_method.rs:25:5
+   |
+25 |     db!(cake::Entity::find());
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the macro `$crate::db` which comes from the expansion of the macro `db` (in Nightly builds, run with -Z macro-backtrace for more info)

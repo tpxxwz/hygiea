@@ -85,8 +85,9 @@ impl<T> DbResultExt<T> for std::result::Result<T, DbErr> {
 /// | ActiveModel 的 `save`（主键 NotSet 插入，否则更新） | `ExecFailed` | 实体 |
 /// | `into_tuple` / `into_model` / `into_partial_model` / `into_json` 之后、`find_by_statement` | `QueryFailed` | 没有，必须写 op |
 /// | `paginate` 之后（分页器） | `QueryFailed` | 没有，必须写 op |
+/// | 连接上直接执行：`db.execute_unprepared` / `query_all` / `begin` 等（`db` 是 `&impl ConnectionTrait`） | `ExecFailed` | 没有，必须写 op |
 ///
-/// 其他写法（原生 SQL、`begin`、`load_many`、`cursor_by` 这种要先拿 `&mut` 再执行的）编译不过，用 `.db()`。
+/// 其他写法（`load_many`、`cursor_by` 这种要先拿 `&mut` 再执行的）编译不过，用 `.db()`。
 /// `stream` 只转开流这一步的错误，流里每一行的 `DbErr` 用 `.db()` 转
 #[macro_export]
 macro_rules! db {
@@ -193,7 +194,7 @@ pub mod __private {
     /// 拿得到表名的语句（[`Stmt::table`] 是 Some），`db!` 不写 op 时要求这个
     #[diagnostic::on_unimplemented(
         message = "db! 拿不到 `{Self}` 的表名，写成 db!(.., \"op\")",
-        label = "into_model / into_tuple / into_json / find_by_statement / paginate 之后没有实体，要自己写 op"
+        label = "into_model / into_tuple / into_json / find_by_statement / paginate 之后、连接上直接执行时没有实体，要自己写 op"
     )]
     pub trait TableStmt: Stmt {}
 
@@ -294,6 +295,16 @@ pub mod __private {
 
     impl<S: SelectorTrait> Stmt for SelectorRaw<S> {
         const KIND: Kind = Kind::Query;
+
+        fn table() -> Option<String> {
+            None
+        }
+    }
+
+    // 直接在连接上执行（`execute_unprepared`、`query_all`、`begin` 等）：连接池、事务都是 `&impl ConnectionTrait`，
+    // 宏把引用复制进变量，不会移走调用方的连接。原生 SQL 分不出增删改查，是 ExecFailed
+    impl<C: ConnectionTrait> Stmt for &C {
+        const KIND: Kind = Kind::Exec;
 
         fn table() -> Option<String> {
             None

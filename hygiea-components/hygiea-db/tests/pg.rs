@@ -683,6 +683,15 @@ mod postgres {
             "{e:#}"
         );
 
+        // 连接上直接执行：ExecFailed，拿不到表名，要写 op
+        let line = line!() + 1;
+        let e = db!(db.execute_unprepared("SELECT * FROM record"), "raw select").unwrap_err();
+        assert!(e.is(RepoErr::ExecFailed), "{e:#}");
+        assert_eq!(
+            op(&e),
+            format!("Db exec failed: raw select at {}:{line}", file!())
+        );
+
         // .db()：什么写法都能接，ExecFailed，op 是 .db() 所在的行（跨行时不是语句开头那行）
         let result = db.execute_unprepared("SELECT * FROM record").await;
         let line = line!() + 1;
