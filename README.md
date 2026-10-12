@@ -325,7 +325,7 @@ hygiea                         facade：重新导出全部内容，按 feature �
 | `hygiea` | 是 | 使用方唯一需要依赖的 crate。重新导出 core 和各组件，由 feature 决定编译哪些 |
 | `hygiea-core` | 是 | 应用框架；错误处理、日志、打码、日期时间、环境变量、字符串、WebSocket 客户端 |
 | `hygiea-macros` | 是 | `#[derive(hy_err)]` 和 `#[redact]` |
-| `hygiea-db` | 是 | 数据库连接池组件（PostgreSQL、SQLite） |
+| `hygiea-db` | 是 | 数据库连接池组件（PostgreSQL、SQLite）；SeaORM 的错误转换（`db!`）、事务、分页，用法见 crate 文档 |
 | `hygiea-redis` | 是 | Redis 连接池组件 |
 | `hygiea-http` | 是 | HTTP 服务组件 |
 | `hygiea-http-client` | 是 | reqwest HTTP 客户端及组件 |
@@ -402,12 +402,15 @@ pub enum LegacyErrors {
 | `99900003` | `BaseErr::JsonError` | JSON error: {{ cause }} |
 | `99900004` | `BaseErr::TemplateError` | Template error: {{ cause }} |
 | `99900005` | `BaseErr::EnvError` | Environment variable not set: {{ name }} |
-| `99910001` | `RepoErr::TransactionFailed` | Db transaction failed: {{ op }} |
-| `99910002` | `RepoErr::QueryFailed` | Db query failed: {{ op }} |
-| `99910003` | `RepoErr::InsertFailed` | Db insert failed: {{ op }} |
-| `99910004` | `RepoErr::UpdateFailed` | Db update failed: {{ op }} |
-| `99910005` | `RepoErr::DeleteFailed` | Db delete failed: {{ op }} |
-| `99910006` | `RepoErr::ExecFailed` | Db exec failed: {{ op }} |
+| `99900006` | `BaseErr::NotPositive` | {{ param }} must be greater than 0: {{ op }} |
+| `99910001` | `RepoErr::TransactionBeginFailed` | Db transaction begin failed: {{ op }} |
+| `99910002` | `RepoErr::TransactionCommitFailed` | Db transaction commit failed: {{ op }} |
+| `99910010` | `RepoErr::ExecFailed` | Db exec failed: {{ op }} |
+| `99910011` | `RepoErr::InsertFailed` | Db insert failed: {{ op }} |
+| `99910012` | `RepoErr::DeleteFailed` | Db delete failed: {{ op }} |
+| `99910013` | `RepoErr::UpdateFailed` | Db update failed: {{ op }} |
+| `99910014` | `RepoErr::QueryFailed` | Db query failed: {{ op }} |
+| `99910091` | `RepoErr::PageOutOfRange` | Db page out of range: page {{ page }}, page_size {{ page_size }} |
 | `99910101` | `HttpClientErr::ClientBuildFailed` | Http client build failed |
 | `99910111` | `HttpClientErr::InvalidUrl` | Invalid url: {{ url }} |
 | `99910112` | `HttpClientErr::InvalidParams` | Invalid query params: {{ method }} {{ url }} |

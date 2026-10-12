@@ -57,10 +57,12 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 
 | 文件 | 内容 |
 |---|---|
-| `hygiea-db/src/sqlx/`、`seaorm/` | 各框架专用的部分：`postgres.rs`、`sqlite.rs` 是连接池组件和对应的锁实现（PostgreSQL 用 advisory lock，SQLite 用进程内锁），再导出到 crate 根；`mod.rs` 是各数据库共用的部分：`transaction` 函数、`HyUtcDateTime` 的框架 trait 实现 |
+| `hygiea-db/src/sqlx/`、`seaorm/` | 各框架专用的部分：`pool/` 是连接池组件（一种数据库一个文件，再导出到 crate 根），`transaction.rs` 是事务函数，`datetime.rs` 是 `HyUtcDateTime` 的框架 trait 实现 |
+| `hygiea-db/src/seaorm/db.rs` | `db!` 和 `.db()`（`DbResultExt`）：SeaORM 的 `DbErr` 转成 `RepoErr`，`db!` 按语句类型选错误、op 带表名和调用位置 |
+| `hygiea-db/src/seaorm/page.rs`、`model.rs` | `find_page`（取一页再查总数）、`active_models`（`&[Model]` 转成 ActiveModel 给 `insert_many`） |
 | `hygiea-db/src/datetime.rs` | `HyUtcDateTime`：给 `UtcDateTime` 包一层（经 `OffsetDateTime` 转换，对应 `timestamptz`），开 `sqlx` 或 `seaorm` 就有，框架 trait 的实现在各框架模块里 |
-| `hygiea-db/src/error.rs` | `RepoErr`：按操作分的数据库错误（查询、插入、更新、删除、执行、事务） |
-| `hygiea-db/src/pg_advisory.rs` | 字符串 key 转 advisory lock 的 i64 key，sqlx 和 SeaORM 共用 |
+| `hygiea-db/src/page.rs` | `PageRequest` / `Page`：分页的请求和结果，sqlx 和 SeaORM 共用 |
+| `hygiea-db/src/error.rs` | `RepoErr`：按操作分的数据库错误，0x 事务、1x 执行语句（10 兜底，11-14 增删改查）、9x 参数 |
 | `hygiea-redis/src/fred_pool.rs` | 连接池组件；锁实现为 SET NX + token + 看门狗续期，释放用 Lua |
 | `hygiea-http/src/axum_server.rs` | HTTP 服务组件 |
 | `hygiea-http-client/src/lib.rs` | 按 feature 声明各实现的模块，不在 crate 根上再导出（以后加别的实现时名字不撞） |
