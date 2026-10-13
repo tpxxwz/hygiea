@@ -17,7 +17,6 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 |---|---|
 | `src/lib.rs` | `pub use hygiea_core::*;` 导出 core 的全部内容，再按 feature 导出各组件（core 不能依赖组件，所以组件只能由 facade 导出） |
 | `Cargo.toml` | core 的 feature 一对一转发，feature 之间的依赖关系只在 core 里写；组件 feature 引入对应的组件 crate |
-| `tests/config_template.rs` | 按各配置结构体解析 `docs/config-template.toml`，并确认模板里的值等于代码默认值（需要 `--all-features`） |
 
 ### hygiea-core 的模块
 
@@ -44,6 +43,12 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 | `src/component.rs` | `#[component]`：把 `impl ImmediateComponent` / `impl DeferredComponent` 块拆成 `impl Component` 和启动 trait 两个 impl，按 trait 填 `Kind`。`component` feature（core 的 `app` 会打开）开了才编译 |
 | `src/krate.rs` | 按调用方的依赖名决定生成代码里用 `::hygiea` 还是 `::hygiea_core`，`crate = "path"` 可以覆盖 |
 | `tests/` | trybuild 测试：`hy_err_ui`（`#[derive(hy_err)]`、`err!`）、`redact_ui`（`#[redact]`）、`component_ui`（`#[component]`，包括 Deferred 组件第一阶段读不到资源）、`lock_ui`（锁的两个 derive、`lock_key!`、`try_lock*` 只收注册过的 key）。dev-dependency 依赖 facade（只写 path：facade 反过来依赖本 crate），fixture 用 `hygiea::` 路径，和下游写法一样 |
+
+### 配置模板
+
+框架和每个组件的配置模板放在各自 crate 的 `config/` 下（`hygiea-core/config/registry.toml`、`hygiea-db/config/{sqlx-pg,seaorm-pg,sqlx-sqlite}.toml`、
+`hygiea-redis/config/redis.toml` ……），各 crate 的 `tests/config_template.rs` 按自己的配置结构体解析它（`deny_unknown_fields`），
+并确认模板里生效的值等于 `Default`。改了配置结构体，在同一个 crate 里改模板。
 
 ### 组件
 

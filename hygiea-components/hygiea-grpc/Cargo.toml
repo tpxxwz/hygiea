@@ -21,6 +21,8 @@ tracing = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
+# tests/config_template.rs 解析 config/ 下的配置模板
+toml = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
 
 [package.metadata.docs.rs]

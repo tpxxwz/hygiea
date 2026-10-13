@@ -83,6 +83,8 @@ regex = { workspace = true }
 tokio-tungstenite = { workspace = true, optional = true }
 
 [dev-dependencies]
+# tests/config_template.rs 解析 config/ 下的配置模板
+toml = { workspace = true }
 # 各测试共用的工具：日志捕获、本地 HTTP 服务等
 test-support = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

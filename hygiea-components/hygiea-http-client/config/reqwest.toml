@@ -1,0 +1,42 @@
+# ReqwestConfig（hygiea::http_client::reqwest_client，feature http-client-reqwest）的配置模板
+#
+# 列出全部配置项：生效的值等于代码默认值，默认不启用的可选项写成注释。复制到自己项目的 config/<env>.toml，
+# 删掉用不到的项、改需要改的值；只需要写和默认值不同的项。互斥的写法（二选一）都在这里，注释里写明了怎么切换。
+# 段名 [http_client] 是应用配置结构体里这个字段的名字（`struct AppConfig { http_client: ReqwestConfig, .. }`），按自己的改。
+# 通用规则（写错的配置项启动报错、配置来源的覆盖顺序、环境变量写法）见 hygiea 的 README「配置」。
+#
+# 本文件由所在 crate 的 tests/config_template.rs 按 ReqwestConfig 解析校验，改了配置结构体要同步改这里。
+
+[http_client]
+# ReqwestConfig 默认值；None 类型不写即为 None，需要时取消注释
+# user_agent = "my-app"
+# 默认请求头为空；需要时取消注释，重复头用数组
+# default_headers = { x-api-key = { value = "secret", sensitive = true }, accept = ["application/json", "text/plain"] }
+# 非 UTF-8 头值可用字节数组：default_headers = { x-binary = { bytes = [128, 65], sensitive = true } }
+cookie_store = false
+transparent_compression = true
+max_redirects = 10
+referer = true
+no_proxy = false
+# 不配超时即 None；需要时使用 Duration 的 secs / nanos 结构
+# timeout = { secs = 5, nanos = 0 }
+# read_timeout = { secs = 5, nanos = 0 }
+# connect_timeout = { secs = 2, nanos = 0 }
+# 默认代理列表为空；启用下方 [[http_client.proxies]] 前，删除或注释这一行
+proxies = []
+# 默认不覆盖 DNS；要指定域名解析，替换下一行的空数组
+resolve = []
+# resolve = [["example.com", ["127.0.0.1:80"]]]
+# debug 日志（url、params、body、响应原文和请求头、响应头，无视 enable_logging）：
+# 需要 feature http-client-reqwest-debug-log，只给测试用；没开这个 feature 时写了会报错
+# debug = false
+# 代理示例：取消注释时先删除上面的 proxies = []。每加一个 [[http_client.proxies]] 就追加一个代理
+# [[http_client.proxies]]
+# kind = "all" # all / http / https；不写默认 all
+# url = "http://127.0.0.1:7890"
+# 以下均为可选项；代理认证两种写法选一种
+# basic_auth = { username = "user", password = "pass" }
+# custom_http_auth = { value = "Bearer token", sensitive = true }
+# headers = { x-proxy-tag = "app" }
+# 仅这个代理排除的主机；区别于上面的全局 no_proxy = false
+# no_proxy = "localhost, .example.com"

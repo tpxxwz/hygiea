@@ -1,0 +1,47 @@
+# SqlxPgConfig（hygiea::db，feature db-sqlx-postgres；live_config 段要再开 db-live-config）的配置模板
+#
+# 列出全部配置项：生效的值等于代码默认值，默认不启用的可选项写成注释。复制到自己项目的 config/<env>.toml，
+# 删掉用不到的项、改需要改的值；只需要写和默认值不同的项。互斥的写法（二选一）都在这里，注释里写明了怎么切换。
+# 段名 [db] 是应用配置结构体里这个字段的名字（`struct AppConfig { db: SqlxPgConfig, .. }`），按自己的改。
+# 通用规则（写错的配置项启动报错、配置来源的覆盖顺序、环境变量写法）见 hygiea 的 README「配置」。
+# 连哪个库在 connect 段（PgConnectConfig，和 SeaORM 共用），池在 pool 段（PoolConfig，各数据库、框架共用）
+#
+# 本文件由所在 crate 的 tests/config_template.rs 按 SqlxPgConfig 解析校验，改了配置结构体要同步改这里。
+
+[db.connect]
+scheme = "postgres"
+host = "localhost"
+port = 5432
+username = "postgres"
+password = "postgres"
+database = "postgres"
+# 追加到连接 url 上的参数，不带开头的 ?，比如 "sslmode=require&application_name=myapp"
+params = ""
+# 连接后的 search_path，比如 "myschema,public"；空字符串表示用数据库的默认值
+schema_search_path = ""
+
+[db.pool]
+# 连接池。数字项不写时用默认值（注释里的值）
+# max_connections = 10
+# min_connections = 0
+# 从连接池拿连接最多等多久（秒），拿不到就报错
+# acquire_timeout_secs = 30
+# 空闲连接多久（秒）没用就关掉
+# idle_timeout_secs = 600
+# 一个连接最多用多久（秒）就换新的
+# max_lifetime_secs = 1800
+# 从连接池拿出连接前先检查一下它还能不能用
+test_before_acquire = true
+# true：启动时不连数据库，第一次用到时才连（数据库暂时连不上也能启动）
+connect_lazy = false
+
+[db.live_config]
+# 连接池的数据库配置表（动态配置，feature db-live-config）。默认不开，要用的连接池写 true。
+# 表名前缀是 [registry] app_name 加 _（比如 hygiea_config），见 docs/design/live-config.md
+enabled = false
+# 对一遍版本号的间隔（秒）。不写：PostgreSQL 60（兜底，变更靠 NOTIFY 推过来），SQLite 1（主要靠它）
+# poll_interval_secs = 60
+# 变更历史表（{app_name}_config_history）只留最新的多少行、隔多少分钟清一次（后台任务启动时先清一次）。
+# 两项要么都写、要么都不写（只写一个启动报错），都不写不删
+# history_keep_rows = 10000
+# history_trim_interval_mins = 60

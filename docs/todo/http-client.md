@@ -110,7 +110,7 @@ ttl_secs = 30
 - 用 `moka::future::Cache`（`future` feature，只在 `reqwest` feature 下引入）：`weigher` 按字节算容量，`Expiry` 给每条单独 TTL，`try_get_with` 让并发 miss 同一个 key 时只发一次
 - 并发去重只在读 + 写（`Auto` 命中规则、`ReadWrite`）时生效；`Refresh` 要强制发，`ReadOnly` 没命中的结果不共享，各发各的
 - 带重试时先查缓存，没命中再进重试循环；重试成功的 2xx 照常写入
-- 新增 `cache.rs`（`ResponseCache`、`CacheConfig`、`CacheRule`、`CacheMode`、key 计算）；组件按配置创建；同步 `docs/config-template.toml`
+- 新增 `cache.rs`（`ResponseCache`、`CacheConfig`、`CacheRule`、`CacheMode`、key 计算）；组件按配置创建；同步 `hygiea-http-client/config/reqwest.toml`
 
 **要定的**：
 

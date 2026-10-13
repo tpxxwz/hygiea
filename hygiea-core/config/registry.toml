@@ -1,0 +1,70 @@
+# RegistryConfig（hygiea::app，feature app）的配置模板
+#
+# 列出全部配置项：生效的值等于代码默认值，默认不启用的可选项写成注释。复制到自己项目的 config/<env>.toml，
+# 删掉用不到的项、改需要改的值；只需要写和默认值不同的项。互斥的写法（二选一）都在这里，注释里写明了怎么切换。
+# 框架的配置固定在 [registry] 段下（应用配置里的 registry 字段）。
+# 通用规则（写错的配置项启动报错、配置来源的覆盖顺序、环境变量写法）见 hygiea 的 README「配置」。
+#
+# 本文件由所在 crate 的 tests/config_template.rs 按 RegistryConfig 解析校验，改了配置结构体要同步改这里。
+
+[registry]
+# 应用名，小写下划线 [a-z][a-z0-9_]*。环境变量前缀要是它的大写（比如 dict_jp 对应 ConfigArgs::env_prefix("DICT_JP")），
+# 对不上启动时报错。数据库连接的 application_name、动态配置的表名前缀用它
+app_name = "hygiea"
+# 关闭时每个组件最多等多久（秒），超时的组件任务会被 abort，接着关下一个。
+# 组件自己配了 shutdown_timeout_secs 的以组件为准
+shutdown_timeout_secs = 15
+# 收到退出信号后，先照常服务多久（秒）再开始关组件。给 k8s 用：Pod 从 Service 摘除要几秒，
+# 这段时间里还会有新请求打进来，一般配 5；本地开发保持 0
+shutdown_delay_secs = 0
+
+# -------------------------------------------------------------------------------------
+# 日志：TracingConfig（hygiea::log）
+# -------------------------------------------------------------------------------------
+[registry.tracing]
+# 全局日志级别 / filter，console 和文件 layer 没单独配 env_filter 时用它。
+# 语法同 tracing 的 EnvFilter："info"、"warn,my_crate=debug,sqlx=off"。
+# 注意：不带 = 的单独一项如果不是级别名，会被当成 target 名（"infoo" 表示只输出 target 叫 infoo 的日志）
+root_env_filter = "info"
+# 文件 layer 的根目录，相对路径按启动时的当前目录解析。各文件 layer 的 dir 拼在它下面
+root_dir = "./logs"
+# 日志时间格式，可选：
+#   WithOffset.YmdTHMS3F   2024-01-06T01:00:00.000+08:00（默认）
+#   WithOffset.YmdHMS3F    2024-01-06 01:00:00.000 +08:00
+#   WithoutOffset.YmdHMS3F 2024-01-06 01:00:00.000
+#   WithoutOffset.YmdHMS   2024-01-06 01:00:00
+#   WithoutOffset.YmdHMSnosep / Ymd / Ymdnosep / HMS / Y
+time_format = "WithOffset.YmdTHMS3F"
+# true：日志时间用 UTC；false：用系统本地时区（TZ 环境变量 → 系统设置 → UTC）
+utc_time = false
+
+[registry.tracing.console]
+# 关掉控制台输出。关了之后至少要有一个启用的文件 layer，否则启动报 NoOutput
+disable = false
+# 控制台单独的 filter，空字符串表示用 root_env_filter
+env_filter = ""
+# 是否输出 ANSI 颜色。不写时自动判断：stdout 是终端且没设 NO_COLOR 才输出颜色，
+# 被 docker、journald、重定向收集时不输出。写了就按写的来
+# ansi = true
+
+# 文件输出默认没有 layer。需要时取消注释；可以写多个 [[registry.tracing.layers]]
+# [[registry.tracing.layers]]
+# 关掉这个 layer（配置保留，不生效）
+# disable = false
+# 这个 layer 单独的 filter，空字符串表示用 root_env_filter
+# env_filter = ""
+# 日志目录，拼在 root_dir 下面；空字符串表示直接写在 root_dir 里；写绝对路径时不拼 root_dir
+# dir = ""
+# 文件名 = 前缀 + （滚动时的日期）+ 后缀，比如 app.log、app.2024-01-06.log。
+# 同一目录下多个 layer 的文件名不能互相匹配（比如 app 和 app-error），启动时会报错
+# filename_prefix = "app"
+# filename_suffix = "log"
+# true：后台线程写文件，业务线程不等磁盘；队列上限 12.8 万行，满了新日志直接丢弃。
+# false：在打日志的线程里同步写，不丢日志，但磁盘慢时会卡住 tokio worker 线程
+# non_blocking = true
+# 滚动周期，区分大小写：Minutely / Hourly / Daily / Weekly / Never
+# rolling = "Never"
+# 最多保留几个日志文件。不写就不清理（和 tracing-appender 一致）。
+# 配了 n 时，启动和每次滚动时把同目录下匹配的文件删到只剩 n-1 个再建新文件；
+# rolling = "Never" 时只有一个文件，配 1 等于每次启动清空
+# max_log_files = 7

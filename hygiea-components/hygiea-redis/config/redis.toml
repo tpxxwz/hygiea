@@ -1,0 +1,50 @@
+# RedisConfig（hygiea::redis，feature redis-fred）的配置模板
+#
+# 列出全部配置项：生效的值等于代码默认值，默认不启用的可选项写成注释。复制到自己项目的 config/<env>.toml，
+# 删掉用不到的项、改需要改的值；只需要写和默认值不同的项。互斥的写法（二选一）都在这里，注释里写明了怎么切换。
+# 段名 [redis] 是应用配置结构体里这个字段的名字（`struct AppConfig { redis: RedisConfig, .. }`），按自己的改。
+# 通用规则（写错的配置项启动报错、配置来源的覆盖顺序、环境变量写法）见 hygiea 的 README「配置」。
+#
+# 本文件由所在 crate 的 tests/config_template.rs 按 RedisConfig 解析校验，改了配置结构体要同步改这里。
+
+[redis]
+# 部署模式：standalone（单机）/ cluster（集群）/ sentinel（哨兵），写错启动时报错
+mode = "standalone"
+# standalone 模式连的地址；cluster / sentinel 模式不用，改填 nodes
+host = "localhost"
+port = 6379
+# cluster 模式填集群节点，sentinel 模式填哨兵节点；这两种模式下不能为空
+nodes = []
+# sentinel 模式：主节点的服务名，以及连哨兵用的用户名密码（空字符串表示不需要）
+sentinel_service_name = "mymaster"
+sentinel_username = ""
+sentinel_password = ""
+# 连 Redis 的用户名密码，空字符串表示不需要
+username = ""
+password = ""
+# 数据库编号（0～15）；cluster 模式不支持选库，这项不生效
+db = 0
+# 连接池大小
+pool_size = 5
+# 建立连接的超时（秒），0 表示不设超时
+connect_timeout_secs = 5
+# 单条命令的默认超时（秒），0 表示不设超时
+command_timeout_secs = 0
+# 命令失败时最多尝试几次（含第一次）
+max_command_attempts = 3
+# cluster 模式下 MOVED / ASK 重定向最多跟几次
+max_redirections = 5
+# 断线重连，按指数退避：从 reconnect_min_delay_ms 开始，每次乘 reconnect_multiplier，
+# 最长 reconnect_max_delay_ms；reconnect_max_attempts 是最多重连几次（0 表示不限次数）
+reconnect_max_attempts = 0
+reconnect_min_delay_ms = 1
+reconnect_max_delay_ms = 30000
+reconnect_multiplier = 2
+
+# cluster / sentinel 模式的节点写法（和上面的 nodes = [] 二选一）：
+# [[redis.nodes]]
+# host = "10.0.0.1"
+# port = 6379
+# [[redis.nodes]]
+# host = "10.0.0.2"
+# port = 6379

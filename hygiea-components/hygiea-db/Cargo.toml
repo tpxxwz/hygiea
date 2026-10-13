@@ -44,6 +44,8 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
+# tests/config_template.rs 解析 config/ 下的配置模板
+toml = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 serde_json = { workspace = true }
 tempfile = { workspace = true }

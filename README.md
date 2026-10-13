@@ -164,7 +164,21 @@ async fn main() -> Result<()> {
 - 启动分两个阶段：先连上 SQLite、HTTP 绑好端口，然后 HTTP 才开始接请求；要在接请求之前做的初始化放进 `before_activate`（见 `app_two_phase`）。
 - 按 Ctrl+C 退出时，先停 HTTP（处理完手上的请求），再按启动的逆序关连接池。
 
-- 框架和所有组件的全部配置项、默认值和说明见 [docs/config-template.toml](docs/config-template.toml)，复制过去删掉用不到的段、改需要改的值即可。
+- 框架和每个组件的全部配置项、默认值和说明，在各自 crate 的 `config/` 下（模板里生效的值就是代码默认值，可选项写成注释，互斥的写法写在同一份里、注释说明怎么切换），复制过去删掉用不到的项、改需要改的值即可；段名按自己 `AppConfig` 的字段名改：
+
+  | 配置 | 模板 |
+  |---|---|
+  | `RegistryConfig`（`[registry]`，框架和日志） | [hygiea-core/config/registry.toml](hygiea-core/config/registry.toml) |
+  | `SqlxPgConfig`（`db-sqlx-postgres`） | [hygiea-components/hygiea-db/config/sqlx-pg.toml](hygiea-components/hygiea-db/config/sqlx-pg.toml) |
+  | `SeaOrmPgConfig`（`db-seaorm-postgres`） | [hygiea-components/hygiea-db/config/seaorm-pg.toml](hygiea-components/hygiea-db/config/seaorm-pg.toml) |
+  | `SqlxSqliteConfig`（`db-sqlx-sqlite`） | [hygiea-components/hygiea-db/config/sqlx-sqlite.toml](hygiea-components/hygiea-db/config/sqlx-sqlite.toml) |
+  | `RedisConfig`（`redis-fred`） | [hygiea-components/hygiea-redis/config/redis.toml](hygiea-components/hygiea-redis/config/redis.toml) |
+  | `AxumConfig`（`http-axum`） | [hygiea-components/hygiea-http/config/axum.toml](hygiea-components/hygiea-http/config/axum.toml) |
+  | `ReqwestConfig`（`http-client-reqwest`） | [hygiea-components/hygiea-http-client/config/reqwest.toml](hygiea-components/hygiea-http-client/config/reqwest.toml) |
+  | `TonicConfig`（`grpc-tonic`） | [hygiea-components/hygiea-grpc/config/tonic.toml](hygiea-components/hygiea-grpc/config/tonic.toml) |
+  | `AwsConfig`（`aws-s3`） | [hygiea-components/hygiea-aws/config/aws.toml](hygiea-components/hygiea-aws/config/aws.toml) |
+
+- 配置的通用规则：所有配置项都可以不写，不写用默认值；写了不存在的配置项（拼错也算）启动加载配置时报错，不会被静默忽略。
 - 配置目录默认是相对当前目录的 `config/`，可以用命令行 `-d <目录>`（`--config-dir`）或代码里 `ConfigArgs::from_cli().default_config_dir(..)` 换，命令行优先。
 
 这段就是 `app_basic` 示例（示例里用 `default_config_dir` 指向 `hygiea-examples/config/app_basic/`）。自己实现组件、依赖排序、多实例、全局状态、后台任务、配置加载、两阶段启动各有一个单独的示例，见下文「示例」。

@@ -21,6 +21,8 @@ tracing = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
+# tests/config_template.rs 解析 config/ 下的配置模板
+toml = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 serde_json = { workspace = true }
 # #[container] 和启动容器。hygiea-test 只依赖 core，cargo publish --workspace 会把它排在组件前面发布，

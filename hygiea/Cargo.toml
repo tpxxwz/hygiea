@@ -22,12 +22,6 @@ hygiea-http-client = { workspace = true, optional = true }
 hygiea-grpc = { workspace = true, optional = true }
 hygiea-aws = { workspace = true, optional = true }
 
-
-[dev-dependencies]
-# tests/config_template.rs 解析 docs/config-template.toml
-toml = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
-
 [features]
 default = []  # 用户明确选择需要的功能
 
