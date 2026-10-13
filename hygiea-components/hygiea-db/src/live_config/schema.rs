@@ -47,7 +47,7 @@ pub(crate) struct Tables {
 
 impl Tables {
     pub(crate) fn new(app_name: &str) -> Result<Self> {
-        if !is_ident(app_name) {
+        if !crate::ddl::is_ident(app_name) {
             return Err(err!(
                 AppErr::InvalidConfig,
                 format!(
@@ -189,17 +189,15 @@ impl Tables {
     }
 }
 
-/// `[a-z][a-z0-9_]*`
-fn is_ident(s: &str) -> bool {
-    let mut chars = s.chars();
-    chars.next().is_some_and(|c| c.is_ascii_lowercase())
-        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-}
-
 // ---- 检查、建表 -------------------------------------------------------------------
 
 /// 三张表现在的样子：表名 → 按顺序的 (列名, 类型)，不在的表没有这一项
 type Columns = HashMap<String, Vec<(String, String)>>;
+
+#[cfg(feature = "postgres")]
+async fn postgres_columns(conn: &mut PgConnection, tables: &Tables) -> sqlx::Result<Columns> {
+    crate::ddl::postgres_columns(conn, tables.table_names().to_vec()).await
+}
 
 enum State {
     Absent,
@@ -297,7 +295,7 @@ pub(crate) async fn ensure_postgres(conn: &mut PgConnection, tables: &Tables) ->
 
     let mut tx = conn.begin().await.wrap_err(check_err)?;
     sqlx::query("SELECT pg_advisory_xact_lock($1)")
-        .bind(advisory_key(&tables.config()))
+        .bind(crate::ddl::advisory_key(&tables.config()))
         .execute(&mut *tx)
         .await
         .wrap_err(check_err)?;
@@ -322,23 +320,6 @@ pub(crate) async fn ensure_postgres(conn: &mut PgConnection, tables: &Tables) ->
     created(result, tables, backend)
 }
 
-#[cfg(feature = "postgres")]
-async fn postgres_columns(conn: &mut PgConnection, tables: &Tables) -> sqlx::Result<Columns> {
-    let rows: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT table_name::text, column_name::text, udt_name::text FROM information_schema.columns \
-         WHERE table_schema = current_schema() AND table_name = ANY($1) \
-         ORDER BY table_name, ordinal_position",
-    )
-    .bind(tables.table_names().to_vec())
-    .fetch_all(&mut *conn)
-    .await?;
-    let mut columns = Columns::new();
-    for (table, column, ty) in rows {
-        columns.entry(table).or_default().push((column, ty));
-    }
-    Ok(columns)
-}
-
 /// 库里已有的同名函数、触发器（触发器挂在哪张表上都算）
 #[cfg(feature = "postgres")]
 async fn postgres_objects(conn: &mut PgConnection, tables: &Tables) -> sqlx::Result<Vec<String>> {
@@ -354,15 +335,6 @@ async fn postgres_objects(conn: &mut PgConnection, tables: &Tables) -> sqlx::Res
     .bind(tables.triggers(Backend::Postgres))
     .fetch_all(&mut *conn)
     .await
-}
-
-/// advisory lock 的 key：按配置表名算的 FNV-1a，同一个应用名（前缀）的实例互斥，不同的互不影响
-#[cfg(feature = "postgres")]
-fn advisory_key(name: &str) -> i64 {
-    let hash = name.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
-        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
-    });
-    hash as i64
 }
 
 // ---- SQLite ------------------------------------------------------------------

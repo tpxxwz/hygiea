@@ -45,6 +45,7 @@
 |---|---|
 | `app` | 应用框架，见上文（会带上 `log`） |
 | `log` | tracing 初始化：控制台和按时间滚动的文件输出、过滤，可以脱离 `app` 单独用（会带上 `datetime-iana`） |
+| `lock` | 分布式锁的 trait（`hygiea::lock::DistributedLock`）和 key 的注册（`#[derive(hy_lock_type)]`、`#[derive(hy_lock_key)]`、`lock_key!`），后端由组件实现（见 `db-lock`），见下文「分布式锁」 |
 | `redact` | 日志打码：`#[redact]` 属性，标了 `#[redact(mask)]` / `#[redact(skip)]` 的字段只在序列化进日志时打码（任意嵌套层级都生效），正常序列化不受影响 |
 | `datetime-iana` | IANA 时区和系统本地时间（`*_local` 方法） |
 | `datetime-chrono` | 和 chrono 互相转换 |
@@ -64,6 +65,8 @@
 | `db-sqlx-sqlite` | `hygiea-db`（`sqlx` + `sqlite`） | `hygiea::db::SqlxSqliteComponent` / `SqlxSqlitePool` |
 | `db-seaorm-postgres` | `hygiea-db`（`seaorm` + `postgres`） | `hygiea::db::SeaOrmPgComponent` / `SeaOrmPgPool` |
 | `db-live-config` | `hygiea-db`（`live-config`），和上面的连接池组合一起开 | 连接池上的 `live_config` / `live_config_all`：数据库配置表，改了表程序自动拿到新值（`hygiea::db::LiveConfig` 等） |
+| `db-lock` | `hygiea-db`（`lock`），带上 `lock`，和 PostgreSQL 连接池组合一起开 | PG 连接池实现 `DistributedLock`：整数 key 用原生 advisory lock；字符串 key 返回 `Unsupported`。SQLite 还没有实现 |
+| `db-lock-table` | `hygiea-db`（`lock-table`），带上 `db-lock` | PG 的字符串 key：启动时建 `{app_name}_lock` 表，用行锁实现 |
 | `redis-fred` | `hygiea-redis`（`fred`） | `hygiea::redis::RedisComponent` / `FredRedisPool` |
 | `http-axum` | `hygiea-http`（`axum`） | `hygiea::http::AxumComponent` |
 | `http-client-reqwest` | `hygiea-http-client`（`reqwest`） | `hygiea::http_client::reqwest_client::ReqwestComponent` / `ReqwestConfig`，请求 API 也在这个模块；在 `Resources` 中提供 `ReqwestClient` |
@@ -206,6 +209,46 @@ fn main() {
 
 `Display` 只输出模板渲染结果，这是给客户端看的；`{:#}` 会在后面接上 `source` 链，用于服务端日志。
 
+### 分布式锁
+
+`lock` feature 提供 trait 和 key，后端由组件实现（目前是 `db-lock` 的 PostgreSQL 连接池）。锁不可重入，拿不到返回 `Ok(None)`。
+key 有三种，锁类型和字符串 key 都要注册，编号的规则和错误码一样（项目前缀 3 位 + 模块前缀 + 编号，共 9 位，和错误码共用项目前缀），
+两个 derive 共用一套编号，同模块编译期、跨 crate 启动时查重：
+
+```rust
+use hygiea::lock::{DistributedLock, hy_lock_key, hy_lock_type, lock_key};
+
+#[derive(hy_lock_type)]
+#[lock_module_prefix = "02"]
+pub enum OrderLockType {
+    #[lock_type(code = "0001")]
+    Pay,                                                   // 001 02 0001 = 001020001
+}
+
+#[derive(hy_lock_key)]
+#[lock_module_prefix = "02"]
+pub enum OrderLockKey {
+    #[lock_key(code = "0002", tpl = "settle:{{ day }}")]
+    Settle,                                                // key：001020002:settle:<day>
+}
+
+async fn run(db: &impl DistributedLock, order_id: u32, day: &str) -> hygiea::Result<()> {
+    // 锁类型 + i32：PG 上是原生的 pg_try_advisory_xact_lock(int, int)
+    if let Some(guard) = db.try_lock_i32(OrderLockType::Pay, order_id).await? {
+        guard.release().await?;
+    }
+    // 任意 i64，不用注册：PG 上是 pg_try_advisory_xact_lock(bigint)
+    let _ = db.try_lock_i64(42).await?;
+    // 字符串 key（db-lock-table）：参数的写法和 err! 一样，对不上编译报错；阻塞版最多等 timeout
+    let _ = db.lock(lock_key!(OrderLockKey::Settle, day), std::time::Duration::from_secs(3)).await?;
+    Ok(())
+}
+```
+
+- 不写模块前缀时编号 6 位；`999` 段给 hygiea 自己（3 位内部模块前缀 + 3 位编号），`999999999` 留给 `try_lock_i64` 默认实现转成的字符串 key
+- 模板有多个变量时，值里不要带模板里的分隔符（`{{ a }}:{{ b }}` 下 `"x:y"` + `"z"` 和 `"x"` + `"y:z"` 是同一把锁）
+- 后端不提供的方法返回 `LockErr::Unsupported`；设计说明见 [docs/design/lock.md](docs/design/lock.md)
+
 ### HTTP 与日志打码
 
 需要 `http-client-reqwest` feature。每次请求在 INFO 级别打 `http call start` / `http call success`，失败打 WARN（可配置）。标了 `#[redact(mask)]` 的字段在这些日志里显示为 `"***"`（包括 params、请求体、URL，以及 `send` 解码出的响应体），实际发送和接收的仍是真实值。非 2xx 和解码失败的响应原样记录，因为排查问题需要看原文。
@@ -325,9 +368,9 @@ hygiea                         facade：重新导出全部内容，按 feature �
 | crate | 发布 | 职责 |
 |---|---|---|
 | `hygiea` | 是 | 使用方唯一需要依赖的 crate。重新导出 core 和各组件，由 feature 决定编译哪些 |
-| `hygiea-core` | 是 | 应用框架；错误处理、日志、打码、日期时间、环境变量、字符串、WebSocket 客户端 |
-| `hygiea-macros` | 是 | `#[derive(hy_err)]` 和 `#[redact]` |
-| `hygiea-db` | 是 | 数据库连接池组件（PostgreSQL、SQLite）；SeaORM 的错误转换（`db!`）、事务、分页；连接池的数据库配置表（动态配置，[设计说明](docs/design/live-config.md)）。用法见 crate 文档 |
+| `hygiea-core` | 是 | 应用框架；错误处理、日志、打码、分布式锁的 trait、日期时间、环境变量、字符串、WebSocket 客户端 |
+| `hygiea-macros` | 是 | `#[derive(hy_err)]`、`#[derive(hy_lock_type)]` / `#[derive(hy_lock_key)]`、`#[component]` 和 `#[redact]` |
+| `hygiea-db` | 是 | 数据库连接池组件（PostgreSQL、SQLite）；SeaORM 的错误转换（`db!`）、事务、分页；连接池的数据库配置表（动态配置，[设计说明](docs/design/live-config.md)）；PG 连接池的分布式锁（[设计说明](docs/design/lock.md)）。用法见 crate 文档 |
 | `hygiea-redis` | 是 | Redis 连接池组件 |
 | `hygiea-http` | 是 | HTTP 服务组件 |
 | `hygiea-http-client` | 是 | reqwest HTTP 客户端及组件 |
@@ -341,7 +384,7 @@ hygiea                         facade：重新导出全部内容，按 feature �
 
 各 crate 的模块说明，以及测试和示例放在哪：[docs/architecture.md](docs/architecture.md)。
 
-使用方不需要额外依赖（比如 `linkme`、`serde_json`）。宏生成的代码跟随你依赖时用的名字：依赖 `hygiea`、给它改名、或者只依赖 `hygiea-core` 都可以。需要覆盖时用 `#[hy_err(crate = "path")]` / `#[redact(crate = "path")]`。
+使用方不需要额外依赖（比如 `linkme`、`serde_json`）。宏生成的代码跟随你依赖时用的名字：依赖 `hygiea`、给它改名、或者只依赖 `hygiea-core` 都可以。需要覆盖时用 `#[hy_err(crate = "path")]` / `#[hy_lock_type(crate = "path")]` / `#[hy_lock_key(crate = "path")]` / `#[redact(crate = "path")]`。
 
 ## 错误码体系
 
@@ -389,12 +432,13 @@ pub enum LegacyErrors {
   | 区间 | 给谁 |
   |---|---|
   | `000`、`999` | `BaseErr`：不需要 feature 的模块，没有模块前缀，5 位编号。只用 `000xx`，兜底的 `SysErr` 是 `99999`；别的 5 位码会落进其他模块的区间 |
-  | `001`～`089` | core：app `001`、log `002` |
+  | `001`～`089` | core：app `001`、log `002`、lock `003` |
   | `090`～`099` | core 的测试（`hygiea-core/tests/` 里自定义的错误 enum） |
   | `100`～`799` | components：db（`RepoErr`）`100`、http-client（`HttpClientErr`）`101` |
   | `800`～`998` | hygiea-test：http_mock `800`（构建）、`801`（运行时） |
 
 - 同一模块内重复会编译报错；跨模块或跨 crate 的重复在启动时检查（进程打印重复的错误码后以状态码 1 退出）。
+- 分布式锁的编号（锁类型、字符串 key）用同样的分段和查重规则，但是另一套编号，和错误码互不影响；hygiea 自己的锁编号也按上面内部模块前缀的区间分（core 的测试用 `090`～`099`，db 的测试用 `100`）。
 - HTTP 组件（`hygiea::http`）的错误响应：状态码一律 200，错误放在 body 的 `code` / `msg`。业务错误原样返回模板渲染出的消息；`999` 开头的框架内置错误模板参数里可能有内部信息，对外统一换成 `SysErr`（"System Error"），原错误只记在服务端日志里。输入校验这类要给用户看的错误，用项目自己前缀的错误码定义。
 
 | 错误码 | 变体 | 模板 |
@@ -405,6 +449,10 @@ pub enum LegacyErrors {
 | `99900004` | `BaseErr::TemplateError` | Template error: {{ cause }} |
 | `99900005` | `BaseErr::EnvError` | Environment variable not set: {{ name }} |
 | `99900006` | `BaseErr::NotPositive` | {{ param }} must be greater than 0: {{ op }} |
+| `99900301` | `LockErr::AcquireFailed` | Acquire lock failed: {{ key }} |
+| `99900302` | `LockErr::ReleaseFailed` | Release lock failed: {{ key }} |
+| `99900303` | `LockErr::InvalidKey` | Invalid lock key: {{ cause }} |
+| `99900304` | `LockErr::Unsupported` | Unsupported lock operation: {{ op }} |
 | `99910001` | `RepoErr::TransactionBeginFailed` | Db transaction begin failed: {{ op }} |
 | `99910002` | `RepoErr::TransactionCommitFailed` | Db transaction commit failed: {{ op }} |
 | `99910010` | `RepoErr::ExecFailed` | Db exec failed: {{ op }} |
@@ -418,6 +466,8 @@ pub enum LegacyErrors {
 | `99910024` | `RepoErr::LiveConfigCreateFailed` | Db live config tables create failed: {{ table }} |
 | `99910025` | `RepoErr::LiveConfigSchemaMismatch` | Db live config schema mismatch: {{ table }} |
 | `99910026` | `RepoErr::LiveConfigDisabled` | Db live config not enabled on this pool |
+| `99910031` | `RepoErr::LockTableCreateFailed` | Db lock table create failed: {{ table }} |
+| `99910032` | `RepoErr::LockTableSchemaMismatch` | Db lock table schema mismatch: {{ table }} |
 | `99910091` | `RepoErr::PageOutOfRange` | Db page out of range: page {{ page }}, page_size {{ page_size }} |
 | `99910101` | `HttpClientErr::ClientBuildFailed` | Http client build failed |
 | `99910111` | `HttpClientErr::InvalidUrl` | Invalid url: {{ url }} |

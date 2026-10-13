@@ -15,6 +15,8 @@ use crate::config::{PG_POOL_SIZE, PgConnectConfig, PoolConfig};
 use crate::live_config::{
     LiveConfigOptions, LiveConfigSource, Store, impl_live_config, live_config_source_for,
 };
+#[cfg(feature = "lock")]
+use crate::lock::{PgLock, impl_pg_lock};
 
 // ---- config -----------------------------------------------------------------
 
@@ -101,6 +103,9 @@ pub struct SeaOrmPgPool {
     #[cfg(feature = "live-config")]
     /// 配置里没开是 `None`
     live_config: Option<LiveConfigSource>,
+    /// 分布式锁，用底层的 sqlx 池
+    #[cfg(feature = "lock")]
+    locker: PgLock,
 }
 
 #[async_trait]
@@ -129,10 +134,19 @@ impl ConfigResource for SeaOrmPgPool {
             .await
             .wrap_err(|| err!(AppErr::ConnectFailed, target.clone()))?;
         tracing::info!("Database connection established");
+        // Database::connect 按 postgres:// 建的，一定是 PG 连接池，get_postgres_connection_pool 不会 panic
+        #[cfg(feature = "lock")]
+        let locker = PgLock::new(conn.get_postgres_connection_pool().clone(), registry_config)?;
+        #[cfg(feature = "lock")]
+        if !config.pool.connect_lazy {
+            locker.prepare().await?;
+        }
         Ok(Self {
             inner: conn,
             #[cfg(feature = "live-config")]
             live_config,
+            #[cfg(feature = "lock")]
+            locker,
         })
     }
 
@@ -153,6 +167,9 @@ impl ConfigResource for SeaOrmPgPool {
 
 #[cfg(feature = "live-config")]
 impl_live_config!(SeaOrmPgPool);
+
+#[cfg(feature = "lock")]
+impl_pg_lock!(SeaOrmPgPool);
 
 impl std::ops::Deref for SeaOrmPgPool {
     type Target = DatabaseConnection;

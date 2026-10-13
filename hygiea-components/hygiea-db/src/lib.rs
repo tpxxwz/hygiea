@@ -85,10 +85,17 @@
 mod config;
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]
 mod datetime;
+#[cfg(any(
+    feature = "live-config",
+    all(feature = "lock-table", feature = "postgres")
+))]
+mod ddl;
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]
 mod error;
 #[cfg(all(feature = "live-config", any(feature = "postgres", feature = "sqlite")))]
 pub mod live_config;
+#[cfg(all(feature = "lock", feature = "postgres"))]
+pub mod lock;
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]
 mod page;
 #[cfg(feature = "seaorm")]

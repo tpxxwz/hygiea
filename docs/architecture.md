@@ -30,6 +30,7 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 | `string` | 常开 | 缓存的正则、模板渲染，`fmt_tpl!` / `fmt_tpl_once!` / `fmt_pos!` 宏 |
 | `log` | `log` | 日志配置和初始化 |
 | `app` | `app` | 应用框架：组件（`Component` 加上 `ImmediateComponent` / `DeferredComponent` 两种启动方式）、注册、依赖排序、两阶段启动（`before_activate` / `on_ready`）、优雅退出；`ConfigResource` + `ImmediateResourceComponent<R>`（一个配置建一个资源的通用组件，`resource_component.rs`）；`Resources` 持有 `RegistryConfig`（`registry_config()`，三个阶段视图都能取，建资源时传给 `from_config`）；`#[component]` 宏从这里导出。设计说明见 `docs/design/app.md` |
+| `lock` | `lock` | 分布式锁的抽象：`mod.rs` 是 `DistributedLock` trait（后端最少实现 `try_lock`，其余默认一层调一层）和 `lock_key!`，`key.rs` 是 key 类型（`LockKeyI32` / `LockKeyI64` / `LockType` / `LockKey`），`registry.rs` 是锁编号的注册表（启动查重、字符串 key 的模板），`guard.rs` 是 `LockGuard`，`error.rs` 是 `LockErr`。设计说明见 `docs/design/lock.md` |
 | `net` | `ws-client` | WebSocket 客户端 |
 
 ### hygiea-macros
@@ -37,10 +38,12 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 | 文件 | 内容 |
 |---|---|
 | `src/error.rs` | `#[derive(hy_err)]`：校验错误码和模板，生成错误码注册 |
+| `src/lock.rs` | `#[derive(hy_lock_type)]` / `#[derive(hy_lock_key)]`：锁类型和字符串 key 的编号、模板，生成注册项（两个 derive 共用一套编号）。`lock` feature（core 的 `lock` 会打开）开了才编译 |
+| `src/prefix.rs`、`src/template.rs` | 带编号的 derive（`hy_err` 和锁的两个）共用的部分：enum 上的前缀属性、Cargo.toml 的项目前缀、999 的规则；模板的语法检查和变量 |
 | `src/redact.rs` | `#[redact]`：字段打码、跳过。`redact` feature 开了才编译 |
 | `src/component.rs` | `#[component]`：把 `impl ImmediateComponent` / `impl DeferredComponent` 块拆成 `impl Component` 和启动 trait 两个 impl，按 trait 填 `Kind`。`component` feature（core 的 `app` 会打开）开了才编译 |
 | `src/krate.rs` | 按调用方的依赖名决定生成代码里用 `::hygiea` 还是 `::hygiea_core`，`crate = "path"` 可以覆盖 |
-| `tests/` | trybuild 测试：`hy_err_ui`（`#[derive(hy_err)]`、`err!`）、`redact_ui`（`#[redact]`）、`component_ui`（`#[component]`，包括 Deferred 组件第一阶段读不到资源）。dev-dependency 依赖 facade（只写 path：facade 反过来依赖本 crate），fixture 用 `hygiea::` 路径，和下游写法一样 |
+| `tests/` | trybuild 测试：`hy_err_ui`（`#[derive(hy_err)]`、`err!`）、`redact_ui`（`#[redact]`）、`component_ui`（`#[component]`，包括 Deferred 组件第一阶段读不到资源）、`lock_ui`（锁的两个 derive、`lock_key!`、`try_lock*` 只收注册过的 key）。dev-dependency 依赖 facade（只写 path：facade 反过来依赖本 crate），fixture 用 `hygiea::` 路径，和下游写法一样 |
 
 ### 组件
 
@@ -48,7 +51,7 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 
 | crate | 框架 feature | 其他 feature | facade 的 feature | facade 的路径 |
 |---|---|---|---|---|
-| `hygiea-db` | `sqlx`、`seaorm` | `postgres`、`sqlite` | `db-sqlx`、`db-seaorm`（只开框架）；`db-sqlx-postgres`、`db-sqlx-sqlite`、`db-seaorm-postgres`（组合，依赖前两个）；`db-live-config`（连接池的动态配置） | `hygiea::db` |
+| `hygiea-db` | `sqlx`、`seaorm` | `postgres`、`sqlite`；`live-config`；`lock`、`lock-table`（依赖 `lock`） | `db-sqlx`、`db-seaorm`（只开框架）；`db-sqlx-postgres`、`db-sqlx-sqlite`、`db-seaorm-postgres`（组合，依赖前两个）；`db-live-config`（连接池的动态配置）；`db-lock`、`db-lock-table`（PG 连接池的分布式锁） | `hygiea::db` |
 | `hygiea-redis` | `fred` | | `redis-fred` | `hygiea::redis` |
 | `hygiea-http` | `axum` | | `http-axum` | `hygiea::http` |
 | `hygiea-http-client` | `reqwest` | | `http-client-reqwest` | `hygiea::http_client`（实现在 `reqwest_client` 子模块） |
@@ -62,10 +65,12 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 | `hygiea-db/src/seaorm/page.rs`、`model.rs` | `find_page`（取一页再查总数）、`active_models`（`&[Model]` 转成 ActiveModel 给 `insert_many`） |
 | `hygiea-db/src/datetime.rs` | `HyUtcDateTime`：给 `UtcDateTime` 包一层（经 `OffsetDateTime` 转换，对应 `timestamptz`），开 `sqlx` 或 `seaorm` 就有，框架 trait 的实现在各框架模块里 |
 | `hygiea-db/src/page.rs` | `PageRequest` / `Page`：分页的请求和结果，sqlx 和 SeaORM 共用 |
-| `hygiea-db/src/error.rs` | `RepoErr`：按操作分的数据库错误，0x 事务、1x 执行语句（10 兜底，11-14 增删改查）、2x 动态配置、9x 参数 |
+| `hygiea-db/src/error.rs` | `RepoErr`：按操作分的数据库错误，0x 事务、1x 执行语句（10 兜底，11-14 增删改查）、2x 动态配置、3x 锁表、9x 参数 |
 | `hygiea-db/src/config.rs` | 连接池配置的公共部分：`PgConnectConfig` / `SqliteConnectConfig`（`[db.connect]`，连哪个库）、`PoolConfig`（`[db.pool]`，所有数据库、框架共用） |
 | `hygiea-db/src/live_config/` | 连接池的数据库配置表（feature `live-config`）：`mod.rs` 配置和对外导出，`source.rs` 绑定入口，`handle.rs` 句柄（`LiveConfig` / `LiveView`），`worker.rs` 后台任务，`store.rs` 独立小池和查询，`schema.rs` 表结构检查和建表，`sql/` 建表语句。设计说明见 `docs/design/live-config.md` |
-| `hygiea-redis/src/fred_pool.rs` | 连接池组件；锁实现为 SET NX + token + 看门狗续期，释放用 Lua |
+| `hygiea-db/src/lock/` | PG 连接池的分布式锁（feature `lock`）：`postgres.rs` 是事务级 advisory lock 和字符串 key 的行锁，`impl_pg_lock!` 给 `SqlxPgPool` / `SeaOrmPgPool` 实现 `DistributedLock`；`table.rs` 是锁表 `{app_name}_lock`（feature `lock-table`）的检查和建表。SQLite 还没有实现 |
+| `hygiea-db/src/ddl.rs` | 框架建的表（动态配置、锁表）共用的检查代码：表名前缀的校验、建表串行化的 advisory key、读表的列 |
+| `hygiea-redis/src/fred_pool.rs` | 连接池组件 |
 | `hygiea-http/src/axum_server.rs` | HTTP 服务组件 |
 | `hygiea-http-client/src/lib.rs` | 按 feature 声明各实现的模块，不在 crate 根上再导出（以后加别的实现时名字不撞） |
 | `hygiea-http-client/src/reqwest_client/mod.rs` | 模块结构说明和再导出，不放实现 |

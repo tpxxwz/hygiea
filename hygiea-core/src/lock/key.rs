@@ -76,6 +76,9 @@ impl LockType {
 /// lock.try_lock(lock_key!(OrderLockKey::Export, user_name)).await?;  // "101020004:export:alice"
 /// ```
 ///
+/// 模板有多个变量时，变量的值里不要带模板里的分隔符：模板 `{{ a }}:{{ b }}` 下 `a = "x:y", b = "z"` 和
+/// `a = "x", b = "y:z"` 渲染出来一样，是同一把锁。传 id、日期、数字不会有这个问题。
+///
 /// 模板渲染失败（`{ .. }` 写法里 key 用了表达式，编译期查不了，运行时缺变量）时 [`as_str`](Self::as_str) 返回错误
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct LockKey(pub(super) std::result::Result<String, String>);

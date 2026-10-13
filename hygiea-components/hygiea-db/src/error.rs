@@ -8,6 +8,7 @@
 //! | 0x | 事务 | 各框架的 `transaction` 系列函数 |
 //! | 1x | 执行语句失败：10 兜底（原生 SQL、DDL），11-14 增删改查 | `db!` 按语句类型自动选，`.db()` 一律 10；`seaorm::find_page` 是 14，`op` 里写函数名；直接用 sqlx 时自己转 |
 //! | 2x | 动态配置 | 连接池的 `live_config` / `live_config_all`，包括第一次绑定时的建表检查 |
+//! | 3x | 分布式锁 | 锁表（feature `lock-table`）的建表检查；加锁、释放失败是 hygiea-core 的 `LockErr` |
 //! | 9x | 参数不对 | 没执行 SQL 就拦下来的，没有 source |
 //!
 //! 调用方自己写的语句用 1x 的，`op` 写明是哪一步：
@@ -79,6 +80,17 @@ pub enum RepoErr {
     /// 这个连接池没开动态配置（`[..live_config] enabled = true`）就调了 `live_config` / `live_config_all`
     #[error(err_code = "26", err_tpl = "Db live config not enabled on this pool")]
     LiveConfigDisabled,
+
+    // ---- 3x 分布式锁：锁表的建表检查。加锁、释放失败用 hygiea-core 的 LockErr ----
+    /// 锁表（`{app_name}_lock`）建不了，多半是没有 DDL 权限；要手动执行的 DDL 打在日志里
+    #[error(err_code = "31", err_tpl = "Db lock table create failed: {{ table }}")]
+    LockTableCreateFailed,
+    /// 库里已有同名的锁表，但列和代码对不上：不动它，拒绝启动；哪里不对和 DDL 打在日志里
+    #[error(
+        err_code = "32",
+        err_tpl = "Db lock table schema mismatch: {{ table }}"
+    )]
+    LockTableSchemaMismatch,
 
     // ---- 9x 参数不对：没执行 SQL 就拦下来 ----
     /// 分页参数超出范围：页号 × 页大小（OFFSET）超过 `i64::MAX`。[`PageRequest::new`](crate::PageRequest::new) 和反序列化时报
