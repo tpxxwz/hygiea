@@ -31,7 +31,9 @@ fn ping_config(addr: std::net::SocketAddr) -> AxumConfig {
     AxumConfig {
         host: addr.ip().to_string(),
         port: addr.port(),
-        router: Some(Box::new(|_| Ok(Router::new().route("/ping", get(|| async { "pong" }))))),
+        router: Some(Box::new(|_| {
+            Ok(Router::new().route("/ping", get(|| async { "pong" })))
+        })),
         ..Default::default()
     }
 }

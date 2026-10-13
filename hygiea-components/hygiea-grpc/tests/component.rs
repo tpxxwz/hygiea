@@ -9,12 +9,12 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
+use hygiea_core::HyErr;
+use hygiea_core::app::AppErr;
 use hygiea_core::app::{
     CancellationToken, Component, DeferredComponent, Name, ReadyResources, Registry, ResourceSink,
     Resources,
 };
-use hygiea_core::HyErr;
-use hygiea_core::app::AppErr;
 use hygiea_grpc::{TonicComponent, TonicConfig, TonicServe, TonicServeFn, tonic_serve_fn};
 
 /// 启动 registry，把 `Resources` 交给 `check`，拿回它的结果。

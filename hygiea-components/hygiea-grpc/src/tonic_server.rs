@@ -29,8 +29,7 @@ pub type TonicServe = Box<
 /// 建 gRPC 服务的函数，`activate` 时调用。这时所有组件的资源、`Registry::before_activate` 里放进去的东西都已就绪，
 /// 可以从 [`ReadyResources`] 取出连接池、业务 state 建 tonic Router。返回 `Err` 时组件启动失败。
 /// 一般用 [`tonic_serve_fn!`] 生成
-pub type TonicServeFn =
-    Box<dyn FnOnce(&ReadyResources) -> Result<TonicServe> + Send + 'static>;
+pub type TonicServeFn = Box<dyn FnOnce(&ReadyResources) -> Result<TonicServe> + Send + 'static>;
 
 /// 宏展开后要用，调用方不必自己依赖这些 crate
 #[doc(hidden)]
@@ -192,7 +191,8 @@ mod tests {
     fn noop_serve_fn() -> TonicServeFn {
         Box::new(|_resources: &ReadyResources| {
             Ok(Box::new(
-                |_incoming: tokio_stream::wrappers::TcpListenerStream, _shutdown: CancellationToken| {
+                |_incoming: tokio_stream::wrappers::TcpListenerStream,
+                 _shutdown: CancellationToken| {
                     Box::pin(async {}) as Pin<Box<dyn Future<Output = ()> + Send + 'static>>
                 },
             ) as TonicServe)

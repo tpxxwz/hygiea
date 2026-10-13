@@ -202,8 +202,8 @@ impl FromBody for BodyStream {
 
 #[cfg(test)]
 mod tests {
-    use crate::reqwest_client::HttpClientErr;
     use crate::reqwest_client::HeaderValue;
+    use crate::reqwest_client::HttpClientErr;
     use hygiea_core::redact::redact;
     use serde::{Deserialize, Serialize};
     use serde_json::{Value, json};
