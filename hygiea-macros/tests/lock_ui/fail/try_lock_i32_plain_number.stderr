@@ -1,0 +1,17 @@
+error[E0277]: the trait bound `LockType: From<{integer}>` is not satisfied
+ --> tests/lock_ui/fail/try_lock_i32_plain_number.rs:5:31
+  |
+5 |     let _ = lock.try_lock_i32(1, 2).await;
+  |                  ------------ ^ the trait `From<{integer}>` is not implemented for `LockType`
+  |                  |
+  |                  required by a bound introduced by this call
+  |
+  = note: required for `{integer}` to implement `Into<LockType>`
+note: required by a bound in `try_lock_i32`
+ --> $WORKSPACE/hygiea-core/src/lock/mod.rs
+  |
+  |     async fn try_lock_i32(
+  |              ------------ required by a bound in this associated function
+  |         &self,
+  |         key1: impl Into<LockType> + Send,
+  |                    ^^^^^^^^^^^^^^ required by this bound in `DistributedLock::try_lock_i32`

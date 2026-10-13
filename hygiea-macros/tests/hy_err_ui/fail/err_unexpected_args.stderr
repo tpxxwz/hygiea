@@ -12,4 +12,4 @@ note: erroneous constant encountered
 15 |     let _ = err!(E::Fixed, { "a": 1 });
    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
-   = note: this note originates in the macro `err` (in Nightly builds, run with -Z macro-backtrace for more info)
+   = note: this note originates in the macro `$crate::__hygiea_tpl_args` which comes from the expansion of the macro `err` (in Nightly builds, run with -Z macro-backtrace for more info)

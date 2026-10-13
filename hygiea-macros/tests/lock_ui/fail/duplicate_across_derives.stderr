@@ -1,0 +1,11 @@
+error[E0428]: the name `HYGIEA_LOCK_000000001` is defined multiple times
+  --> tests/lock_ui/fail/duplicate_across_derives.rs:10:10
+   |
+ 4 | #[derive(hy_lock_type)]
+   |          ------------ previous definition of the value `HYGIEA_LOCK_000000001` here
+...
+10 | #[derive(hy_lock_key)]
+   |          ^^^^^^^^^^^ `HYGIEA_LOCK_000000001` redefined here
+   |
+   = note: `HYGIEA_LOCK_000000001` must be defined only once in the value namespace of this module
+   = note: this error originates in the derive macro `hy_lock_key` (in Nightly builds, run with -Z macro-backtrace for more info)

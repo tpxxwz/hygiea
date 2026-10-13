@@ -20,6 +20,9 @@ fn init_hygiea() {
 
     #[cfg(feature = "datetime-iana")]
     datetime::local::init();
+
+    #[cfg(feature = "lock")]
+    lock::init();
 }
 
 // ========== 按 feature ==========
@@ -31,6 +34,9 @@ pub mod log;
 
 #[cfg(feature = "app")]
 pub mod app;
+
+#[cfg(feature = "lock")]
+pub mod lock;
 
 #[cfg(feature = "ws-client")]
 pub mod net;

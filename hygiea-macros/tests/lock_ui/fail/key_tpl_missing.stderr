@@ -1,0 +1,5 @@
+error: `tpl` missing in `#[lock_key(..)]`
+ --> tests/lock_ui/fail/key_tpl_missing.rs:7:5
+  |
+7 |     A,
+  |     ^

@@ -1,0 +1,15 @@
+error[E0080]: evaluation panicked: lock_key!: a template variable of this lock key is missing
+  --> tests/lock_ui/fail/lock_key_missing_var.rs:11:13
+   |
+11 |     let _ = lock_key!(K::A, { "shop": 1 });
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `main::{constant#1}` failed here
+   |
+   = note: this error originates in the macro `$crate::panic::panic_2021` which comes from the expansion of the macro `lock_key` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+note: erroneous constant encountered
+  --> tests/lock_ui/fail/lock_key_missing_var.rs:11:13
+   |
+11 |     let _ = lock_key!(K::A, { "shop": 1 });
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this note originates in the macro `$crate::__hygiea_check_keys` which comes from the expansion of the macro `lock_key` (in Nightly builds, run with -Z macro-backtrace for more info)

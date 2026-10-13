@@ -1,0 +1,5 @@
+error: unknown `lock_type` option, expected `code = ".."`
+ --> tests/lock_ui/fail/unknown_option.rs:6:17
+  |
+6 |     #[lock_type(id = "000001")]
+  |                 ^^

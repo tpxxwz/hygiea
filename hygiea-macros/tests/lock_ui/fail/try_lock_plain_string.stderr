@@ -1,0 +1,13 @@
+error[E0308]: mismatched types
+ --> tests/lock_ui/fail/try_lock_plain_string.rs:5:27
+  |
+5 |     let _ = lock.try_lock("job").await;
+  |                  -------- ^^^^^ expected `LockKey`, found `&str`
+  |                  |
+  |                  arguments to this method are incorrect
+  |
+note: method defined here
+ --> $WORKSPACE/hygiea-core/src/lock/mod.rs
+  |
+  |     async fn try_lock(&self, key: LockKey) -> Result<Option<LockGuard>>;
+  |              ^^^^^^^^

@@ -1,0 +1,5 @@
+error: `code` missing in `#[lock_type(..)]`
+ --> tests/lock_ui/fail/code_missing.rs:6:5
+  |
+6 |     A,
+  |     ^

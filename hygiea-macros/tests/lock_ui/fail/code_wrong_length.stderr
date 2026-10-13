@@ -1,0 +1,5 @@
+error: lock code must be exactly 4 digits here
+ --> tests/lock_ui/fail/code_wrong_length.rs:7:24
+  |
+7 |     #[lock_type(code = "001")]
+  |                        ^^^^^

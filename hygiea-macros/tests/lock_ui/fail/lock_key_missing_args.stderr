@@ -1,0 +1,15 @@
+error[E0080]: evaluation panicked: this lock key's template has variables, use lock_key!(X, value) or lock_key!(X, { .. })
+  --> tests/lock_ui/fail/lock_key_missing_args.rs:11:13
+   |
+11 |     let _ = lock_key!(K::A);
+   |             ^^^^^^^^^^^^^^^ evaluation of `main::{constant#0}` failed here
+   |
+   = note: this error originates in the macro `$crate::panic::panic_2021` which comes from the expansion of the macro `lock_key` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+note: erroneous constant encountered
+  --> tests/lock_ui/fail/lock_key_missing_args.rs:11:13
+   |
+11 |     let _ = lock_key!(K::A);
+   |             ^^^^^^^^^^^^^^^
+   |
+   = note: this note originates in the macro `$crate::__hygiea_tpl_args` which comes from the expansion of the macro `lock_key` (in Nightly builds, run with -Z macro-backtrace for more info)

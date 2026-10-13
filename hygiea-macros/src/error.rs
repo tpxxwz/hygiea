@@ -11,13 +11,13 @@ use syn::spanned::Spanned;
 // - proc_macro::TokenStream：编译器传进来/要求返回的 token 流。
 // - syn::DeriveInput：syn 把 derive 输入解析出来的结构化 AST。
 // - proc_macro2::TokenStream：quote/syn 生态里更好用的 token 流。
-pub(crate) fn derive<V>(input: TokenStream, derive_name: &str) -> TokenStream
+pub(crate) fn derive<V>(input: TokenStream) -> TokenStream
 where
     V: VariantBuilder,
 {
     let ast = syn::parse_macro_input!(input as syn::DeriveInput);
     let ctx = ErrContext::<V>::new();
-    expand(ast, derive_name, ctx, V::new).into()
+    expand(ast, ctx, V::new).into()
 }
 
 // ========== Traits ==========
@@ -257,25 +257,13 @@ impl VariantBuilder for HyVariant {
             return Err(expand_err_span(&self.var_name, "err_tpl missing"));
         };
 
-        // 用 minijinja 自己解析模板：语法错误在编译期报在 err_tpl 上，而不是等启动时 init() 才 panic；
-        // undeclared_variables 给出模板用到、但模板内没定义的变量，也就是必须由调用方传入的参数
-        let env = minijinja::Environment::new();
-        let tmpl = env.template_from_str(err_tpl).map_err(|e| {
-            expand_err(
-                self.err_tpl_span.unwrap_or_else(|| self.var_name.span()),
-                &format!("invalid err_tpl: {e}"),
-            )
-        })?;
-        // undeclared_variables 会把 range、dict 这类内置全局函数也算进去，它们不用调用方传
-        let globals: std::collections::HashSet<&str> =
-            env.globals().map(|(name, _)| name).collect();
-        let mut vars: Vec<String> = tmpl
-            .undeclared_variables(false)
-            .into_iter()
-            .filter(|name| !globals.contains(name.as_str()))
-            .collect();
-        vars.sort();
-        self.vars = vars;
+        // 语法错误在编译期报在 err_tpl 上，而不是等启动时 init() 才 panic；
+        // 变量就是必须由调用方传入的参数
+        self.vars = crate::template::template_vars(
+            err_tpl,
+            self.err_tpl_span.unwrap_or_else(|| self.var_name.span()),
+            "err_tpl",
+        )?;
         Ok(())
     }
 
@@ -431,12 +419,15 @@ fn build_template_registration(
     }
 }
 
-/// hygiea 自己的项目前缀，只有它能用 `err_code_internal_module_prefix`
-const INTERNAL_PROJECT_PREFIX: &str = "999";
+const NAMES: crate::prefix::Names = crate::prefix::Names {
+    derive: "hy_err",
+    variant_attr: "error",
+    module: "err_code_module_prefix",
+    internal: "err_code_internal_module_prefix",
+};
 
 fn expand<V, F>(
     ast: syn::DeriveInput,
-    derive_name: &str,
     mut ctx: ErrContext<V>,
     variant_new: F,
 ) -> proc_macro2::TokenStream
@@ -458,120 +449,31 @@ where
     // }
     //
     // expand 做的事情：
-    // 1. 确认 derive 用在 enum 上。
-    // 2. 确定项目前缀和模块前缀。
-    // 3. 遍历每个 variant，读取 #[error(...)]。
-    // 4. 校验字段、拼接完整 err_code、检查同 enum 内重复码。
-    // 5. 调用 ctx.build 生成最终 Rust 代码。
+    // 1. 确认 derive 用在 enum 上，确定项目前缀和模块前缀（prefix::resolve，和锁的 derive 共用）。
+    // 2. 遍历每个 variant，读取 #[error(...)]。
+    // 3. 校验字段、拼接完整 err_code、检查同 enum 内重复码。
+    // 4. 调用 ctx.build 生成最终 Rust 代码。
     //
     // 生成什么不写在 expand 里，而是由 V: VariantBuilder 决定。
     let enum_name = &ast.ident;
-    let syn::Data::Enum(ref e) = ast.data else {
-        return expand_err_span(&ast, &format!("{} only works on enums", derive_name));
-    };
-    let variants = &e.variants;
-    if !ast.generics.params.is_empty() {
-        return expand_err_span(
-            &ast.generics,
-            &format!("{} does not support generics", derive_name),
-        );
-    }
-
-    // 解析 enum 上可选的 #[err_code_module_prefix = "..."]（模块级）。
-    // 同时禁止把 #[error(...)] 写在 enum 上，因为 error 只允许写在 variant 上。
-    let mut module_prefix: Option<(String, &syn::Attribute)> = None;
-    let mut internal_prefix: Option<(String, &syn::Attribute)> = None;
-    let mut explicit_crate: Option<syn::Path> = None;
-    for attr in &ast.attrs {
-        if attr.path().is_ident("error") {
-            return expand_err_span(attr, "`error` attribute is only allowed on enum variants");
-        }
-        // #[hy_err(crate = "path")]：显式指定生成代码里引用 hygiea 的路径
-        if attr.path().is_ident("hy_err") {
-            let parsed = attr.parse_nested_meta(|meta| {
-                if crate::krate::parse_crate_arg(&meta, &mut explicit_crate)? {
-                    Ok(())
-                } else {
-                    Err(meta.error("unknown `hy_err` option, expected `crate = \"path\"`"))
-                }
-            });
-            if let Err(e) = parsed {
-                return e.to_compile_error();
-            }
-        }
-        if attr.path().is_ident("err_code_module_prefix") {
-            match parse_digits_attr(attr, "err_code_module_prefix", 2) {
-                Ok(prefix) => module_prefix = Some((prefix, attr)),
-                Err(e) => return e,
-            }
-        }
-        if attr.path().is_ident("err_code_internal_module_prefix") {
-            match parse_digits_attr(attr, "err_code_internal_module_prefix", 3) {
-                Ok(prefix) => internal_prefix = Some((prefix, attr)),
-                Err(e) => return e,
-            }
-        }
-    }
-    if let (Some(_), Some((_, attr))) = (&module_prefix, &internal_prefix) {
-        return expand_err_span(
-            attr,
-            "use only one of `err_code_module_prefix` and `err_code_internal_module_prefix`",
-        );
-    }
-
-    // 项目前缀只从 Cargo.toml 读：crate 的 [package.metadata.hygiea]，再往上找 workspace 的
-    // [workspace.metadata.hygiea]，键都是 err_code_project_prefix；都没有就是 "000"。
-    // 读过的 Cargo.toml 用 include_bytes! 记成编译依赖，改了前缀会触发重新编译
-    let (project_prefix, tracked_manifests) = match manifest::resolve_prefix() {
-        Ok(found) => found,
-        Err(msg) => return expand_err_span(&ast.ident, &msg),
-    };
-    ctx.krate = crate::krate::resolve(explicit_crate);
-
-    // 999 是 hygiea 自己的项目前缀：只能用 3 位的内部模块前缀；其他项目只能用 2 位的
-    match (&module_prefix, &internal_prefix) {
-        (Some((_, attr)), None) if project_prefix == INTERNAL_PROJECT_PREFIX => {
-            return expand_err_span(
-                attr,
-                "project prefix 999 is hygiea's own; use `err_code_internal_module_prefix` (3 digits) instead",
-            );
-        }
-        (None, Some((_, attr))) if project_prefix != INTERNAL_PROJECT_PREFIX => {
-            return expand_err_span(
-                attr,
-                "`err_code_internal_module_prefix` is only for hygiea's own crates (project prefix 999); use `err_code_module_prefix` (2 digits)",
-            );
-        }
-        _ => {}
-    }
-
     // 总位数固定 8：项目前缀 3 位 +（模块前缀 2 位 / 内部模块前缀 3 位）+ 变体错误码
-    let prefix = module_prefix.or(internal_prefix).map(|(p, _)| p);
-    let code_head = format!("{project_prefix}{}", prefix.as_deref().unwrap_or(""));
-    let code_len = 8 - code_head.len();
+    let resolved = match crate::prefix::resolve(&ast, &NAMES, 8) {
+        Ok(resolved) => resolved,
+        Err(e) => return e,
+    };
+    ctx.krate = resolved.krate.clone();
 
     let mut seen_err_codes: HashMap<String, syn::Ident> = HashMap::new();
 
     // 逐个解析 enum variant，V 目前只有 HyVariant。
-    for variant in variants {
+    for variant in resolved.variants {
         let var_name = &variant.ident;
-        if !matches!(variant.fields, syn::Fields::Unit) {
-            return expand_err_span(
-                &variant.fields,
-                &format!("{} only supports unit variants", derive_name),
-            );
+        if let Err(e) = crate::prefix::check_variant(variant, &NAMES) {
+            return e;
         }
         let mut v = variant_new(var_name.clone());
 
         for attr in &variant.attrs {
-            for name in ["err_code_module_prefix", "err_code_internal_module_prefix"] {
-                if attr.path().is_ident(name) {
-                    return expand_err_span(
-                        attr,
-                        &format!("`{name}` attribute is only allowed on the enum, not on variants"),
-                    );
-                }
-            }
             if attr.path().is_ident("error")
                 && let Err(e) = parse_error_attr(attr, &mut v)
             {
@@ -579,7 +481,7 @@ where
             }
         }
 
-        let Err(e) = v.validate(&code_head, code_len) else {
+        let Err(e) = v.validate(&resolved.head, resolved.code_len) else {
             let err_code = v.err_code().to_string();
             // 这一层只检查“同一个 enum 内”的重复错误码。
             // 跨 enum / 跨模块重复由 build_err_code_guard 和运行时 init 校验兜底。
@@ -599,18 +501,16 @@ where
         return e;
     }
 
-    let tracking = tracked_manifests.iter().map(|path| {
-        quote! { const _: &[u8] = include_bytes!(#path); }
-    });
+    let tracking = resolved.tracking();
     let built = ctx.build(enum_name);
     quote! {
         #built
-        #(#tracking)*
+        #tracking
     }
 }
 
 /// 解析 `#[name = "..."]` 形式的数字属性，校验位数
-fn parse_digits_attr(
+pub(crate) fn parse_digits_attr(
     attr: &syn::Attribute,
     name: &str,
     len: usize,
@@ -689,7 +589,7 @@ fn parse_error_attr<V: VariantBuilder>(
 }
 
 /// 校验字符串是否为指定长度的纯数字
-fn is_numeric_with_len(s: &str, len: usize) -> bool {
+pub(crate) fn is_numeric_with_len(s: &str, len: usize) -> bool {
     s.len() == len && s.bytes().all(|b| b.is_ascii_digit())
 }
 
@@ -722,18 +622,18 @@ mod tests {
 }
 
 /// 结构错误 - 用于 AST 节点类型不符、属性放错位置等
-fn expand_err_span(token: impl quote::ToTokens, msg: &str) -> proc_macro2::TokenStream {
+pub(crate) fn expand_err_span(token: impl quote::ToTokens, msg: &str) -> proc_macro2::TokenStream {
     syn::Error::new_spanned(token, msg).to_compile_error()
 }
 
 /// 值错误 - 用于字符串格式不对、长度不对等
-fn expand_err(span: proc_macro2::Span, msg: &str) -> proc_macro2::TokenStream {
+pub(crate) fn expand_err(span: proc_macro2::Span, msg: &str) -> proc_macro2::TokenStream {
     syn::Error::new(span, msg).to_compile_error()
 }
 
 // ========== 从 Cargo.toml 读项目前缀 ==========
 
-mod manifest {
+pub(crate) mod manifest {
     use std::path::{Path, PathBuf};
 
     /// 没有任何配置时的项目前缀
@@ -741,7 +641,7 @@ mod manifest {
 
     /// 按 crate → workspace 的顺序找 `err_code_project_prefix`，返回前缀和读过的 Cargo.toml 路径。
     /// 配置了但格式不对时返回错误信息
-    pub(super) fn resolve_prefix() -> Result<(String, Vec<String>), String> {
+    pub(crate) fn resolve_prefix() -> Result<(String, Vec<String>), String> {
         let Ok(dir) = std::env::var("CARGO_MANIFEST_DIR") else {
             return Ok((DEFAULT_PREFIX.to_string(), Vec::new()));
         };

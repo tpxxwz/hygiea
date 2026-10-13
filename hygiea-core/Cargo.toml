@@ -33,6 +33,9 @@ datetime-chrono = ["dep:chrono"]
 # IANA timezone and system-local datetime support
 datetime-iana = ["dep:time-tz"]
 
+# 分布式锁的 trait（DistributedLock），后端在 db / redis 组件里实现
+lock = ["hygiea-macros/lock", "dep:async-trait", "dep:tokio", "tokio/rt", "tokio/time", "dep:tracing"]
+
 # 日志打码：#[redact] 和 to_redacted_json
 redact = ["hygiea-macros/redact"]
 
@@ -40,7 +43,7 @@ json = []
 ws-client = ["dep:tokio-tungstenite"]
 
 # All features
-full = ["app", "log", "json", "ws-client", "datetime-chrono", "datetime-iana", "redact"]
+full = ["app", "log", "json", "ws-client", "datetime-chrono", "datetime-iana", "redact", "lock"]
 
 [dependencies]
 # Error handling (always on)

@@ -1,0 +1,5 @@
+error: invalid tpl: syntax error: unexpected end of input, expected end of variable block (in <string>:1)
+ --> tests/lock_ui/fail/key_tpl_invalid.rs:6:39
+  |
+6 |     #[lock_key(code = "000001", tpl = "user:{{ id")]
+  |                                       ^^^^^^^^^^^^

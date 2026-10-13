@@ -1,0 +1,5 @@
+error: duplicate lock code 000020001; first used by variant `A`
+ --> tests/lock_ui/fail/duplicate_code.rs:9:24
+  |
+9 |     #[lock_type(code = "0001")]
+  |                        ^^^^^^

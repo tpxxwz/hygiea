@@ -54,12 +54,20 @@ fn build_templates<'a>(
 ) -> Result<Environment<'static>, String> {
     let regs: Vec<_> = regs.into_iter().collect();
     check_codes(regs.iter().map(|r| r.err_code))?;
+    build_env(regs.iter().map(|r| (r.err_code, r.err_tpl)), "err_code")
+}
+
+/// 按 `(名字, 模板)` 建模板环境，未定义的变量渲染时报错。错误码和锁 key 共用，`label` 是报错里名字的叫法。
+/// 模板语法宏在编译期已经校验过，这里失败只可能是宏和 minijinja 版本不一致
+pub(crate) fn build_env(
+    templates: impl IntoIterator<Item = (&'static str, &'static str)>,
+    label: &str,
+) -> Result<Environment<'static>, String> {
     let mut env = Environment::new();
     env.set_undefined_behavior(UndefinedBehavior::Strict);
-    for reg in regs {
-        // 模板语法宏在编译期已经校验过，这里失败只可能是宏和 minijinja 版本不一致
-        env.add_template(reg.err_code, reg.err_tpl)
-            .map_err(|e| format!("err_code `{}`: invalid err_tpl: {e}", reg.err_code))?;
+    for (name, tpl) in templates {
+        env.add_template(name, tpl)
+            .map_err(|e| format!("{label} `{name}`: invalid template: {e}"))?;
     }
     Ok(env)
 }
@@ -342,70 +350,79 @@ pub mod __private {
 /// `let k = BaseErr::SysErr; err!(k)` 会报 E0435。
 #[macro_export]
 macro_rules! err {
+    // 写法和模板对不上的检查、参数的组装和 lock_key! 共用，见 __hygiea_tpl_args!
+    ($kind:expr $(, $($args:tt)*)?) => {{
+        match $crate::__hygiea_tpl_args!(
+            [
+                "this error's template has variables, use err!(X, value) or err!(X, {{ .. }})",
+                "this error's template has no variables, use err!(X)",
+                "err!(X, value) needs a template with exactly one variable, use err!(X) or err!(X, {{ .. }})",
+                "err!: a template variable of this error is missing"
+            ];
+            $kind $(, $($args)*)?
+        ) {
+            ::core::option::Option::None => $kind.to_err_raw(),
+            ::core::option::Option::Some(args) => $kind.to_err(args),
+        }
+    }};
+}
+
+/// err! 和 lock_key! 共用：按模板检查写法（const 块里，编译期），组装模板参数。
+/// `$kind` 要有 `const fn __hygiea_tpl_vars(&self) -> &'static [&'static str]`（derive 生成）；
+/// 方括号里依次是四种写错时的报错：模板有变量却没传、模板没变量却传了、单值简写但模板不是一个变量、漏了模板变量。
+/// 返回 `Option<serde_json::Value>`：没传参数是 `None`
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __hygiea_tpl_args {
     // const 块在编译期求值：变体和调用方式对不上就编译失败，而不是运行时 panic
-    ($kind:expr $(,)?) => {{
-        const {
-            assert!(
-                $kind.__hygiea_tpl_vars().is_empty(),
-                "this error's template has variables, use err!(X, value) or err!(X, {{ .. }})"
-            )
-        };
-        $kind.to_err_raw()
+    ([$no_args:literal, $no_vars:literal, $single:literal, $missing:literal]; $kind:expr $(,)?) => {{
+        const { assert!($kind.__hygiea_tpl_vars().is_empty(), $no_args) };
+        ::core::option::Option::None::<$crate::__private::serde_json::Value>
     }};
-    ($kind:expr, { $($json:tt)* } $(,)?) => {{
-        const {
-            assert!(
-                !$kind.__hygiea_tpl_vars().is_empty(),
-                "this error's template has no variables, use err!(X)"
-            )
-        };
-        $crate::__hygiea_check_keys!($kind; []; $($json)*);
-        $kind.to_err($crate::__private::serde_json::json!({ $($json)* }))
+    ([$no_args:literal, $no_vars:literal, $single:literal, $missing:literal]; $kind:expr, { $($json:tt)* } $(,)?) => {{
+        const { assert!(!$kind.__hygiea_tpl_vars().is_empty(), $no_vars) };
+        $crate::__hygiea_check_keys!($missing; $kind; []; $($json)*);
+        ::core::option::Option::Some($crate::__private::serde_json::json!({ $($json)* }))
     }};
-    ($kind:expr, $value:expr $(,)?) => {{
-        const {
-            assert!(
-                $kind.__hygiea_tpl_vars().len() == 1,
-                "err!(X, value) needs a template with exactly one variable, use err!(X) or err!(X, {{ .. }})"
-            )
-        };
+    ([$no_args:literal, $no_vars:literal, $single:literal, $missing:literal]; $kind:expr, $value:expr $(,)?) => {{
+        const { assert!($kind.__hygiea_tpl_vars().len() == 1, $single) };
         let mut args = $crate::__private::serde_json::Map::new();
         args.insert(
             $kind.__hygiea_tpl_vars()[0].to_owned(),
             $crate::__private::serde_json::json!($value),
         );
-        $kind.to_err($crate::__private::serde_json::Value::Object(args))
+        ::core::option::Option::Some($crate::__private::serde_json::Value::Object(args))
     }};
 }
 
-/// err! 的内部实现：逐个收集 `{ .. }` 里的字面量 key，最后在 const 块里确认模板变量都给了。
-/// 值部分逐个 token 跳过直到下一个逗号（嵌套的 `{}` `[]` `()` 算一个 token，里面的逗号不影响）
+/// __hygiea_tpl_args! 的内部实现：逐个收集 `{ .. }` 里的字面量 key，最后在 const 块里确认模板变量都给了，
+/// 没给全时报 `$missing`。值部分逐个 token 跳过直到下一个逗号（嵌套的 `{}` `[]` `()` 算一个 token，里面的逗号不影响）
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __hygiea_check_keys {
-    // @skip 分支要放在前面：否则 `@skip` 会被当成 `$kind:expr` 去解析，直接报错
-    (@skip $kind:expr; [$($k:literal)*]; , $($rest:tt)*) => {
-        $crate::__hygiea_check_keys!($kind; [$($k)*]; $($rest)*)
+    // @skip 分支要放在前面：否则 `@skip` 会被当成 `$missing:literal` 去解析，直接报错
+    (@skip $missing:literal; $kind:expr; [$($k:literal)*]; , $($rest:tt)*) => {
+        $crate::__hygiea_check_keys!($missing; $kind; [$($k)*]; $($rest)*)
     };
-    (@skip $kind:expr; [$($k:literal)*]; ) => {
-        $crate::__hygiea_check_keys!($kind; [$($k)*]; )
+    (@skip $missing:literal; $kind:expr; [$($k:literal)*]; ) => {
+        $crate::__hygiea_check_keys!($missing; $kind; [$($k)*]; )
     };
-    (@skip $kind:expr; [$($k:literal)*]; $_t:tt $($rest:tt)*) => {
-        $crate::__hygiea_check_keys!(@skip $kind; [$($k)*]; $($rest)*)
+    (@skip $missing:literal; $kind:expr; [$($k:literal)*]; $_t:tt $($rest:tt)*) => {
+        $crate::__hygiea_check_keys!(@skip $missing; $kind; [$($k)*]; $($rest)*)
     };
-    ($kind:expr; [$($k:literal)*]; ) => {
+    ($missing:literal; $kind:expr; [$($k:literal)*]; ) => {
         const {
             assert!(
                 $crate::__private::all_in($kind.__hygiea_tpl_vars(), &[$($k),*]),
-                "err!: a template variable of this error is missing"
+                $missing
             );
         }
     };
-    ($kind:expr; [$($k:literal)*]; $key:literal : $($rest:tt)*) => {
-        $crate::__hygiea_check_keys!(@skip $kind; [$($k)* $key]; $($rest)*)
+    ($missing:literal; $kind:expr; [$($k:literal)*]; $key:literal : $($rest:tt)*) => {
+        $crate::__hygiea_check_keys!(@skip $missing; $kind; [$($k)* $key]; $($rest)*)
     };
     // key 不是字面量：放弃检查
-    ($kind:expr; [$($k:literal)*]; $($rest:tt)*) => {};
+    ($missing:literal; $kind:expr; [$($k:literal)*]; $($rest:tt)*) => {};
 }
 
 /// 构造错误并立即返回，参数同 [`err!`]。等价于 `return Err(err!(..).into())`，
