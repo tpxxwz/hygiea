@@ -4,7 +4,7 @@
 //!
 //! | 后端 | `try_lock_i64` / `try_lock_i32` 和阻塞版 | 字符串 key（`try_lock` / `lock`） |
 //! |---|---|---|
-//! | PostgreSQL（`SqlxPgPool`、`SeaOrmPgPool`） | 原生事务级 advisory lock | 开了 `lock-table`：`{app_name}_lock` 表的行锁；没开返回 `LockErr::Unsupported` |
+//! | PostgreSQL（`SqlxPgPool`、`SeaOrmPgPool`） | 原生事务级 advisory lock | 开了 `lock-row`：`{app_name}_lock` 表的行锁；没开返回 `LockErr::Unsupported` |
 //!
 //! PG 每次加锁从主池开一个事务（占一条连接），锁交给返回的 guard：`release()` 或 drop 时回滚事务，锁跟着释放；
 //! 进程崩溃、连接断开时 PG 中止事务，锁也释放。持锁期间那条连接一直占着，同时持有的锁加上业务查询要在
@@ -18,7 +18,7 @@
 
 #[cfg(feature = "postgres")]
 mod postgres;
-#[cfg(all(feature = "postgres", feature = "lock-table"))]
+#[cfg(all(feature = "postgres", feature = "lock-row"))]
 mod table;
 
 #[cfg(feature = "postgres")]

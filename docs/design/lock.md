@@ -1,7 +1,7 @@
 # 分布式锁：trait、key 的注册、PG 实现
 
 trait 和 key 在 hygiea-core 的 `lock` 模块（feature `lock`），后端在组件里实现：目前只有 hygiea-db 的
-PostgreSQL 连接池（feature `lock`、`lock-table`）。SQLite、Redis 还没有实现。
+PostgreSQL 连接池（feature `lock`、`lock-row`）。SQLite、Redis 还没有实现。
 
 ---
 
@@ -87,10 +87,10 @@ lock_i64(k, t)   ── begin ──> set_config('lock_timeout', t, true) ──
 - 进程崩溃、连接断开，PG 中止事务，锁跟着释放，不需要租约
 - `try_lock_i32` 用原生的 `pg_try_advisory_xact_lock(int, int)`：PG 上和 `try_lock_i64` 是两个 key 空间，
   和 core 的默认实现（合成一个 i64）不同。`pg_locks` 里看到的是 `classid = 锁类型, objid = key2, objsubid = 2`
-- 字符串 key（feature `lock-table`）：
+- 字符串 key（feature `lock-row`）：
   1. `INSERT INTO {app}_lock (key) VALUES ($1) ON CONFLICT DO NOTHING`（自动提交；已有的行不加锁，别人持有时也不等）
   2. 事务里 `SELECT key .. FOR UPDATE SKIP LOCKED`，拿到行就是拿到锁；阻塞版 `FOR UPDATE` + `lock_timeout`
-- 没开 `lock-table` 时字符串 key 返回 `LockErr::Unsupported`
+- 没开 `lock-row` 时字符串 key 返回 `LockErr::Unsupported`
 
 ### 锁表
 
@@ -105,7 +105,7 @@ CREATE TABLE {app_name}_lock (
   加 advisory lock、再查一遍后建；列对不上不动它，拒绝启动（`RepoErr::LockTableSchemaMismatch`），DDL 打在日志里
 - 启动时（`from_config`）建；`connect_lazy` 时第一次用字符串 key 时建
 - 一个 key 一行，加锁时补上，不删
-- 已建好的表不会自动升级，改结构要同时改 `table.rs` 的 `DDL` 和 `EXPECTED`，已有的库手动改
+- 已建好的表不会自动升级，改结构要同时改 `sql/postgres.sql` 和 `table.rs` 的 `EXPECTED`，已有的库手动改
 
 ## 4. 还没做的
 

@@ -51,9 +51,9 @@ db-sqlx-sqlite = ["db-sqlx", "hygiea-db/sqlite"]
 db-seaorm-postgres = ["db-seaorm", "hygiea-db/postgres"]
 # 连接池的数据库配置表（动态配置）能力，和上面的组合一起开
 db-live-config = ["dep:hygiea-db", "hygiea-db/live-config"]
-# 连接池的分布式锁：PG 整数 key 用 advisory lock；db-lock-table 再加字符串 key（锁表）
+# 连接池的分布式锁：PG 整数 key 用 advisory lock；db-lock-row 再加字符串 key（锁表）
 db-lock = ["lock", "dep:hygiea-db", "hygiea-db/lock"]
-db-lock-table = ["db-lock", "hygiea-db/lock-table"]
+db-lock-row = ["db-lock", "hygiea-db/lock-row"]
 redis-fred = ["dep:hygiea-redis", "hygiea-redis/fred"]
 http-axum = ["dep:hygiea-http", "hygiea-http/axum"]
 http-client-reqwest = ["dep:hygiea-http-client", "hygiea-http-client/reqwest"]

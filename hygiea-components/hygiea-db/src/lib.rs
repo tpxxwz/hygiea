@@ -87,7 +87,7 @@ mod config;
 mod datetime;
 #[cfg(any(
     feature = "live-config",
-    all(feature = "lock-table", feature = "postgres")
+    all(feature = "lock-row", feature = "postgres")
 ))]
 mod ddl;
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]

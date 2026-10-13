@@ -2,7 +2,7 @@
 //!
 //! 建表规则和动态配置一样，只看 `current_schema()`：没有就建（advisory lock 串行化，拿到锁后再查一遍）；
 //! 有且列对上就用；列对不上不动它，拒绝启动，哪里不对和 DDL 打在日志里。已经建好的表不会自动升级，
-//! 改了 [`DDL`] 要同时改 [`EXPECTED`]，已有的库手动改
+//! 改了 `sql/postgres.sql` 的列要同时改 [`EXPECTED`]，已有的库手动改
 
 use std::sync::Arc;
 
@@ -16,14 +16,16 @@ use hygiea_core::{Result, ResultExt, err};
 use crate::RepoErr;
 use crate::ddl::{advisory_key, is_ident, postgres_columns};
 
-/// `{t}` 换成表名
-const DDL: &str = "CREATE TABLE {t} (\n    key        text        PRIMARY KEY,\n    created_at timestamptz NOT NULL DEFAULT now()\n)";
+/// 建表语句：`{p}` 换成前缀（应用名加 `_`）
+const DDL: &str = include_str!("sql/postgres.sql");
 
 /// 期望的列：(列名, udt_name)
 const EXPECTED: [(&str, &str); 2] = [("key", "text"), ("created_at", "timestamptz")];
 
 #[derive(Clone, Debug)]
 pub(crate) struct LockTable {
+    /// 应用名加 `_`
+    prefix: String,
     name: String,
     /// 检查、建表做过一次就不再做
     ready: Arc<OnceCell<()>>,
@@ -41,13 +43,14 @@ impl LockTable {
             ));
         }
         Ok(Self {
+            prefix: format!("{app_name}_"),
             name: format!("{app_name}_lock"),
             ready: Arc::new(OnceCell::new()),
         })
     }
 
     fn ddl(&self) -> String {
-        DDL.replace("{t}", &self.name)
+        DDL.replace("{p}", &self.prefix)
     }
 
     pub(crate) fn select_skip_locked(&self) -> String {
@@ -156,7 +159,7 @@ mod tests {
     #[test]
     fn names_follow_app_name() {
         let table = LockTable::new("dict_jp").unwrap();
-        assert!(table.ddl().starts_with("CREATE TABLE dict_jp_lock ("));
+        assert!(table.ddl().contains("CREATE TABLE dict_jp_lock ("));
         assert_eq!(
             table.select_skip_locked(),
             "SELECT key FROM dict_jp_lock WHERE key = $1 FOR UPDATE SKIP LOCKED"

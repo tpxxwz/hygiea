@@ -8,7 +8,7 @@
 //! | 0x | 事务 | 各框架的 `transaction` 系列函数 |
 //! | 1x | 执行语句失败：10 兜底（原生 SQL、DDL），11-14 增删改查 | `db!` 按语句类型自动选，`.db()` 一律 10；`seaorm::find_page` 是 14，`op` 里写函数名；直接用 sqlx 时自己转 |
 //! | 2x | 动态配置 | 连接池的 `live_config` / `live_config_all`，包括第一次绑定时的建表检查 |
-//! | 3x | 分布式锁 | 锁表（feature `lock-table`）的建表检查；加锁、释放失败是 hygiea-core 的 `LockErr` |
+//! | 3x | 分布式锁 | 锁表（feature `lock-row`）的建表检查；加锁、释放失败是 hygiea-core 的 `LockErr` |
 //! | 9x | 参数不对 | 没执行 SQL 就拦下来的，没有 source |
 //!
 //! 调用方自己写的语句用 1x 的，`op` 写明是哪一步：

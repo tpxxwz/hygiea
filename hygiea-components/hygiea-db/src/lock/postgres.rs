@@ -1,4 +1,4 @@
-//! PostgreSQL 的锁：整数 key 用事务级 advisory lock，字符串 key（`lock-table`）用锁表的行锁
+//! PostgreSQL 的锁：整数 key 用事务级 advisory lock，字符串 key（`lock-row`）用锁表的行锁
 
 use std::time::Duration;
 
@@ -8,32 +8,32 @@ use hygiea_core::app::RegistryConfig;
 use hygiea_core::lock::{LockErr, LockGuard, LockKey};
 use hygiea_core::{Result, ResultExt, err};
 
-#[cfg(feature = "lock-table")]
+#[cfg(feature = "lock-row")]
 use super::table::LockTable;
 
 /// 连接池上锁的实现，`SqlxPgPool`、`SeaOrmPgPool` 各持有一个（主池的 sqlx 池），对外的方法见 [`impl_pg_lock`]
 #[derive(Clone, Debug)]
 pub(crate) struct PgLock {
     pool: PgPool,
-    #[cfg(feature = "lock-table")]
+    #[cfg(feature = "lock-row")]
     table: LockTable,
 }
 
 impl PgLock {
     /// 只建对象，不连库；锁表在 [`prepare`](Self::prepare) 里建
     pub(crate) fn new(pool: PgPool, registry_config: &RegistryConfig) -> Result<Self> {
-        #[cfg(not(feature = "lock-table"))]
+        #[cfg(not(feature = "lock-row"))]
         let _ = registry_config;
         Ok(Self {
             pool,
-            #[cfg(feature = "lock-table")]
+            #[cfg(feature = "lock-row")]
             table: LockTable::new(&registry_config.app_name)?,
         })
     }
 
-    /// 启动时调用：开了 `lock-table` 就检查、建锁表
+    /// 启动时调用：开了 `lock-row` 就检查、建锁表
     pub(crate) async fn prepare(&self) -> Result<()> {
-        #[cfg(feature = "lock-table")]
+        #[cfg(feature = "lock-row")]
         self.table.ensure(&self.pool).await?;
         Ok(())
     }
@@ -98,7 +98,7 @@ impl PgLock {
     }
 
     /// 字符串 key：锁表里这个 key 那一行的行锁，拿不到的跳过（`SKIP LOCKED`）
-    #[cfg(feature = "lock-table")]
+    #[cfg(feature = "lock-row")]
     pub(crate) async fn try_key(&self, key: &LockKey) -> Result<Option<LockGuard>> {
         let name = key.as_str()?.to_string();
         self.table.ensure(&self.pool).await?;
@@ -113,7 +113,7 @@ impl PgLock {
         Ok(guard(tx, name, row.is_some()))
     }
 
-    #[cfg(feature = "lock-table")]
+    #[cfg(feature = "lock-row")]
     pub(crate) async fn lock_key(
         &self,
         key: &LockKey,
@@ -135,15 +135,15 @@ impl PgLock {
         Ok(guard(tx, name, got))
     }
 
-    #[cfg(not(feature = "lock-table"))]
+    #[cfg(not(feature = "lock-row"))]
     pub(crate) async fn try_key(&self, _key: &LockKey) -> Result<Option<LockGuard>> {
         Err(err!(
             LockErr::Unsupported,
-            "postgres: string lock key needs feature lock-table"
+            "postgres: string lock key needs feature lock-row"
         ))
     }
 
-    #[cfg(not(feature = "lock-table"))]
+    #[cfg(not(feature = "lock-row"))]
     pub(crate) async fn lock_key(
         &self,
         key: &LockKey,
@@ -264,7 +264,7 @@ macro_rules! impl_pg_lock {
 }
 pub(crate) use impl_pg_lock;
 
-#[cfg(all(test, not(feature = "lock-table")))]
+#[cfg(all(test, not(feature = "lock-row")))]
 mod tests {
     use hygiea_core::lock::{hy_lock_key, lock_key};
 
@@ -277,9 +277,9 @@ mod tests {
         Job,
     }
 
-    /// 没开 lock-table：字符串 key 不连库，直接返回 Unsupported
+    /// 没开 lock-row：字符串 key 不连库，直接返回 Unsupported
     #[tokio::test]
-    async fn string_key_needs_lock_table() {
+    async fn string_key_needs_lock_row() {
         let pool = PgPool::connect_lazy("postgres://localhost/none").unwrap();
         let locker = PgLock::new(pool, &RegistryConfig::default()).unwrap();
         let e = locker

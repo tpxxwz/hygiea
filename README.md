@@ -66,7 +66,7 @@
 | `db-seaorm-postgres` | `hygiea-db`（`seaorm` + `postgres`） | `hygiea::db::SeaOrmPgComponent` / `SeaOrmPgPool` |
 | `db-live-config` | `hygiea-db`（`live-config`），和上面的连接池组合一起开 | 连接池上的 `live_config` / `live_config_all`：数据库配置表，改了表程序自动拿到新值（`hygiea::db::LiveConfig` 等） |
 | `db-lock` | `hygiea-db`（`lock`），带上 `lock`，和 PostgreSQL 连接池组合一起开 | PG 连接池实现 `DistributedLock`：整数 key 用原生 advisory lock；字符串 key 返回 `Unsupported`。SQLite 还没有实现 |
-| `db-lock-table` | `hygiea-db`（`lock-table`），带上 `db-lock` | PG 的字符串 key：启动时建 `{app_name}_lock` 表，用行锁实现 |
+| `db-lock-row` | `hygiea-db`（`lock-row`），带上 `db-lock` | PG 的字符串 key：启动时建 `{app_name}_lock` 表，用行锁实现 |
 | `redis-fred` | `hygiea-redis`（`fred`） | `hygiea::redis::RedisComponent` / `FredRedisPool` |
 | `http-axum` | `hygiea-http`（`axum`） | `hygiea::http::AxumComponent` |
 | `http-client-reqwest` | `hygiea-http-client`（`reqwest`） | `hygiea::http_client::reqwest_client::ReqwestComponent` / `ReqwestConfig`，请求 API 也在这个模块；在 `Resources` 中提供 `ReqwestClient` |
@@ -239,7 +239,7 @@ async fn run(db: &impl DistributedLock, order_id: u32, day: &str) -> hygiea::Res
     }
     // 任意 i64，不用注册：PG 上是 pg_try_advisory_xact_lock(bigint)
     let _ = db.try_lock_i64(42).await?;
-    // 字符串 key（db-lock-table）：参数的写法和 err! 一样，对不上编译报错；阻塞版最多等 timeout
+    // 字符串 key（db-lock-row）：参数的写法和 err! 一样，对不上编译报错；阻塞版最多等 timeout
     let _ = db.lock(lock_key!(OrderLockKey::Settle, day), std::time::Duration::from_secs(3)).await?;
     Ok(())
 }

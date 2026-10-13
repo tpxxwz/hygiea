@@ -51,7 +51,7 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 
 | crate | 框架 feature | 其他 feature | facade 的 feature | facade 的路径 |
 |---|---|---|---|---|
-| `hygiea-db` | `sqlx`、`seaorm` | `postgres`、`sqlite`；`live-config`；`lock`、`lock-table`（依赖 `lock`） | `db-sqlx`、`db-seaorm`（只开框架）；`db-sqlx-postgres`、`db-sqlx-sqlite`、`db-seaorm-postgres`（组合，依赖前两个）；`db-live-config`（连接池的动态配置）；`db-lock`、`db-lock-table`（PG 连接池的分布式锁） | `hygiea::db` |
+| `hygiea-db` | `sqlx`、`seaorm` | `postgres`、`sqlite`；`live-config`；`lock`、`lock-row`（依赖 `lock`） | `db-sqlx`、`db-seaorm`（只开框架）；`db-sqlx-postgres`、`db-sqlx-sqlite`、`db-seaorm-postgres`（组合，依赖前两个）；`db-live-config`（连接池的动态配置）；`db-lock`、`db-lock-row`（PG 连接池的分布式锁） | `hygiea::db` |
 | `hygiea-redis` | `fred` | | `redis-fred` | `hygiea::redis` |
 | `hygiea-http` | `axum` | | `http-axum` | `hygiea::http` |
 | `hygiea-http-client` | `reqwest` | | `http-client-reqwest` | `hygiea::http_client`（实现在 `reqwest_client` 子模块） |
@@ -68,7 +68,7 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 | `hygiea-db/src/error.rs` | `RepoErr`：按操作分的数据库错误，0x 事务、1x 执行语句（10 兜底，11-14 增删改查）、2x 动态配置、3x 锁表、9x 参数 |
 | `hygiea-db/src/config.rs` | 连接池配置的公共部分：`PgConnectConfig` / `SqliteConnectConfig`（`[db.connect]`，连哪个库）、`PoolConfig`（`[db.pool]`，所有数据库、框架共用） |
 | `hygiea-db/src/live_config/` | 连接池的数据库配置表（feature `live-config`）：`mod.rs` 配置和对外导出，`source.rs` 绑定入口，`handle.rs` 句柄（`LiveConfig` / `LiveView`），`worker.rs` 后台任务，`store.rs` 独立小池和查询，`schema.rs` 表结构检查和建表，`sql/` 建表语句。设计说明见 `docs/design/live-config.md` |
-| `hygiea-db/src/lock/` | PG 连接池的分布式锁（feature `lock`）：`postgres.rs` 是事务级 advisory lock 和字符串 key 的行锁，`impl_pg_lock!` 给 `SqlxPgPool` / `SeaOrmPgPool` 实现 `DistributedLock`；`table.rs` 是锁表 `{app_name}_lock`（feature `lock-table`）的检查和建表。SQLite 还没有实现 |
+| `hygiea-db/src/lock/` | PG 连接池的分布式锁（feature `lock`）：`postgres.rs` 是事务级 advisory lock 和字符串 key 的行锁，`impl_pg_lock!` 给 `SqlxPgPool` / `SeaOrmPgPool` 实现 `DistributedLock`；`table.rs` 是锁表 `{app_name}_lock`（feature `lock-row`）的检查和建表，建表语句在 `sql/postgres.sql`。SQLite 还没有实现 |
 | `hygiea-db/src/ddl.rs` | 框架建的表（动态配置、锁表）共用的检查代码：表名前缀的校验、建表串行化的 advisory key、读表的列 |
 | `hygiea-redis/src/fred_pool.rs` | 连接池组件 |
 | `hygiea-http/src/axum_server.rs` | HTTP 服务组件 |

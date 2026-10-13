@@ -25,7 +25,7 @@ live-config = ["dep:sqlx", "dep:serde_json", "tokio/time"]
 # 连接池实现分布式锁（hygiea-core 的 DistributedLock），见 lock 模块文档
 lock = ["dep:sqlx", "hygiea-core/lock"]
 # PG 的字符串 key 用锁表实现（{app_name}_lock）
-lock-table = ["lock"]
+lock-row = ["lock"]
 # ---- 数据库 ----
 postgres = ["sqlx?/postgres"]
 sqlite = ["sqlx?/sqlite"]

@@ -1,4 +1,4 @@
-//! 连接池的分布式锁（feature `lock`、`lock-table`）的集成测试。
+//! 连接池的分布式锁（feature `lock`、`lock-row`）的集成测试。
 //!
 //! 只有 PostgreSQL（SQLite 还没有实现），是 container 层，要 Docker：
 //! ```sh
@@ -6,7 +6,7 @@
 //! ```
 
 #![cfg(all(
-    feature = "lock-table",
+    feature = "lock-row",
     feature = "sqlx",
     feature = "seaorm",
     feature = "postgres"
