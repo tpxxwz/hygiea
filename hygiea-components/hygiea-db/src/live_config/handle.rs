@@ -13,12 +13,15 @@ use crate::RepoErr;
 /// 绑定到 struct 的配置，`Clone` 后各处共用同一份（`T` 不用实现 `Clone`）
 pub struct LiveConfig<T> {
     pub(super) receiver: watch::Receiver<Arc<T>>,
+    /// [`fixed`](Self::fixed) 建的才有：留着发送端，`changed()` 一直等不到，而不是马上报后台任务已退出
+    fixed: Option<Arc<watch::Sender<Arc<T>>>>,
 }
 
 impl<T> Clone for LiveConfig<T> {
     fn clone(&self) -> Self {
         Self {
             receiver: self.receiver.clone(),
+            fixed: self.fixed.clone(),
         }
     }
 }
@@ -30,6 +33,29 @@ impl<T: std::fmt::Debug> std::fmt::Debug for LiveConfig<T> {
 }
 
 impl<T> LiveConfig<T> {
+    /// 连接池 bind 出来的句柄
+    pub(super) fn new(receiver: watch::Receiver<Arc<T>>) -> Self {
+        Self {
+            receiver,
+            fixed: None,
+        }
+    }
+
+    /// 固定值、不连库的句柄：业务的单元测试里用它代替 `live_config` / `live_config_all` 绑出来的，
+    /// `get()`、`view()` 照常用，值不会变，`changed()` 一直等不到
+    ///
+    /// ```ignore
+    /// let runtime = LiveConfig::fixed(RuntimeConfig { markji_sync: MarkjiSync { auto_sync: true, ..Default::default() }, ..Default::default() });
+    /// let service = MarkjiService::new(runtime.view(|c| &c.markji_sync));
+    /// ```
+    pub fn fixed(value: T) -> Self {
+        let (sender, receiver) = watch::channel(Arc::new(value));
+        Self {
+            receiver,
+            fixed: Some(Arc::new(sender)),
+        }
+    }
+
     /// 当前最新的值。内部是 tokio `watch` 的读写锁：读锁里只 clone 一下 `Arc`（引用计数 +1）就放开，
     /// 拿到的是这一刻的快照，之后用它不持有锁，也不会被后来的新值改掉。一次处理里要用几个配置项时只 `get()` 一次，
     /// 这几个值就来自同一个版本
@@ -158,5 +184,38 @@ struct Snapshot<T, U> {
 impl<T: Send + Sync, U> Held<U> for Snapshot<T, U> {
     fn value(&self) -> &U {
         (self.project)(&self.config)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    #[derive(Debug, PartialEq)]
+    struct Config {
+        sync: Sync,
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct Sync {
+        enabled: bool,
+    }
+
+    /// 固定值：get / view 拿到给的值，changed 一直等不到（不会马上报已关闭）
+    #[tokio::test]
+    async fn fixed_never_changes() {
+        let mut config = LiveConfig::fixed(Config {
+            sync: Sync { enabled: true },
+        });
+        assert!(config.get().sync.enabled);
+        let mut view = config.view(|c| &c.sync);
+        assert_eq!(*view.get(), Sync { enabled: true });
+
+        let waited = tokio::time::timeout(Duration::from_millis(50), config.changed()).await;
+        assert!(waited.is_err(), "changed() 不应该返回");
+        let waited = tokio::time::timeout(Duration::from_millis(50), view.changed()).await;
+        assert!(waited.is_err());
     }
 }

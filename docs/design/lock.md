@@ -1,7 +1,8 @@
-# 分布式锁：trait、key 的注册、PG 实现
+# 分布式锁：trait、key 的注册、PG 实现、进程内的锁
 
 trait 和 key 在 hygiea-core 的 `lock` 模块（feature `lock`），后端在组件里实现：目前只有 hygiea-db 的
-PostgreSQL 连接池（feature `lock`、`lock-row`）。SQLite、Redis 还没有实现。
+PostgreSQL 连接池（feature `lock`、`lock-row`）。Redis 还没有实现。
+不需要跨进程时用 core 的 `TokioLock`（feature `lock-tokio`），见第 4 节。
 
 ---
 
@@ -10,12 +11,17 @@ PostgreSQL 连接池（feature `lock`、`lock-row`）。SQLite、Redis 还没有
 ```rust
 #[async_trait]
 pub trait DistributedLock: Send + Sync {
-    async fn try_lock(&self, key: LockKey) -> Result<Option<LockGuard>>;              // 后端必须实现
-    async fn try_lock_i64(&self, key: impl Into<LockKeyI64> + Send) -> ..;             // 默认：999999999:<数字> 调 try_lock
-    async fn try_lock_i32(&self, key1: impl Into<LockType> + Send,
-                          key2: impl Into<LockKeyI32> + Send) -> ..;                   // 默认：高 32 位锁类型、低 32 位 key2 合成 i64
-    async fn lock(&self, key: LockKey, timeout: Duration) -> ..;                       // 默认：轮询 try_lock（最多 100ms 一次）
-    async fn lock_i64(..) / lock_i32(..)                                               // 默认：一层调一层
+    // 后端必须实现
+    async fn try_lock(&self, key: LockKey) -> Result<Option<LockGuard>>;
+    // 默认：转成字符串 key 999999999:<数字> 调 try_lock
+    async fn try_lock_i64(&self, key: impl Into<LockKeyI64> + Send) -> Result<Option<LockGuard>>;
+    // 默认：高 32 位锁类型、低 32 位 key2 合成 i64 调 try_lock_i64
+    async fn try_lock_i32(&self, key1: impl Into<LockType> + Send, key2: impl Into<LockKeyI32> + Send) -> Result<Option<LockGuard>>;
+    // 默认：轮询 try_lock（最多 100ms 一次）
+    async fn lock(&self, key: LockKey, timeout: Duration) -> Result<Option<LockGuard>>;
+    // 默认：和上面的 try_lock_i64 / try_lock_i32 一样一层调一层
+    async fn lock_i64(&self, key: impl Into<LockKeyI64> + Send, timeout: Duration) -> Result<Option<LockGuard>>;
+    async fn lock_i32(&self, key1: impl Into<LockType> + Send, key2: impl Into<LockKeyI32> + Send, timeout: Duration) -> Result<Option<LockGuard>>;
 }
 ```
 
@@ -34,6 +40,11 @@ pub trait DistributedLock: Send + Sync {
 | `try_lock_i32` / `lock_i32` | `LockType`（锁类型）+ `LockKeyI32`（运行时的 id，标准库能 `Into<i32>` 的类型加上 `u32`） | 锁类型要 `#[derive(hy_lock_type)]` |
 
 `LockType`、`LockKey` 的字段私有，只能由宏生成，随手写的数字、字符串编译不过。
+
+`LockKey::hashed_i64()` 是使用方显式选的降级：把字符串 key 哈希成 i64 走 `*_i64`（PG 上是 advisory lock，不用锁表）。
+算法固定（xxh3-64，seed 0），跨进程、跨版本一致；有损：n 个 key 里至少一对碰撞的概率约 n² / 2⁶⁵（100 万个约 3 × 10⁻⁸），
+撞上的两个 key 互相多锁，不会少锁；和直接传数字的 `try_lock_i64` 共用同一个空间。不做 `Into<LockKeyI64>`，
+免得 `try_lock_i64(lock_key!(..))` 悄悄哈希。
 
 ### 编号
 
@@ -90,7 +101,12 @@ lock_i64(k, t)   ── begin ──> set_config('lock_timeout', t, true) ──
 - 字符串 key（feature `lock-row`）：
   1. `INSERT INTO {app}_lock (key) VALUES ($1) ON CONFLICT DO NOTHING`（自动提交；已有的行不加锁，别人持有时也不等）
   2. 事务里 `SELECT key .. FOR UPDATE SKIP LOCKED`，拿到行就是拿到锁；阻塞版 `FOR UPDATE` + `lock_timeout`
-- 没开 `lock-row` 时字符串 key 返回 `LockErr::Unsupported`
+- 没开 `lock-row` 时字符串 key 哈希降级：`LockKey::hashed_i64()`（xxh3-64）转成 i64，走上面 `try_lock_i64` 的 advisory lock，
+  不建表；guard 的 key 显示成 `advisory <数字> (hashed <原 key>)`。
+  - 有损：不同 key 可能撞到同一个数，互相多锁（不会少锁）；和直接传数字的 `try_lock_i64` 共用一个空间
+  - **开不开 `lock-row`，同一个 key 锁的是两样东西，互不互斥**：所有实例的 feature 要一致，切换 `lock-row` 的发布窗口里
+    新旧实例对同一个 key 不互斥（停机切换，或保证切换期间不会同时加锁）
+  - feature 在整个依赖图里合并，任何一个依赖开了 `hygiea-db/lock-row` 就是锁表实现，用 `cargo tree -e features` 确认
 
 ### 锁表
 
@@ -107,9 +123,15 @@ CREATE TABLE {app_name}_lock (
 - 一个 key 一行，加锁时补上，不删
 - 已建好的表不会自动升级，改结构要同时改 `sql/postgres.sql` 和 `table.rs` 的 `EXPECTED`，已有的库手动改
 
-## 4. 还没做的
+## 4. 进程内的锁：`TokioLock`（hygiea-core，feature `lock-tokio`）
 
-- SQLite：持有写事务做锁会挡住整个库的写（SQLite 同一时间只有一个写事务）；租约行（插入带过期时间的行，释放时删）
-  不挡写，但要有过期时间，崩溃靠过期回收，持锁超过过期时间会被别人拿走。方案定了再做
+- `TokioLock::default()` 建，clone 出来的共用一张 key → `tokio::sync::Mutex` 的表（`DashMap`），key 精确匹配；
+  别的进程、另外建的 `TokioLock` 看不到
+- 只实现 `try_lock` / `lock`，整数 key 走默认实现转成字符串 key
+- 阻塞版直接等 Mutex（先到先得），不轮询
+- key 没人持有、没人在等时从表里删掉，表不会随 key 的个数一直长
+
+## 5. 还没做的
+
 - Redis：`SET NX PX` + token，释放用 Lua 校验 token；要不要看门狗续期待定
-- 阻塞版的默认实现是轮询（最多 100ms 一次）：释放后最多 100ms 才发现、不公平、频繁打后端。有原生等待的后端覆盖它（PG 已覆盖）
+- 阻塞版的默认实现是轮询（最多 100ms 一次）：释放后最多 100ms 才发现、不公平、频繁打后端。有原生等待的后端覆盖它（PG、`TokioLock` 已覆盖）

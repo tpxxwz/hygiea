@@ -240,6 +240,65 @@ mod sqlite {
         eventually(5, || async { sync.get().start_time == "01:00" }).await;
     }
 
+    async fn history_count(pool: &SqlxSqlitePool) -> i64 {
+        sqlx::query_scalar("SELECT count(*) FROM hy_config_history")
+            .fetch_one(&**pool)
+            .await
+            .unwrap()
+    }
+
+    /// 配了保留行数：后台任务一启动就删到只剩最新的 N 行
+    #[tokio::test]
+    async fn history_keeps_latest_rows() {
+        let env = Env::new().await;
+        let source = env.start().await;
+        let _sync = source.live_config("sync", Job::default()).await.unwrap();
+        env.exec("UPDATE hy_config SET value = '[3]' WHERE namespace = 'sync' AND key = 'levels'")
+            .await;
+        assert_eq!(history_count(&env.pool).await, 4);
+
+        let mut config = env.config.clone();
+        config.live_config.history_keep_rows = Some(2);
+        config.live_config.history_trim_interval_mins = Some(60);
+        let restarted = SqlxSqlitePool::from_config(&config, &app()).await.unwrap();
+        let _sync = restarted.live_config("sync", Job::default()).await.unwrap();
+        eventually(5, || async { history_count(&env.pool).await == 2 }).await;
+        // 留下的是最新的：最后一条是刚才的 U
+        let op: String =
+            sqlx::query_scalar("SELECT op FROM hy_config_history ORDER BY id DESC LIMIT 1")
+                .fetch_one(&*env.pool)
+                .await
+                .unwrap();
+        assert_eq!(op, "U");
+    }
+
+    /// 保留行数、清理间隔要么都配要么都不配，配了都要是正数
+    #[tokio::test]
+    async fn history_options_are_checked() {
+        // 库放在临时目录：默认的库路径是相对当前目录的文件
+        let dir = tempfile::tempdir().unwrap();
+        let database = dir.path().join("options.db").display().to_string();
+        let open = |rows: Option<u64>, mins: Option<u64>| {
+            let database = database.clone();
+            async move {
+                let mut config = SqlxSqliteConfig::default();
+                config.connect.database = database;
+                config.live_config.enabled = true;
+                config.live_config.history_keep_rows = rows;
+                config.live_config.history_trim_interval_mins = mins;
+                SqlxSqlitePool::from_config(&config, &app()).await
+            }
+        };
+        use hygiea_core::BaseErr::NotPositive;
+        use hygiea_core::app::AppErr::InvalidConfig;
+        assert!(open(Some(10), None).await.unwrap_err().is(InvalidConfig));
+        assert!(open(None, Some(60)).await.unwrap_err().is(InvalidConfig));
+        assert!(open(Some(0), Some(60)).await.unwrap_err().is(NotPositive));
+        assert!(open(Some(10), Some(0)).await.unwrap_err().is(NotPositive));
+        assert!(open(None, None).await.is_ok());
+        assert!(open(Some(10), Some(60)).await.is_ok());
+    }
+
     /// 改成转不了的值：保留旧值；改回合法的值后恢复更新
     #[tokio::test]
     async fn bad_value_keeps_old() {
@@ -630,6 +689,7 @@ mod postgres {
         LiveConfigOptions {
             enabled: true,
             poll_interval_secs: Some(3600),
+            ..Default::default()
         }
     }
 
@@ -648,6 +708,37 @@ mod postgres {
             password: PASSWORD.to_string(),
             ..Default::default()
         }
+    }
+
+    /// 保留行数在 PG 上也生效：后台任务一启动就删到只剩最新的 N 行
+    #[tokio::test]
+    async fn history_is_trimmed() {
+        let env = Env::new().await;
+        let source = env.start().await;
+        let _sync = source.live_config("sync", Job::default()).await.unwrap();
+        env.exec("UPDATE hy_config SET value = '[3]' WHERE namespace = 'sync' AND key = 'levels'")
+            .await;
+        // sync 3 条 I + 1 条 U
+        let count = || async {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM hy_config_history")
+                .fetch_one(&*env.pool)
+                .await
+                .unwrap()
+        };
+        assert_eq!(count().await, 4);
+
+        let mut config = sqlx_config(&env.server);
+        config.live_config.history_keep_rows = Some(2);
+        config.live_config.history_trim_interval_mins = Some(60);
+        let restarted = SqlxPgPool::from_config(&config, &app()).await.unwrap();
+        let _sync = restarted.live_config("sync", Job::default()).await.unwrap();
+        eventually(5, || async { count().await == 2 }).await;
+        let op: String =
+            sqlx::query_scalar("SELECT op FROM hy_config_history ORDER BY id DESC LIMIT 1")
+                .fetch_one(&*env.pool)
+                .await
+                .unwrap();
+        assert_eq!(op, "U", "留下的是最新的");
     }
 
     /// 改值靠 NOTIFY 推过来；history 记了数据库账号

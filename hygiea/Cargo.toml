@@ -37,6 +37,7 @@ log = ["hygiea-core/log"]
 ws-client = ["hygiea-core/ws-client"]
 redact = ["hygiea-core/redact"]
 lock = ["hygiea-core/lock"]
+lock-tokio = ["hygiea-core/lock-tokio"]
 json = ["hygiea-core/json"]
 datetime-iana = ["hygiea-core/datetime-iana"]
 datetime-chrono = ["hygiea-core/datetime-chrono"]
@@ -51,7 +52,8 @@ db-sqlx-sqlite = ["db-sqlx", "hygiea-db/sqlite"]
 db-seaorm-postgres = ["db-seaorm", "hygiea-db/postgres"]
 # 连接池的数据库配置表（动态配置）能力，和上面的组合一起开
 db-live-config = ["dep:hygiea-db", "hygiea-db/live-config"]
-# 连接池的分布式锁：PG 整数 key 用 advisory lock；db-lock-row 再加字符串 key（锁表）
+# 连接池的分布式锁：PG 整数 key 用 advisory lock，字符串 key 哈希成 i64（可能碰撞）；
+# db-lock-row 让字符串 key 改用锁表（精确）。开不开它同一个 key 锁的是两样东西，所有实例要一致
 db-lock = ["lock", "dep:hygiea-db", "hygiea-db/lock"]
 db-lock-row = ["db-lock", "hygiea-db/lock-row"]
 redis-fred = ["dep:hygiea-redis", "hygiea-redis/fred"]

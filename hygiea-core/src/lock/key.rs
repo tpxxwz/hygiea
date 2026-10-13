@@ -91,6 +91,19 @@ impl LockKey {
             Err(cause) => Err(crate::err!(super::LockErr::InvalidKey, cause)),
         }
     }
+
+    /// 把字符串 key 哈希成 i64，交给 `*_i64` 的锁：PG 上是 advisory lock，不用锁表，换性能。
+    ///
+    /// 这是有损的降级，要使用方自己选：不同 key 可能撞到同一个值（多锁，不会少锁），也和直接传数字的
+    /// `try_lock_i64` 共用同一个空间。算法固定（xxh3-64，seed 0），跨进程、跨机器、跨版本结果一致。
+    ///
+    /// ```ignore
+    /// db.try_lock_i64(lock_key!(OrderLockKey::Export, user_name).hashed_i64()?).await?;
+    /// ```
+    pub fn hashed_i64(&self) -> crate::Result<LockKeyI64> {
+        let hash = xxhash_rust::xxh3::xxh3_64(self.as_str()?.as_bytes());
+        Ok(LockKeyI64::from(hash))
+    }
 }
 
 macro_rules! impl_from {
@@ -133,6 +146,30 @@ mod tests {
         assert_eq!(LockKeyI32::from(true).get(), 1);
         assert_eq!(LockKeyI64::from(NonZeroI64::MIN).get(), i64::MIN);
     }
+
+    /// 算法固定：同一个 key 的结果写死在这里，换了算法或 seed 会失败
+    #[test]
+    fn hashed_i64_is_stable() {
+        let key = |s: &str| LockKey(Ok(s.to_string()));
+        let hashed = key("001020002:settle:2026-10-13")
+            .hashed_i64()
+            .unwrap()
+            .get();
+        assert_eq!(hashed, HASHED_SETTLE);
+        assert_ne!(
+            hashed,
+            key("001020002:settle:2026-10-14")
+                .hashed_i64()
+                .unwrap()
+                .get()
+        );
+        let invalid = LockKey(Err("missing id".to_string()))
+            .hashed_i64()
+            .unwrap_err();
+        assert!(invalid.is(crate::lock::LockErr::InvalidKey));
+    }
+
+    const HASHED_SETTLE: i64 = 4973850726513738739;
 
     #[test]
     fn pair_is_one_to_one() {

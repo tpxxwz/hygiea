@@ -1,4 +1,5 @@
-//! PostgreSQL 的锁：整数 key 用事务级 advisory lock，字符串 key（`lock-row`）用锁表的行锁
+//! PostgreSQL 的锁：整数 key 用事务级 advisory lock；字符串 key 开了 `lock-row` 用锁表的行锁，
+//! 没开就哈希成 i64（`LockKey::hashed_i64`）走 advisory lock，有损，见 lock 模块文档
 
 use std::time::Duration;
 
@@ -39,7 +40,11 @@ impl PgLock {
     }
 
     pub(crate) async fn try_i64(&self, key: i64) -> Result<Option<LockGuard>> {
-        let name = format!("advisory {key}");
+        self.try_advisory(key, format!("advisory {key}")).await
+    }
+
+    /// `name` 是日志、错误、guard 里显示的 key
+    async fn try_advisory(&self, key: i64, name: String) -> Result<Option<LockGuard>> {
         let mut tx = self.begin(&name).await?;
         let got: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock($1)")
             .bind(key)
@@ -62,10 +67,19 @@ impl PgLock {
     }
 
     pub(crate) async fn lock_i64(&self, key: i64, timeout: Duration) -> Result<Option<LockGuard>> {
+        self.lock_advisory(key, format!("advisory {key}"), timeout)
+            .await
+    }
+
+    async fn lock_advisory(
+        &self,
+        key: i64,
+        name: String,
+        timeout: Duration,
+    ) -> Result<Option<LockGuard>> {
         if timeout.is_zero() {
-            return self.try_i64(key).await;
+            return self.try_advisory(key, name).await;
         }
-        let name = format!("advisory {key}");
         let mut tx = self.begin(&name).await?;
         set_lock_timeout(&mut tx, timeout, &name).await?;
         let result = sqlx::query("SELECT pg_advisory_xact_lock($1)")
@@ -135,26 +149,33 @@ impl PgLock {
         Ok(guard(tx, name, got))
     }
 
+    /// 没开 `lock-row`：字符串 key 哈希成 i64 走 advisory lock，不同 key 可能撞到同一把锁
     #[cfg(not(feature = "lock-row"))]
-    pub(crate) async fn try_key(&self, _key: &LockKey) -> Result<Option<LockGuard>> {
-        Err(err!(
-            LockErr::Unsupported,
-            "postgres: string lock key needs feature lock-row"
-        ))
+    pub(crate) async fn try_key(&self, key: &LockKey) -> Result<Option<LockGuard>> {
+        let hashed = key.hashed_i64()?.get();
+        self.try_advisory(hashed, hashed_name(hashed, key)?).await
     }
 
     #[cfg(not(feature = "lock-row"))]
     pub(crate) async fn lock_key(
         &self,
         key: &LockKey,
-        _timeout: Duration,
+        timeout: Duration,
     ) -> Result<Option<LockGuard>> {
-        self.try_key(key).await
+        let hashed = key.hashed_i64()?.get();
+        self.lock_advisory(hashed, hashed_name(hashed, key)?, timeout)
+            .await
     }
 
     async fn begin(&self, name: &str) -> Result<Transaction<'static, Postgres>> {
         self.pool.begin().await.wrap_err(|| acquire_err(name))
     }
+}
+
+/// 哈希出来的锁显示原来的字符串 key，排查时能对上 `pg_locks` 里的数字
+#[cfg(not(feature = "lock-row"))]
+fn hashed_name(hashed: i64, key: &LockKey) -> Result<String> {
+    Ok(format!("advisory {hashed} (hashed {})", key.as_str()?))
 }
 
 fn acquire_err(name: &str) -> hygiea_core::HyErr {
@@ -263,34 +284,3 @@ macro_rules! impl_pg_lock {
     };
 }
 pub(crate) use impl_pg_lock;
-
-#[cfg(all(test, not(feature = "lock-row")))]
-mod tests {
-    use hygiea_core::lock::{hy_lock_key, lock_key};
-
-    use super::*;
-
-    #[derive(hy_lock_key)]
-    #[lock_internal_module_prefix = "100"]
-    enum TestLockKey {
-        #[lock_key(code = "003", tpl = "job")]
-        Job,
-    }
-
-    /// 没开 lock-row：字符串 key 不连库，直接返回 Unsupported
-    #[tokio::test]
-    async fn string_key_needs_lock_row() {
-        let pool = PgPool::connect_lazy("postgres://localhost/none").unwrap();
-        let locker = PgLock::new(pool, &RegistryConfig::default()).unwrap();
-        let e = locker
-            .try_key(&lock_key!(TestLockKey::Job))
-            .await
-            .unwrap_err();
-        assert!(e.is(LockErr::Unsupported));
-        let e = locker
-            .lock_key(&lock_key!(TestLockKey::Job), Duration::from_secs(1))
-            .await
-            .unwrap_err();
-        assert!(e.is(LockErr::Unsupported));
-    }
-}

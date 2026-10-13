@@ -25,6 +25,8 @@ app_name = "dict_jp"             # 应用名（小写下划线），也是表名
 [db.live_config]
 enabled = true                   # 默认不开，要用的连接池才写
 # poll_interval_secs = 60        # 不写：PG 60 秒（兜底），SQLite 1 秒（主要靠它）
+# history_keep_rows = 10000      # 变更历史只留最新的多少行、隔多少分钟清一次（启动时先清一次）；
+# history_trim_interval_mins = 60 # 两项要么都写要么都不写，都不写不删
 ```
 
 ### 代码
@@ -319,4 +321,6 @@ sequenceDiagram
 - **默认值**：表里没有的 key 才写进去，表里有的永远以表为准
 - **版本号**：每个 namespace 一个，增删改都 +1，程序只接受更大的
 - **namespace 粒度**：变了只重新读那一个 namespace
+- **变更历史**：只给人查，程序不读它（版本号在 `_config_revision` 里），随便删不影响生效的值；配了 `history_keep_rows` + `history_trim_interval_mins`（两项一起配）时后台任务定时删到只剩最新的 N 行，不配不删
+- **日志**：第一次 bind 后按 namespace 打出生效的值，之后每次生效的变更打 `key: 旧值 -> 新值`；值是 struct 里生效的值，`#[redact(mask)]` 的字段打成 `***`
 - 更多注意事项（字段改名、改类型、从库、`:memory:` 等）见 `live_config/mod.rs` 的「用的时候要注意」

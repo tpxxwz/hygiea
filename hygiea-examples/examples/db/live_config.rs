@@ -17,6 +17,14 @@
 //! ```
 //!
 //! 库文件在系统临时目录（启动日志里有路径），再启动一次时表里的值还在，默认值不会把它覆盖回去。
+//! 启动时框架按 namespace 打出生效的值，之后每次变更打出改了哪些 key（旧值 -> 新值）；`webhook_token` 标了
+//! `#[redact(mask)]`，日志里是 `***`：
+//!
+//! ```bash
+//! curl -X POST http://127.0.0.1:8082/admin/config -H 'content-type: application/json' \
+//!      -d '{"namespace":"feature","key":"webhook_token","value":"abc"}'
+//! ```
+//!
 //! 表名前缀是应用名（这里没配，默认 `hygiea`），配置表是 `hygiea_config`。
 //! 表里还有 `hygiea_config_revision`（每个 namespace 的版本号）和 `hygiea_config_history`（每次变更的新旧值），由触发器维护。
 
@@ -30,6 +38,7 @@ use hygiea::db::{
     SqlxSqlitePool,
 };
 use hygiea::http::{AxumComponent, AxumConfig, arity0_state, arity1_state};
+use hygiea::redact::redact;
 use hygiea::{BaseErr, Result, ResultExt, err};
 use serde::{Deserialize, Serialize};
 
@@ -57,9 +66,13 @@ impl Default for Greeting {
     }
 }
 
+/// 标了 `#[redact(mask)]` 的字段，框架打的配置日志里显示成 `***`
+#[redact]
 #[derive(Serialize, Deserialize, Default)]
 pub struct Feature {
     pub shout: bool,
+    #[redact(mask)]
+    pub webhook_token: String,
 }
 
 // ---- 应用状态 ----

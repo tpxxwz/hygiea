@@ -86,6 +86,8 @@ struct Sql {
     load: String,
     revisions: String,
     seed: String,
+    /// 变更历史只留最新的 N 行，参数是 N
+    trim_history: String,
 }
 
 impl Sql {
@@ -99,6 +101,13 @@ impl Sql {
             )
         };
         let revisions = format!("SELECT namespace, revision FROM {revision}");
+        let history = tables.history();
+        let trim_history = |param: &str| {
+            format!(
+                "DELETE FROM {history} WHERE id <= \
+                 (SELECT id FROM {history} ORDER BY id DESC LIMIT 1 OFFSET {param})"
+            )
+        };
         match backend {
             #[cfg(feature = "postgres")]
             Backend::Postgres => Self {
@@ -110,6 +119,7 @@ impl Sql {
                      SELECT n.key, k.key, k.value FROM jsonb_each($1::jsonb) n, jsonb_each(n.value) k \
                      ON CONFLICT (namespace, key) DO NOTHING"
                 ),
+                trim_history: trim_history("$1"),
             },
             #[cfg(feature = "sqlite")]
             Backend::Sqlite => Self {
@@ -117,6 +127,7 @@ impl Sql {
                 revisions,
                 // 后面按行数拼 `(?, ?, ?), ..` 和 ON CONFLICT：SQLite 的 json_each 展开会丢掉 JSON 的引号、true 变 1
                 seed: format!("INSERT INTO {config} (namespace, key, value) VALUES "),
+                trim_history: trim_history("?1"),
             },
         }
     }
@@ -301,6 +312,31 @@ impl Store {
             Conn::Sqlite(pool) => seed_sqlite(pool, &self.sql.seed, defaults).await,
         };
         done.wrap_err(|| err!(RepoErr::InsertFailed, "live config seed defaults"))
+    }
+
+    /// 变更历史表只留最新的 `keep_rows` 行，返回删了几行
+    pub(crate) async fn trim_history(&mut self, keep_rows: u64) -> Result<u64> {
+        let query = AssertSqlSafe(self.sql.trim_history.as_str());
+        // 配置里的数字很小，转不过去就用最大值（等于不删）
+        let keep_rows = i64::try_from(keep_rows).unwrap_or(i64::MAX);
+        let done = match &mut self.conn {
+            #[cfg(feature = "postgres")]
+            Conn::Postgres { listener, .. } => match opened(listener) {
+                Ok(listener) => sqlx::query(query)
+                    .bind(keep_rows)
+                    .execute(&mut **listener)
+                    .await
+                    .map(|r| r.rows_affected()),
+                Err(e) => Err(e),
+            },
+            #[cfg(feature = "sqlite")]
+            Conn::Sqlite(pool) => sqlx::query(query)
+                .bind(keep_rows)
+                .execute(&*pool)
+                .await
+                .map(|r| r.rows_affected()),
+        };
+        done.wrap_err(|| err!(RepoErr::DeleteFailed, "live config trim history"))
     }
 
     /// 等下一个变更信号。SQLite 没有推送，一直等不到，只靠轮询；PG 还没建好 listener 时也一直等。

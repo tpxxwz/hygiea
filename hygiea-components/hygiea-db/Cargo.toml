@@ -20,11 +20,12 @@ default = []
 sqlx = ["dep:sqlx"]
 seaorm = ["dep:sea-orm", "dep:log"]
 # ---- 功能 ----
-# 连接池的数据库配置表（动态配置）能力，见 live_config 模块文档
-live-config = ["dep:sqlx", "dep:serde_json", "tokio/time"]
+# 连接池的数据库配置表（动态配置）能力，见 live_config 模块文档；日志里的值按 #[redact] 打码，带上 core 的 redact
+live-config = ["dep:sqlx", "dep:serde_json", "tokio/time", "hygiea-core/redact"]
 # 连接池实现分布式锁（hygiea-core 的 DistributedLock），见 lock 模块文档
 lock = ["dep:sqlx", "hygiea-core/lock"]
-# PG 的字符串 key 用锁表实现（{app_name}_lock）
+# PG 的字符串 key 用锁表实现（{app_name}_lock），精确；不开时哈希成 i64 走 advisory lock（可能碰撞）。
+# 开不开它同一个 key 锁的是两样东西，所有实例要一致
 lock-row = ["lock"]
 # ---- 数据库 ----
 postgres = ["sqlx?/postgres"]

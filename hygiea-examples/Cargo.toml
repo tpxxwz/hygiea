@@ -16,8 +16,12 @@ err_code_project_prefix = "001"
 [dev-dependencies]
 # db-sqlx-sqlite / http-axum：app 示例用的现成组件，SQLite 用内存库，不需要装数据库服务；
 # db-live-config：db_live_config 示例用的连接池动态配置能力；
+# db-sqlx-postgres、db-lock-row：db_lock 示例用的 PG 连接池分布式锁；
+# full 里的 lock-tokio：lock_tokio 示例用的进程内锁；
 # full 带上 log、datetime-iana、redact 等 core feature；HTTP 客户端另开组件 feature
-hygiea = { workspace = true, features = ["full", "db-sqlx-sqlite", "db-live-config", "http-axum", "http-client-reqwest"] }
+hygiea = { workspace = true, features = ["full", "db-sqlx-sqlite", "db-sqlx-postgres", "db-live-config", "db-lock-row", "http-axum", "http-client-reqwest"] }
+# db_lock 用 Docker 起一个临时的 postgres
+hygiea-test = { workspace = true, features = ["container"] }
 # app_basic / http_client_basic / http_axum_response 写 HTTP 路由用
 axum = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
@@ -60,6 +64,14 @@ path = "examples/app/two_phase.rs"
 [[example]]
 name = "db_live_config"
 path = "examples/db/live_config.rs"
+
+[[example]]
+name = "db_lock"
+path = "examples/db/lock.rs"
+
+[[example]]
+name = "lock_tokio"
+path = "examples/lock/tokio.rs"
 
 [[example]]
 name = "error_basic"

@@ -119,6 +119,10 @@ connect_lazy = false
 enabled = false
 # 对一遍版本号的间隔（秒）。不写：PostgreSQL 60（兜底，变更靠 NOTIFY 推过来），SQLite 1（主要靠它）
 # poll_interval_secs = 60
+# 变更历史表（{app_name}_config_history）只留最新的多少行、隔多少分钟清一次（后台任务启动时先清一次）。
+# 两项要么都写、要么都不写（只写一个启动报错），都不写不删
+# history_keep_rows = 10000
+# history_trim_interval_mins = 60
 
 # =====================================================================================
 # 组件：SeaOrmPgConfig（hygiea::db，feature db-seaorm-postgres）
@@ -165,6 +169,10 @@ slow_statements_threshold_secs = 1
 enabled = false
 # 对一遍版本号的间隔（秒）。不写：PostgreSQL 60（兜底，变更靠 NOTIFY 推过来），SQLite 1（主要靠它）
 # poll_interval_secs = 60
+# 变更历史表（{app_name}_config_history）只留最新的多少行、隔多少分钟清一次（后台任务启动时先清一次）。
+# 两项要么都写、要么都不写（只写一个启动报错），都不写不删
+# history_keep_rows = 10000
+# history_trim_interval_mins = 60
 
 # =====================================================================================
 # 组件：SqlxSqliteConfig（hygiea::db，feature db-sqlx-sqlite）
@@ -213,6 +221,10 @@ connect_lazy = false
 enabled = false
 # 对一遍版本号的间隔（秒）。不写：PostgreSQL 60（兜底，变更靠 NOTIFY 推过来），SQLite 1（主要靠它）
 # poll_interval_secs = 60
+# 变更历史表（{app_name}_config_history）只留最新的多少行、隔多少分钟清一次（后台任务启动时先清一次）。
+# 两项要么都写、要么都不写（只写一个启动报错），都不写不删
+# history_keep_rows = 10000
+# history_trim_interval_mins = 60
 
 # =====================================================================================
 # 组件：RedisConfig（hygiea::redis，feature redis-fred）

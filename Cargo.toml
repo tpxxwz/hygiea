@@ -60,6 +60,7 @@ ctor = "1.0"
 minijinja = "2.24"
 parking_lot = "0.12"
 dashmap = "6.2"
+xxhash-rust = "0.8"
 lru = "0.18"
 
 # CLI & 配置文件加载

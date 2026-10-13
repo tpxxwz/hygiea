@@ -1,7 +1,8 @@
 //! 分布式锁的抽象：[`DistributedLock`] trait、持有中的锁 [`LockGuard`]、key（[`LockKey`]、[`LockType`]、
 //! [`LockKeyI32`] / [`LockKeyI64`]）、错误 [`LockErr`]。
 //!
-//! 后端（数据库、Redis）在各自的组件 crate 里实现，业务只依赖这里的 trait。
+//! 后端（数据库、Redis）在各自的组件 crate 里实现，业务只依赖这里的 trait。不需要跨进程时可以用进程内的
+//! `TokioLock`（feature `lock-tokio`）。
 //!
 //! 锁的 key 有三种，对标 PostgreSQL advisory lock。默认实现一层调一层：锁类型和 `i32` 合成一个 `i64`
 //! 调 `*_i64`，`i64` 转成字符串 key 调字符串版本，后端最少只实现 [`try_lock`](DistributedLock::try_lock)；
@@ -38,6 +39,8 @@ mod error;
 mod guard;
 mod key;
 mod registry;
+#[cfg(feature = "lock-tokio")]
+mod tokio_lock;
 
 pub use error::LockErr;
 pub use guard::LockGuard;
@@ -46,6 +49,8 @@ pub use hygiea_macros::hy_lock_key;
 /// 注册锁类型，见 [`LockType`]
 pub use hygiea_macros::hy_lock_type;
 pub use key::{LockKey, LockKeyI32, LockKeyI64, LockType};
+#[cfg(feature = "lock-tokio")]
+pub use tokio_lock::TokioLock;
 
 pub(crate) use registry::init;
 

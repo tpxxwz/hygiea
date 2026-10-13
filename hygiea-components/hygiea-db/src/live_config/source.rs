@@ -11,7 +11,7 @@ use serde_json::{Map, Value};
 use tokio::sync::{OnceCell, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
-use hygiea_core::app::{CancellationToken, RegistryConfig};
+use hygiea_core::app::{AppErr, CancellationToken, RegistryConfig};
 use hygiea_core::{BaseErr, Result, ResultExt, ensure, err};
 
 use super::Backend;
@@ -19,7 +19,7 @@ use super::LiveConfigOptions;
 use super::handle::LiveConfig;
 use super::schema::Tables;
 use super::store::Store;
-use super::worker::{Binding, Command, NsState, Worker};
+use super::worker::{Binding, Command, Effective, HistoryRetention, NsState, Worker};
 use crate::RepoErr;
 
 /// 连接池上的动态配置，没开（`enabled = false`）报 [`RepoErr::LiveConfigDisabled`]
@@ -57,6 +57,8 @@ struct Inner {
     /// 配置表名，Debug 用
     table: String,
     poll_interval: Duration,
+    /// 历史表留多少行、隔多久清一次，没配是 `None`
+    history: Option<HistoryRetention>,
     /// 第一次 bind 时连库、起后台任务，之后发命令给它
     commands: OnceCell<mpsc::Sender<Command>>,
     handle: std::sync::Mutex<Option<JoinHandle<()>>>,
@@ -87,12 +89,14 @@ impl LiveConfigSource {
             "param": "live_config.poll_interval_secs",
             "op": "LiveConfigSource::new",
         });
+        let history = history_retention(config)?;
         Ok(Self {
             inner: Arc::new(Inner {
                 backend,
                 table: store.table(),
                 store: std::sync::Mutex::new(Some(store)),
                 poll_interval: Duration::from_secs(poll_interval_secs),
+                history,
                 commands: OnceCell::new(),
                 handle: std::sync::Mutex::new(None),
                 shutdown: CancellationToken::new(),
@@ -185,6 +189,7 @@ impl LiveConfigSource {
                 let (commands, receiver) = mpsc::channel(16);
                 let worker = Worker {
                     poll_interval: inner.poll_interval,
+                    history: inner.history,
                     store,
                     commands: receiver,
                     states: HashMap::new(),
@@ -208,7 +213,7 @@ impl LiveConfigSource {
         initial: T,
     ) -> Result<LiveConfig<T>>
     where
-        T: DeserializeOwned + Send + Sync + 'static,
+        T: Serialize + DeserializeOwned + Send + Sync + 'static,
     {
         let commands = self.commands().await?;
         let (sender, mut receiver) = watch::channel(Arc::new(initial));
@@ -232,8 +237,37 @@ impl LiveConfigSource {
             .map_err(|_| err!(RepoErr::LiveConfigClosed))??;
         // 首次加载的值算已经看过，changed() 只等之后的变化
         receiver.borrow_and_update();
-        Ok(LiveConfig { receiver })
+        Ok(LiveConfig::new(receiver))
     }
+}
+
+/// `history_keep_rows`、`history_trim_interval_mins` 要么都配、要么都不配，配了都要是正数
+fn history_retention(config: &LiveConfigOptions) -> Result<Option<HistoryRetention>> {
+    let (keep_rows, interval_mins) = match (
+        config.history_keep_rows,
+        config.history_trim_interval_mins,
+    ) {
+        (None, None) => return Ok(None),
+        (Some(rows), Some(mins)) => (rows, mins),
+        _ => {
+            return Err(err!(
+                AppErr::InvalidConfig,
+                "live_config.history_keep_rows and history_trim_interval_mins must be set together"
+            ));
+        }
+    };
+    ensure!(keep_rows > 0, BaseErr::NotPositive, {
+        "param": "live_config.history_keep_rows",
+        "op": "LiveConfigSource::new",
+    });
+    ensure!(interval_mins > 0, BaseErr::NotPositive, {
+        "param": "live_config.history_trim_interval_mins",
+        "op": "LiveConfigSource::new",
+    });
+    Ok(Some(HistoryRetention {
+        keep_rows,
+        interval: Duration::from_secs(interval_mins.saturating_mul(60)),
+    }))
 }
 
 /// 默认值转成 JSON 对象
@@ -260,12 +294,12 @@ struct TypedBinding<T> {
     sender: watch::Sender<Arc<T>>,
 }
 
-impl<T: DeserializeOwned + Send + Sync + 'static> Binding for TypedBinding<T> {
+impl<T: Serialize + DeserializeOwned + Send + Sync + 'static> Binding for TypedBinding<T> {
     fn namespaces(&self) -> &[String] {
         &self.namespaces
     }
 
-    fn apply(&self, states: &HashMap<String, NsState>) -> Result<()> {
+    fn apply(&self, states: &HashMap<String, NsState>) -> Result<Vec<(String, Effective)>> {
         let mut merged = self.defaults.iter().map(|(namespace, defaults)| {
             (
                 namespace.clone(),
@@ -275,7 +309,7 @@ impl<T: DeserializeOwned + Send + Sync + 'static> Binding for TypedBinding<T> {
         let (json, name) = match self.shape {
             Shape::One => match merged.next() {
                 Some((namespace, object)) => (Value::Object(object), namespace),
-                None => return Ok(()),
+                None => return Ok(Vec::new()),
             },
             Shape::All => {
                 let root = merged
@@ -286,8 +320,40 @@ impl<T: DeserializeOwned + Send + Sync + 'static> Binding for TypedBinding<T> {
         };
         let value: T = serde_json::from_value(json)
             .wrap_err(|| err!(RepoErr::LiveConfigDecodeFailed, name))?;
+        let effective = self.effective(&value);
         self.sender.send_replace(Arc::new(value));
-        Ok(())
+        Ok(effective)
+    }
+}
+
+impl<T: Serialize> TypedBinding<T> {
+    /// struct 里各 namespace 生效的值，给日志用：普通序列化一份比较变化，日志模式（redact）序列化一份打出来。
+    /// 刚从 JSON 转出来的 struct 再序列化不会失败，万一失败就当成空的，只影响日志
+    fn effective(&self, value: &T) -> Vec<(String, Effective)> {
+        let raw = serde_json::to_value(value).unwrap_or_default();
+        let shown = hygiea_core::redact::scope(|| serde_json::to_value(value)).unwrap_or_default();
+        let part = |root: &Value, namespace: &str| match self.shape {
+            Shape::One => object(root),
+            Shape::All => root.get(namespace).map(object).unwrap_or_default(),
+        };
+        self.namespaces
+            .iter()
+            .map(|namespace| {
+                let effective = Effective {
+                    raw: part(&raw, namespace),
+                    shown: part(&shown, namespace),
+                };
+                (namespace.clone(), effective)
+            })
+            .collect()
+    }
+}
+
+/// JSON 对象里的字段，不是对象时是空的
+fn object(value: &Value) -> Map<String, Value> {
+    match value {
+        Value::Object(map) => map.clone(),
+        _ => Map::new(),
     }
 }
 

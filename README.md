@@ -46,6 +46,7 @@
 | `app` | 应用框架，见上文（会带上 `log`） |
 | `log` | tracing 初始化：控制台和按时间滚动的文件输出、过滤，可以脱离 `app` 单独用（会带上 `datetime-iana`） |
 | `lock` | 分布式锁的 trait（`hygiea::lock::DistributedLock`）和 key 的注册（`#[derive(hy_lock_type)]`、`#[derive(hy_lock_key)]`、`lock_key!`），后端由组件实现（见 `db-lock`），见下文「分布式锁」 |
+| `lock-tokio` | 进程内的锁 `hygiea::lock::TokioLock`：tokio 的 Mutex 实现 `DistributedLock`，不跨进程（会带上 `lock`） |
 | `redact` | 日志打码：`#[redact]` 属性，标了 `#[redact(mask)]` / `#[redact(skip)]` 的字段只在序列化进日志时打码（任意嵌套层级都生效），正常序列化不受影响 |
 | `datetime-iana` | IANA 时区和系统本地时间（`*_local` 方法） |
 | `datetime-chrono` | 和 chrono 互相转换 |
@@ -65,8 +66,8 @@
 | `db-sqlx-sqlite` | `hygiea-db`（`sqlx` + `sqlite`） | `hygiea::db::SqlxSqliteComponent` / `SqlxSqlitePool` |
 | `db-seaorm-postgres` | `hygiea-db`（`seaorm` + `postgres`） | `hygiea::db::SeaOrmPgComponent` / `SeaOrmPgPool` |
 | `db-live-config` | `hygiea-db`（`live-config`），和上面的连接池组合一起开 | 连接池上的 `live_config` / `live_config_all`：数据库配置表，改了表程序自动拿到新值（`hygiea::db::LiveConfig` 等） |
-| `db-lock` | `hygiea-db`（`lock`），带上 `lock`，和 PostgreSQL 连接池组合一起开 | PG 连接池实现 `DistributedLock`：整数 key 用原生 advisory lock；字符串 key 返回 `Unsupported`。SQLite 还没有实现 |
-| `db-lock-row` | `hygiea-db`（`lock-row`），带上 `db-lock` | PG 的字符串 key：启动时建 `{app_name}_lock` 表，用行锁实现 |
+| `db-lock` | `hygiea-db`（`lock`），带上 `lock`，和 PostgreSQL 连接池组合一起开 | PG 连接池实现 `DistributedLock`：整数 key 用原生 advisory lock；字符串 key 哈希成 i64（可能碰撞） |
+| `db-lock-row` | `hygiea-db`（`lock-row`），带上 `db-lock` | PG 的字符串 key 改用 `{app_name}_lock` 表的行锁，精确；开不开要所有实例一致，见设计说明 |
 | `redis-fred` | `hygiea-redis`（`fred`） | `hygiea::redis::RedisComponent` / `FredRedisPool` |
 | `http-axum` | `hygiea-http`（`axum`） | `hygiea::http::AxumComponent` |
 | `http-client-reqwest` | `hygiea-http-client`（`reqwest`） | `hygiea::http_client::reqwest_client::ReqwestComponent` / `ReqwestConfig`，请求 API 也在这个模块；在 `Resources` 中提供 `ReqwestClient` |
@@ -211,7 +212,7 @@ fn main() {
 
 ### 分布式锁
 
-`lock` feature 提供 trait 和 key，后端由组件实现（目前是 `db-lock` 的 PostgreSQL 连接池）。锁不可重入，拿不到返回 `Ok(None)`。
+`lock` feature 提供 trait 和 key，后端由组件实现（目前是 `db-lock` 的 PostgreSQL 连接池）；只要进程内互斥的用 `lock-tokio` 的 `TokioLock`。锁不可重入，拿不到返回 `Ok(None)`。
 key 有三种，锁类型和字符串 key 都要注册，编号的规则和错误码一样（项目前缀 3 位 + 模块前缀 + 编号，共 9 位，和错误码共用项目前缀），
 两个 derive 共用一套编号，同模块编译期、跨 crate 启动时查重：
 
@@ -239,7 +240,7 @@ async fn run(db: &impl DistributedLock, order_id: u32, day: &str) -> hygiea::Res
     }
     // 任意 i64，不用注册：PG 上是 pg_try_advisory_xact_lock(bigint)
     let _ = db.try_lock_i64(42).await?;
-    // 字符串 key（db-lock-row）：参数的写法和 err! 一样，对不上编译报错；阻塞版最多等 timeout
+    // 字符串 key：参数的写法和 err! 一样，对不上编译报错；阻塞版最多等 timeout
     let _ = db.lock(lock_key!(OrderLockKey::Settle, day), std::time::Duration::from_secs(3)).await?;
     Ok(())
 }
@@ -482,7 +483,7 @@ pub enum LegacyErrors {
 
 ## 示例
 
-示例在 `hygiea-examples/examples/` 下，按主题分目录，每个示例只讲一件事，都不需要装数据库等外部服务：
+示例在 `hygiea-examples/examples/` 下，按主题分目录，每个示例只讲一件事。除了 `db_lock` 要 Docker（自动起一个临时的 postgres），都不需要装数据库等外部服务：
 
 | 示例 | 讲什么 |
 |---|---|
@@ -494,6 +495,8 @@ pub enum LegacyErrors {
 | `app_background_task` | 后台任务、优雅关闭、超时强制结束、`stop` 收尾 |
 | `app_config` | 配置文件、`-f`、环境变量、`--set` 的合并，框架参数合进自己的命令行 |
 | `db_live_config` | 连接池的数据库配置表：绑定到 struct、改表后程序自动拿到新值（SQLite 文件库） |
+| `db_lock` | PG 连接池的分布式锁：注册锁类型和字符串 key，两个连接池抢同一把锁，不可重入、release / drop 释放、阻塞版等待和超时；字符串 key 用锁表（`db-lock-row`）和哈希成 i64 两种方式对比（Docker 起临时 postgres） |
+| `lock_tokio` | 进程内的锁 `TokioLock`：业务代码只依赖 `DistributedLock`，多个任务抢同一个 key、阻塞版先到先得、整数 key 转成字符串 key |
 | `error_basic` | 错误 enum、`err!` 的写法、错误码 |
 | `string_template` | `fmt_tpl!`、`fmt_tpl_once!`、`fmt_pos!` |
 | `log_basic` | 控制台 + 文件双输出、按 layer 设置 filter、日志时间用 UTC |

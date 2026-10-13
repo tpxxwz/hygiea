@@ -1,12 +1,13 @@
 //! 连接池的分布式锁（feature `lock`、`lock-row`）的集成测试。
 //!
-//! 只有 PostgreSQL（SQLite 还没有实现），是 container 层，要 Docker：
+//! PostgreSQL，是 container 层，要 Docker。字符串 key 开不开 `lock-row` 实现不一样，两种都要跑：
 //! ```sh
 //! cargo test -p hygiea-db --all-features --test lock -- --ignored ::container::
+//! cargo test -p hygiea-db --features sqlx,seaorm,postgres,lock --test lock -- --ignored ::container::
 //! ```
 
 #![cfg(all(
-    feature = "lock-row",
+    feature = "lock",
     feature = "sqlx",
     feature = "seaorm",
     feature = "postgres"
@@ -52,10 +53,9 @@ where
 #[container]
 mod postgres {
     use hygiea_core::app::{ConfigResource, RegistryConfig};
-    use hygiea_db::{
-        PgConnectConfig, PoolConfig, RepoErr, SeaOrmPgConfig, SeaOrmPgPool, SqlxPgConfig,
-        SqlxPgPool,
-    };
+    use hygiea_db::{PgConnectConfig, SeaOrmPgConfig, SeaOrmPgPool, SqlxPgConfig, SqlxPgPool};
+    #[cfg(feature = "lock-row")]
+    use hygiea_db::{PoolConfig, RepoErr};
     use hygiea_test::container::{ContainerSpec, RunningContainer};
 
     use super::*;
@@ -98,6 +98,7 @@ mod postgres {
         SqlxPgPool::from_config(&config, &app("hy")).await.unwrap()
     }
 
+    #[cfg(feature = "lock-row")]
     async fn table_exists(pool: &SqlxPgPool, table: &str) -> bool {
         sqlx::query_scalar("SELECT to_regclass($1) IS NOT NULL")
             .bind(table)
@@ -211,6 +212,7 @@ mod postgres {
     }
 
     /// 字符串 key：启动时建了锁表，key 一行，行锁互斥；阻塞版超时、等到释放
+    #[cfg(feature = "lock-row")]
     #[tokio::test]
     async fn string_key_uses_lock_table() {
         let server = start().await;
@@ -257,6 +259,59 @@ mod postgres {
         assert_eq!(keys, ["999100002:job:1", "999100002:job:2"]);
     }
 
+    /// 没开 lock-row：字符串 key 哈希成 i64 走 advisory lock，不建表；
+    /// 和直接传同一个数字的 try_lock_i64 是同一把锁；阻塞版超时、等到释放
+    #[cfg(not(feature = "lock-row"))]
+    #[tokio::test]
+    async fn string_key_falls_back_to_hashed_advisory() {
+        let server = start().await;
+        let (a, b) = (pool(&server).await, pool(&server).await);
+        let hashed = lock_key!(TestLockKey::Job, 1).hashed_i64().unwrap().get();
+
+        let guard = a
+            .try_lock(lock_key!(TestLockKey::Job, 1))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            guard.key(),
+            format!("advisory {hashed} (hashed 999100002:job:1)")
+        );
+        assert!(
+            b.try_lock(lock_key!(TestLockKey::Job, 1))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(b.try_lock_i64(hashed).await.unwrap().is_none());
+        assert!(
+            b.try_lock(lock_key!(TestLockKey::Job, 2))
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            b.lock(lock_key!(TestLockKey::Job, 1), Duration::from_millis(200))
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        let waiter = tokio::spawn(async move {
+            b.lock(lock_key!(TestLockKey::Job, 1), Duration::from_secs(10))
+                .await
+        });
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        guard.release().await.unwrap();
+        assert!(waiter.await.unwrap().unwrap().is_some());
+
+        let table: bool = sqlx::query_scalar("SELECT to_regclass('hy_lock') IS NOT NULL")
+            .fetch_one(&*a)
+            .await
+            .unwrap();
+        assert!(!table, "没开 lock-row 不建锁表");
+    }
+
     /// SeaORM 连接池用底层的 sqlx 池，和 sqlx 连接池互斥
     #[tokio::test]
     async fn seaorm_pool_shares_the_locks() {
@@ -288,6 +343,7 @@ mod postgres {
     }
 
     /// connect_lazy：启动时不连库、不建表，第一次用字符串 key 时建
+    #[cfg(feature = "lock-row")]
     #[tokio::test]
     async fn lazy_pool_creates_table_on_first_use() {
         let server = start().await;
@@ -309,6 +365,7 @@ mod postgres {
     }
 
     /// 已有同名的表但列对不上：不动它，拒绝启动
+    #[cfg(feature = "lock-row")]
     #[tokio::test]
     async fn mismatched_table_refuses_to_start() {
         let server = start().await;

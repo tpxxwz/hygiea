@@ -91,6 +91,11 @@ pub struct LiveConfigOptions {
     /// 对一遍版本号的间隔（秒）。PostgreSQL 上是兜底（变更靠 NOTIFY 推过来），不写是 60；
     /// SQLite 上是主要的检查方式（改了表最多等这么久生效），不写是 1
     pub poll_interval_secs: Option<u64>,
+    /// 变更历史表（`{app_name}_config_history`）最多留最新的多少行，更早的删掉。
+    /// 和 `history_trim_interval_mins` 要么都配、要么都不配（只配一个启动报错），都不配不删
+    pub history_keep_rows: Option<u64>,
+    /// 隔多少分钟清一次变更历史表。后台任务启动时先清一次；多个实例都会清，结果一样
+    pub history_trim_interval_mins: Option<u64>,
 }
 
 // ---- 连接池上的方法 -------------------------------------------------------------
