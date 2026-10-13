@@ -169,7 +169,7 @@ sequenceDiagram
     St->>DB: 小池第一次连上（PG 建 PgListener）
     St->>DB: 查 current_schema 里三张表的列、函数、触发器
     alt 一个都没有
-        St->>DB: 加锁（PG advisory lock / SQLite BEGIN IMMEDIATE）<br/>再查一遍，还是没有就执行 sql/*.sql
+        St->>DB: 加锁（PG advisory lock (builtin::LOCK_TYPE, Lock::LiveConfigDdl) / SQLite BEGIN IMMEDIATE）<br/>再查一遍，还是没有就执行 sql/*.sql
     else 都在且列一致
         Note over St: 直接用
     else 只有一部分 / 列对不上

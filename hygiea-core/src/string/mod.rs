@@ -1,10 +1,12 @@
-//! 字符串工具：正则（带编译缓存）和模板渲染。
+//! 字符串工具：正则（带编译缓存）、模板渲染、xxHash（固定地映射成整数）。
 
 mod pattern;
 mod template;
+mod xxhash;
 
 pub use pattern::*;
 pub use template::{tpl_cached, tpl_once, tpl_pos};
+pub use xxhash::{xxh3_64, xxh32};
 
 /// 渲染 minijinja 模板，解析结果缓存复用（上限 1024 条，满了淘汰最早插入的）。
 ///

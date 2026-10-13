@@ -6,6 +6,9 @@ extern crate self as hygiea_core;
 pub mod datetime;
 pub mod env;
 mod error;
+// hygiea 自己的组件用（db 建表时的锁等），业务用不到；facade 的 glob 会带出去，文档里藏起来
+#[doc(hidden)]
+pub mod builtin;
 pub mod string;
 
 // 错误体系的核心类型放在根上：宏展开后按 ::hygiea::HyErr 等路径引用

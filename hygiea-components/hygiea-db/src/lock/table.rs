@@ -1,6 +1,6 @@
 //! PG 的锁表 `{app_name}_lock`：字符串 key 一行，加锁拿这一行的行锁。
 //!
-//! 建表规则和动态配置一样，只看 `current_schema()`：没有就建（advisory lock 串行化，拿到锁后再查一遍）；
+//! 建表规则和动态配置一样，只看 `current_schema()`：没有就建（advisory lock `hygiea_core::builtin` 的 `(LOCK_TYPE, Lock::LockTableDdl)` 串行化，拿到锁后再查一遍）；
 //! 有且列对上就用；列对不上不动它，拒绝启动，哪里不对和 DDL 打在日志里。已经建好的表不会自动升级，
 //! 改了 `sql/postgres.sql` 的列要同时改 [`EXPECTED`]，已有的库手动改
 
@@ -14,7 +14,7 @@ use hygiea_core::lock::LockErr;
 use hygiea_core::{Result, ResultExt, err};
 
 use crate::RepoErr;
-use crate::ddl::{advisory_key, is_ident, postgres_columns};
+use crate::ddl::{is_ident, postgres_columns};
 
 /// 建表语句：`{p}` 换成前缀（应用名加 `_`）
 const DDL: &str = include_str!("sql/postgres.sql");
@@ -93,8 +93,9 @@ impl LockTable {
             return Ok(());
         }
         let mut tx = conn.begin().await.wrap_err(|| self.check_err())?;
-        sqlx::query("SELECT pg_advisory_xact_lock($1)")
-            .bind(advisory_key(&self.name))
+        sqlx::query("SELECT pg_advisory_xact_lock($1, $2)")
+            .bind(hygiea_core::builtin::LOCK_TYPE)
+            .bind(hygiea_core::builtin::Lock::LockTableDdl as i32)
             .execute(&mut *tx)
             .await
             .wrap_err(|| self.check_err())?;

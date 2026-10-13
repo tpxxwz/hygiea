@@ -2,7 +2,7 @@
 //!
 //! 检查表、函数、触发器时，只看 `current_schema()`（不带 schema 的 CREATE 落在这里）：
 //!
-//! - 一个都没有：建。在事务里建，PG 加 advisory lock、SQLite 用 `BEGIN IMMEDIATE`，
+//! - 一个都没有：建。在事务里建，PG 加 advisory lock（`hygiea_core::builtin` 的 `(LOCK_TYPE, Lock::LiveConfigDdl)`）、SQLite 用 `BEGIN IMMEDIATE`，
 //!   拿到锁后再查一遍（多个实例同时启动，前一个可能已经建好了）
 //! - 都在、表的列和代码一致：直接用
 //! - 其他（只有一部分、列对不上）：不动库里的东西，拒绝启动。哪里不对和建表 DDL 打在日志里，手动处理
@@ -294,8 +294,9 @@ pub(crate) async fn ensure_postgres(conn: &mut PgConnection, tables: &Tables) ->
     }
 
     let mut tx = conn.begin().await.wrap_err(check_err)?;
-    sqlx::query("SELECT pg_advisory_xact_lock($1)")
-        .bind(crate::ddl::advisory_key(&tables.config()))
+    sqlx::query("SELECT pg_advisory_xact_lock($1, $2)")
+        .bind(hygiea_core::builtin::LOCK_TYPE)
+        .bind(hygiea_core::builtin::Lock::LiveConfigDdl as i32)
         .execute(&mut *tx)
         .await
         .wrap_err(check_err)?;

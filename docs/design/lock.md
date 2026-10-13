@@ -42,7 +42,7 @@ pub trait DistributedLock: Send + Sync {
 `LockType`、`LockKey` 的字段私有，只能由宏生成，随手写的数字、字符串编译不过。
 
 `LockKey::hashed_i64()` 是使用方显式选的降级：把字符串 key 哈希成 i64 走 `*_i64`（PG 上是 advisory lock，不用锁表）。
-算法固定（xxh3-64，seed 0），跨进程、跨版本一致；有损：n 个 key 里至少一对碰撞的概率约 n² / 2⁶⁵（100 万个约 3 × 10⁻⁸），
+算法是 `hygiea::string::xxh3_64`（xxh3-64，seed 0），跨进程、跨版本一致；有损：n 个 key 里至少一对碰撞的概率约 n² / 2⁶⁵（100 万个约 3 × 10⁻⁸），
 撞上的两个 key 互相多锁，不会少锁；和直接传数字的 `try_lock_i64` 共用同一个空间。不做 `Into<LockKeyI64>`，
 免得 `try_lock_i64(lock_key!(..))` 悄悄哈希。
 
@@ -57,7 +57,11 @@ pub trait DistributedLock: Send + Sync {
 - `hy_lock_type` 和 `hy_lock_key` 共用一套编号、一个注册表（`LOCK_REGISTRATIONS`），和错误码是两套
 - 查重：同一个 enum 里宏报错；同模块靠常量 `HYGIEA_LOCK_<9 位>` 重名（E0428）；跨 crate 靠导出符号
   `__hygiea_lock_<9 位>`（Linux 链接期），都没拦住的由 core 的 ctor 启动时查重，打一行报错后退出
-- `999999999` 是内置的：`try_lock_i64` 默认实现转成的字符串 key 用它，手动注册在 core 里
+- `999999999` 是 hygiea 内置保留的（`hygiea_core::builtin::LOCK_TYPE` / `LOCK_CODE`，常开、文档里隐藏），注册表里手动占着一条，
+  业务注册不到。用在两处，互不影响：`try_lock_i64` 默认实现转成的字符串 key 的前缀（`999999999:<数字>`）；hygiea 组件自己用的锁
+  `builtin::Lock`，比如 hygiea-db 建表时串行化的 `pg_advisory_xact_lock(999999999, Lock::LiveConfigDdl / LockTableDdl)`
+  （`(int, int)` 空间，和业务 `try_lock_i64` 的 bigint 空间分开，业务的锁类型又注册不到 999 段，所以不会撞）。
+  `builtin` 不跟 `lock` feature，只开 `db-live-config` 不会带上锁
 
 ### 字符串 key 的模板
 
@@ -101,7 +105,7 @@ lock_i64(k, t)   ── begin ──> set_config('lock_timeout', t, true) ──
 - 字符串 key（feature `lock-row`）：
   1. `INSERT INTO {app}_lock (key) VALUES ($1) ON CONFLICT DO NOTHING`（自动提交；已有的行不加锁，别人持有时也不等）
   2. 事务里 `SELECT key .. FOR UPDATE SKIP LOCKED`，拿到行就是拿到锁；阻塞版 `FOR UPDATE` + `lock_timeout`
-- 没开 `lock-row` 时字符串 key 哈希降级：`LockKey::hashed_i64()`（xxh3-64）转成 i64，走上面 `try_lock_i64` 的 advisory lock，
+- 没开 `lock-row` 时字符串 key 哈希降级：`LockKey::hashed_i64()`（`string::xxh3_64`）转成 i64，走上面 `try_lock_i64` 的 advisory lock，
   不建表；guard 的 key 显示成 `advisory <数字> (hashed <原 key>)`。
   - 有损：不同 key 可能撞到同一个数，互相多锁（不会少锁）；和直接传数字的 `try_lock_i64` 共用一个空间
   - **开不开 `lock-row`，同一个 key 锁的是两样东西，互不互斥**：所有实例的 feature 要一致，切换 `lock-row` 的发布窗口里
@@ -118,7 +122,7 @@ CREATE TABLE {app_name}_lock (
 ```
 
 - 建在 search_path 的第一个 schema。建表规则和动态配置一样（共用 `ddl.rs`）：表在且列对上就用；不在就在事务里
-  加 advisory lock、再查一遍后建；列对不上不动它，拒绝启动（`RepoErr::LockTableSchemaMismatch`），DDL 打在日志里
+  加 advisory lock `(builtin::LOCK_TYPE, Lock::LockTableDdl)`、再查一遍后建；列对不上不动它，拒绝启动（`RepoErr::LockTableSchemaMismatch`），DDL 打在日志里
 - 启动时（`from_config`）建；`connect_lazy` 时第一次用字符串 key 时建
 - 一个 key 一行，加锁时补上，不删
 - 已建好的表不会自动升级，改结构要同时改 `sql/postgres.sql` 和 `table.rs` 的 `EXPECTED`，已有的库手动改

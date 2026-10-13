@@ -38,7 +38,6 @@ use crate::Result;
 mod error;
 mod guard;
 mod key;
-mod registry;
 #[cfg(feature = "lock-tokio")]
 mod tokio_lock;
 
@@ -52,11 +51,11 @@ pub use key::{LockKey, LockKeyI32, LockKeyI64, LockType};
 #[cfg(feature = "lock-tokio")]
 pub use tokio_lock::TokioLock;
 
-pub(crate) use registry::init;
+pub(crate) use key::init;
 
 #[doc(hidden)]
 pub mod __private {
-    pub use super::registry::{LOCK_REGISTRATIONS, LockRegistration, lock_key, registered};
+    pub use super::key::{LOCK_REGISTRATIONS, LockRegistration, lock_key, registered};
 }
 
 /// 生成字符串锁 key（[`LockKey`]），三种写法和 [`err!`](crate::err) 一样：
@@ -107,7 +106,7 @@ pub trait DistributedLock: Send + Sync {
 
     /// 一个 `i64` 做 key（[`LockKeyI64`]），其余同 [`try_lock`](Self::try_lock)。默认转成字符串 key `999999999:<数字>` 调 `try_lock`
     async fn try_lock_i64(&self, key: impl Into<LockKeyI64> + Send) -> Result<Option<LockGuard>> {
-        self.try_lock(registry::i64_key(key.into().get())).await
+        self.try_lock(key::i64_key(key.into().get())).await
     }
 
     /// 锁类型 `key1`（[`LockType`]，注册过的）加一个 `i32` 的 `key2`（[`LockKeyI32`]）做 key，
@@ -133,8 +132,7 @@ pub trait DistributedLock: Send + Sync {
         key: impl Into<LockKeyI64> + Send,
         timeout: Duration,
     ) -> Result<Option<LockGuard>> {
-        self.lock(registry::i64_key(key.into().get()), timeout)
-            .await
+        self.lock(key::i64_key(key.into().get()), timeout).await
     }
 
     /// 锁类型加一个 `i32` 做 key，其余同 [`lock`](Self::lock)。默认合成一个 `i64` 调 `lock_i64`

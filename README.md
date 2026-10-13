@@ -37,7 +37,7 @@
 | 错误处理（`hygiea::{HyErr, err!, bail!, hy_err}`） | 基于模板的错误信息，编译期校验的 8 位错误码，统一的 `HyErr` 类型，用 `with_source` 挂外部错误 |
 | 日期时间（`hygiea::datetime`） | 基于 `time` crate 的 UTC 工具：格式化、解析、日 / 周 / 月 / 年的起止时刻 |
 | 环境变量（`hygiea::env`） | 环境变量读取 |
-| 字符串（`hygiea::string`） | 带缓存的正则，模板渲染（`fmt_tpl!`、`fmt_tpl_once!`） |
+| 字符串（`hygiea::string`） | 带缓存的正则，模板渲染（`fmt_tpl!`、`fmt_tpl_once!`），字符串固定地映射成整数（`xxh3_64` / `xxh32`，跨进程结果一样，不是解析数字） |
 
 ### 其他可选 feature
 
@@ -260,7 +260,7 @@ async fn run(db: &impl DistributedLock, order_id: u32, day: &str) -> hygiea::Res
 }
 ```
 
-- 不写模块前缀时编号 6 位；`999` 段给 hygiea 自己（3 位内部模块前缀 + 3 位编号），`999999999` 留给 `try_lock_i64` 默认实现转成的字符串 key
+- 不写模块前缀时编号 6 位；`999` 段给 hygiea 自己（3 位内部模块前缀 + 3 位编号），`999999999` 是 hygiea 内置保留的（`hygiea_core::builtin::LOCK_TYPE`：`try_lock_i64` 默认实现转成的字符串 key 的前缀、hygiea 组件自己用的锁）
 - 模板有多个变量时，值里不要带模板里的分隔符（`{{ a }}:{{ b }}` 下 `"x:y"` + `"z"` 和 `"x"` + `"y:z"` 是同一把锁）
 - 后端不提供的方法返回 `LockErr::Unsupported`；设计说明见 [docs/design/lock.md](docs/design/lock.md)
 

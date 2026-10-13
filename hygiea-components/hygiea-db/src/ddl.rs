@@ -1,4 +1,5 @@
-//! 框架自己建的表（动态配置、锁表）共用的检查代码：表名前缀的校验、建表时串行化用的 advisory key、读表的列
+//! 框架自己建的表（动态配置、锁表）共用的检查代码：表名前缀的校验、读表的列。
+//! 建表时串行化用的 advisory lock 的两个数在 `hygiea_core::builtin`
 
 #[cfg(feature = "postgres")]
 use std::collections::HashMap;
@@ -15,15 +16,6 @@ pub(crate) fn is_ident(s: &str) -> bool {
     let mut chars = s.chars();
     chars.next().is_some_and(|c| c.is_ascii_lowercase())
         && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-}
-
-/// 建表时串行化用的 advisory lock 的 key：按名字算的 FNV-1a，同一个名字的实例互斥，不同的互不影响
-#[cfg(feature = "postgres")]
-pub(crate) fn advisory_key(name: &str) -> i64 {
-    let hash = name.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
-        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
-    });
-    hash as i64
 }
 
 /// `current_schema()` 里这些表的列，类型是 `udt_name`（`int8`、`bpchar` 这种）

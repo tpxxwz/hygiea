@@ -34,7 +34,7 @@ datetime-chrono = ["dep:chrono"]
 datetime-iana = ["dep:time-tz"]
 
 # 分布式锁的 trait（DistributedLock），后端在 db / redis 组件里实现
-lock = ["hygiea-macros/lock", "dep:async-trait", "dep:tokio", "tokio/rt", "tokio/time", "dep:tracing", "dep:xxhash-rust"]
+lock = ["hygiea-macros/lock", "dep:async-trait", "dep:tokio", "tokio/rt", "tokio/time", "dep:tracing"]
 
 # 进程内的锁 TokioLock：tokio 的 Mutex 实现 DistributedLock，不跨进程
 lock-tokio = ["lock", "dep:dashmap", "tokio/sync"]
@@ -69,7 +69,8 @@ tokio = { workspace = true, optional = true }
 tokio-util = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
 dashmap = { workspace = true, optional = true }
-xxhash-rust = { workspace = true, optional = true, features = ["xxh3"] }
+# string::xxh3_64 / xxh32
+xxhash-rust = { workspace = true, features = ["xxh3", "xxh32"] }
 
 tracing = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, optional = true }
