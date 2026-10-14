@@ -67,7 +67,8 @@
 
   模块里照常用 `#[test]` / `#[tokio::test]` 标测试，宏给它们加 `#[ignore]`，并把模块内容挪进层名子模块（测试名 `<模块名>::container::<函数名>`）。
   container 层：`cargo nextest run -p <crate> --features .. --run-ignored only -E 'test(/::container::/)'`
-  （`cargo test` 的写法：`-- --ignored ::container::`）；live 层见 `.config/nextest.toml` 里的命令。
+  （`cargo test` 的写法：`-- --ignored ::container::`，一定要带上 `::container::`，否则会把 live 层一起跑）。
+  live 层只由用户手动跑，agent 绝对不能跑，见「怎么验证」。
   有这两层的测试文件，文件头写明运行命令和需要的环境变量。
   组件用 `hygiea-test = { workspace = true }` 作为 dev-dependency 引入。`hygiea-test` 只依赖 core，
   core 自己的测试不能用它（会出现两份 core）。
@@ -114,6 +115,9 @@
     nextest 加 `--run-ignored all` 连同普通测试一起跑（`cargo test` 对应的是 `-- --include-ignored`）
   - trybuild：改了宏时才跑，`cargo nextest run --workspace --all-features --ignore-default-filter -E 'binary(/_ui$/)'`
   - doc test：nextest 不跑，要跑用 `cargo test --workspace --all-features --doc`（可运行的只有 core 里的两个）
+  - **live 层 agent 绝对不能跑**：它用真实凭证连真实的托管服务，会产生费用、改动真实数据。默认过滤已经排除了它，
+    不要用 `--ignore-default-filter`、`-E 'test(/::live::/)'`，也不要用 `cargo test -- --ignored`（会把 live 层一起跑进去）。
+    改了相关代码时，告诉用户要手动跑哪条命令
   - 跑得反常地慢（简单的测试也要几秒）时先看 `target/` 是不是太大：换 feature 组合编译会一直积累产物，
     文件多了 macOS 读系统代理、rustc 找依赖都会变慢，`cargo clean` 后重编
 - 改代码过程中只 check / test 改到的 crate 和相关 feature，比如 `cargo nextest run -p hygiea-http-client --features reqwest --test reqwest_client`。crate 和 feature 很多，不要动不动 `--workspace`、`--all-features` 全量编译、全量测试，同一条命令不要重复跑。

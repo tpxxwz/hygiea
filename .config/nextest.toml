@@ -10,6 +10,7 @@
 # 默认不跑的：
 # - trybuild 的编译期报错测试（测试二进制名以 _ui 结尾），改了宏时再跑：
 #   cargo nextest run --workspace --all-features --ignore-default-filter -E 'binary(/_ui$/)'
-# - live 层（连真实服务、要凭证），只由用户手动跑：
-#   cargo nextest run -p <crate> --features .. --run-ignored only --ignore-default-filter -E 'test(/::live::/)'
+# - live 层：用真实凭证连真实的托管服务（R2、AWS 等），会产生费用、改动真实数据。
+#   agent 绝对不能跑：不要用 --ignore-default-filter 或 -E 把 ::live:: 的测试选进来。只由用户自己手动跑，
+#   要跑的命令写在各测试文件的文件头里
 default-filter = "not binary(/_ui$/) and not test(/::live::/)"
