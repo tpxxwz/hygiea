@@ -110,7 +110,8 @@
 - 测试用 cargo-nextest 跑（每个测试单独一个进程，测试二进制之间也并行），没装的先 `brew install cargo-nextest`。
   配置在 `.config/nextest.toml`：默认不跑 trybuild（`_ui` 结尾的测试二进制）和 live 层。命令：
   - 全量：`cargo nextest run --workspace --all-features --run-ignored all`（单元、mock、container 层；要 Docker）。
-    container 层在 `cargo test` 下是 `#[ignore]` 的，nextest 要加 `--run-ignored all` 才跑
+    container 层的测试被 `#[container]` 标成了 `#[ignore]`，`cargo test` 和 nextest 默认都不跑，
+    nextest 加 `--run-ignored all` 连同普通测试一起跑（`cargo test` 对应的是 `-- --include-ignored`）
   - trybuild：改了宏时才跑，`cargo nextest run --workspace --all-features --ignore-default-filter -E 'binary(/_ui$/)'`
   - doc test：nextest 不跑，要跑用 `cargo test --workspace --all-features --doc`（可运行的只有 core 里的两个）
   - 跑得反常地慢（简单的测试也要几秒）时先看 `target/` 是不是太大：换 feature 组合编译会一直积累产物，

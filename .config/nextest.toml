@@ -2,7 +2,8 @@
 #
 # 平时全量跑（单元、mock、container 层；container 层要 Docker）：
 #   cargo nextest run --workspace --all-features --run-ignored all
-# container 层在 cargo test 下是 #[ignore] 的，nextest 要加 --run-ignored all 才跑（配置文件里写不了这一项）。
+# container 层的测试被 #[container] 标成了 #[ignore]，cargo test 和 nextest 默认都不跑；--run-ignored all 连同普通测试
+# 一起跑（配置文件里写不了这一项，只能写在命令行上）。
 # nextest 不跑 doc test，要跑用 cargo test --workspace --all-features --doc
 
 [profile.default]
