@@ -48,7 +48,7 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 ### 配置模板
 
 框架和每个组件的配置模板放在各自 crate 的 `config/` 下（`hygiea-core/config/registry.toml`、`hygiea-db/config/{sqlx-pg,seaorm-pg,sqlx-sqlite}.toml`、
-`hygiea-redis/config/redis.toml` ……），各 crate 的 `tests/config_template.rs` 按自己的配置结构体解析它（`deny_unknown_fields`），
+`hygiea-redis/config/redis.toml` ……），各 crate 在配置结构体所在源文件的单元测试（`template_is_code_defaults`）里按自己的配置结构体解析它（`deny_unknown_fields`），
 并确认模板里生效的值等于 `Default`。改了配置结构体，在同一个 crate 里改模板。
 
 ### 组件
@@ -57,7 +57,7 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 
 | crate | 框架 feature | 其他 feature | facade 的 feature | facade 的路径 |
 |---|---|---|---|---|
-| `hygiea-db` | `sqlx`、`seaorm` | `postgres`、`sqlite`；`live-config`；`lock`、`lock-row`（依赖 `lock`） | `db-sqlx`、`db-seaorm`（只开框架）；`db-sqlx-postgres`、`db-sqlx-sqlite`、`db-seaorm-postgres`（组合，依赖前两个）；`db-live-config`（连接池的动态配置）；`db-lock`、`db-lock-row`（PG 连接池的分布式锁） | `hygiea::db` |
+| `hygiea-db` | `sqlx`、`seaorm` | 数据库 `postgres`、`sqlite`（`mysql` 预留）；功能 `live-config`、`lock`、`lock-row`（依赖 `lock`）。三个维度互相独立，实现按组合编译，组合条件集中在 `build.rs` 的 cfg 别名（`sqlx_pg`、`sqlx_lock_pg` 等）。加别的框架、数据库照 `research/db-drivers` 分支的写法 | 一对一转发：`db-sqlx`、`db-seaorm`、`db-postgres`、`db-sqlite`、`db-live-config`、`db-lock`、`db-lock-row`，没有组合 feature | `hygiea::db` |
 | `hygiea-redis` | `fred` | | `redis-fred` | `hygiea::redis` |
 | `hygiea-http` | `axum` | | `http-axum` | `hygiea::http` |
 | `hygiea-http-client` | `reqwest` | | `http-client-reqwest` | `hygiea::http_client`（实现在 `reqwest_client` 子模块） |
@@ -66,16 +66,18 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 
 | 文件 | 内容 |
 |---|---|
-| `hygiea-db/src/sqlx/`、`seaorm/` | 各框架专用的部分：`pool/` 是连接池组件（一种数据库一个文件，再导出到 crate 根），`transaction.rs` 是事务函数，`datetime.rs` 是 `HyUtcDateTime` 的框架 trait 实现 |
+| `hygiea-db/src/sqlx/`、`seaorm/` | 各框架专用的部分（`sqlx/internal/` 见下）。功能（锁、动态配置）按三层放：规则在功能模块里，SQL 全部在 `sql/<数据库>/`，执行在功能模块的 `sqlx/` 子目录，里面一种数据库一个文件，和 `sql/<数据库>/` 对应（共用的在 `sqlx/internal/`）；别的驱动只需要在各功能下另写一个和 `sqlx/` 平级的执行目录：`pool/` 是连接池组件（一种数据库一个文件，再导出到 crate 根），`transaction.rs` 是事务函数，`datetime.rs` 是 `HyUtcDateTime` 的框架 trait 实现 |
 | `hygiea-db/src/seaorm/db.rs` | `db!` 和 `.db()`（`DbResultExt`）：SeaORM 的 `DbErr` 转成 `RepoErr`，`db!` 按语句类型选错误、op 带表名和调用位置 |
 | `hygiea-db/src/seaorm/page.rs`、`model.rs` | `find_page`（取一页再查总数）、`active_models`（`&[Model]` 转成 ActiveModel 给 `insert_many`） |
 | `hygiea-db/src/datetime.rs` | `HyUtcDateTime`：给 `UtcDateTime` 包一层（经 `OffsetDateTime` 转换，对应 `timestamptz`），开 `sqlx` 或 `seaorm` 就有，框架 trait 的实现在各框架模块里 |
 | `hygiea-db/src/page.rs` | `PageRequest` / `Page`：分页的请求和结果，sqlx 和 SeaORM 共用 |
 | `hygiea-db/src/error.rs` | `RepoErr`：按操作分的数据库错误，0x 事务、1x 执行语句（10 兜底，11-14 增删改查）、2x 动态配置、3x 锁表、9x 参数 |
-| `hygiea-db/src/config.rs` | 连接池配置的公共部分：`PgConnectConfig` / `SqliteConnectConfig`（`[db.connect]`，连哪个库）、`PoolConfig`（`[db.pool]`，所有数据库、框架共用） |
-| `hygiea-db/src/live_config/` | 连接池的数据库配置表（feature `live-config`）：`mod.rs` 配置和对外导出，`source.rs` 绑定入口，`handle.rs` 句柄（`LiveConfig` / `LiveView`），`worker.rs` 后台任务，`store.rs` 独立小池和查询，`schema.rs` 表结构检查和建表，`sql/` 建表语句。设计说明见 `docs/design/live-config.md` |
-| `hygiea-db/src/lock/` | PG 连接池的分布式锁（feature `lock`）：`postgres.rs` 是事务级 advisory lock 和字符串 key 的锁表（插入不提交的行、靠主键冲突互斥），`impl_pg_lock!` 给 `SqlxPgPool` / `SeaOrmPgPool` 实现 `DistributedLock`；`table.rs` 是锁表 `{app_name}_lock`（feature `lock-row`）的检查和建表，建表语句在 `sql/postgres.sql` |
-| `hygiea-db/src/ddl.rs` | 框架建的表（动态配置、锁表）共用的检查代码：表名前缀的校验、读表的列。建表时串行化的 advisory lock 是 `hygiea_core::builtin` 的 `(LOCK_TYPE, Lock::*)` |
+| `hygiea-db/build.rs` | feature 组合的 cfg 别名：按驱动的（`sqlx_pg`——sqlx 或 SeaORM + postgres、`sqlx_sqlite`，以及 `sqlx_live_config`、`sqlx_lock_pg`、`sqlx_lock_row`，给驱动目录用）和按数据库的（`live_config_pg`、`lock_pg`、`lock_row_pg`、`lock_any` 等，任意驱动有实现就算，给和驱动无关的规则、SQL 用），源码里按别名写 `#[cfg]`。现在只有 sqlx，两层看起来重复 |
+| `hygiea-db/src/config.rs` | 连接池配置的公共部分：`PgConnectConfig` / `SqliteConnectConfig`（`[db.connect]`，连哪个库）、`PoolConfig`（`[db.pool]`，sqlx、SeaORM 共用）；`PgConnectOverride` / `SqliteConnectOverride`（`[db.live_config.connect]`、`[db.lock.connect]`，每项可选，逐项盖到 `[db.connect]` 上） |
+| `hygiea-db/src/live_config/` | 连接池的数据库配置表（feature `live-config`）。和数据库、驱动无关：`mod.rs` 配置（`LiveConfigConfig<C>`，`C` 是连接覆盖项，别名 `PgLiveConfigConfig` / `SqliteLiveConfigConfig`）和对外导出，`source.rs` 绑定入口，`handle.rs` 句柄（`LiveConfig` / `LiveView`），`worker.rs` 后台任务（和后端之间交换的 `Loaded`、`Signal` 也在这里），`schema.rs` 表名、PG 的 channel（`<schema>.<配置表名>`）、检查规则、各库语句的集合 `Sql`。`store.rs` 的 `Store` 是 worker 和驱动之间的接口，按驱动分发。执行：`sqlx/`，一种数据库一个文件（`postgres.rs` 小池上的 listener、查询、检查和建表；`sqlite.rs` 只靠轮询），`mod.rs` 的 `SqlxStore` 分发和转错误，sqlx、SeaORM 的连接池共用。SQL 在 `sql/<数据库>/live_config.*`。设计说明见 `docs/design/live-config.md` |
+| `hygiea-db/src/lock/` | PG 连接池的分布式锁（feature `lock`）。和数据库、驱动无关：`mod.rs` 模块文档、配置 `LockConfig`（`[db.lock]`：锁表前缀、单独的池）、guard 显示的 key，`table.rs` 锁表 `{p}lock`（feature `lock-row`）的名字和检查规则。`mod.rs` 里还有 `impl_pg_lock!`（各驱动的 PG 锁方法名一样，共用它）。执行：每个驱动一个目录，里面一种数据库一个文件，`mod.rs` 只做声明和导出。`sqlx/`：`postgres.rs` 是 `PgLock`（用连接池本身或单独建的池）、锁的事务 `LockTx`、锁表的检查和建表，`SqlxPgPool`、`SeaOrmPgPool` 共用。SQL 在 `sql/<数据库>/lock.*` |
+| `hygiea-db/src/sql/` | 框架自己的全部 SQL，和驱动无关（同一个数据库换驱动时直接复用），按数据库分目录：`postgres/`、`sqlite/`。每个目录的 `mod.rs` 放功能之间共用的（PG：框架事务的 BEGIN——固定 READ COMMITTED、`SET LOCAL` 关掉会打断等待和断开持有的超时，读表的列，建表串行化的 advisory lock，等锁超时的 SQLSTATE；SQLite：读表的列），各功能一个文件，建表语句和它放在一起：`lock.rs` + `lock.sql`（advisory 语句、`timeout` 转 `lock_timeout` 的校验、锁表的 DDL / INSERT / 期望的列），`live_config.rs` + `live_config.sql`（期望的列、函数和触发器名、各条查询、通知 payload 的格式）。`sql/mod.rs` 放和数据库也无关的：表名前缀的校验、表的列类型 `Columns`。建表时串行化的 advisory lock 的两个数是 `hygiea_core::builtin` 的 `(LOCK_TYPE, Lock::*)` |
+| `hygiea-db/src/sqlx/internal/` | 锁、动态配置的 sqlx 实现共用的执行部分（现在是读表的列），不对外。只开 SeaORM 加锁或动态配置时 `sqlx` 模块也会编译，但没有公开的东西 |
 | `hygiea-redis/src/fred_pool.rs` | 连接池组件 |
 | `hygiea-http/src/axum_server.rs` | HTTP 服务组件 |
 | `hygiea-http-client/src/lib.rs` | 按 feature 声明各实现的模块，不在 crate 根上再导出（以后加别的实现时名字不撞） |

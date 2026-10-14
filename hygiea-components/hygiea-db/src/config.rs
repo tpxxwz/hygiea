@@ -1,7 +1,7 @@
 //! 连接池配置的公共部分：连哪个库（每种数据库一个）和池怎么管（所有数据库、框架共用）。
 //! 各连接池的配置由它们拼起来，配置文件里是 `[db.connect]`、`[db.pool]` 两段
 
-#[cfg(feature = "sqlx")]
+#[cfg(all(feature = "sqlx", any(feature = "postgres", feature = "sqlite")))]
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -9,6 +9,7 @@ use serde::Deserialize;
 #[cfg(feature = "postgres")]
 use hygiea_core::app::RegistryConfig;
 
+#[cfg(any(feature = "postgres", sqlx_sqlite))]
 use hygiea_core::Result;
 
 // ---- PostgreSQL -------------------------------------------------------------
@@ -92,7 +93,7 @@ impl PgConnectConfig {
     }
 
     /// sqlx 的连接参数，带上 search_path 和 `application_name`（见 [`url`](Self::url)）
-    #[cfg(any(feature = "sqlx", feature = "live-config"))]
+    #[cfg(any(feature = "sqlx", sqlx_live_config, sqlx_lock_pg))]
     pub(crate) fn sqlx_options(
         &self,
         registry_config: &RegistryConfig,
@@ -109,6 +110,64 @@ impl PgConnectConfig {
         } else {
             options.options([("search_path", self.schema_search_path.as_str())])
         })
+    }
+}
+
+/// 动态配置、锁单独连的库（`[db.live_config.connect]`、`[db.lock.connect]`）：每项都可以不写，不写的沿用连接池的
+/// `[db.connect]`，只写不一样的（比如换个用户、schema）
+#[cfg(all(feature = "postgres", any(live_config_pg, lock_pg)))]
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PgConnectOverride {
+    pub scheme: Option<String>,
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub database: Option<String>,
+    pub params: Option<String>,
+    pub schema_search_path: Option<String>,
+}
+
+#[cfg(all(feature = "postgres", any(live_config_pg, lock_pg)))]
+impl PgConnectOverride {
+    /// 一项都没写
+    #[cfg(lock_pg)]
+    pub(crate) fn is_empty(&self) -> bool {
+        let Self {
+            scheme,
+            host,
+            port,
+            username,
+            password,
+            database,
+            params,
+            schema_search_path,
+        } = self;
+        scheme.is_none()
+            && host.is_none()
+            && port.is_none()
+            && username.is_none()
+            && password.is_none()
+            && database.is_none()
+            && params.is_none()
+            && schema_search_path.is_none()
+    }
+
+    /// 写了的项盖到 `main` 上
+    pub(crate) fn merge(&self, main: &PgConnectConfig) -> PgConnectConfig {
+        let pick =
+            |value: &Option<String>, main: &String| value.clone().unwrap_or_else(|| main.clone());
+        PgConnectConfig {
+            scheme: pick(&self.scheme, &main.scheme),
+            host: pick(&self.host, &main.host),
+            port: self.port.unwrap_or(main.port),
+            username: pick(&self.username, &main.username),
+            password: pick(&self.password, &main.password),
+            database: pick(&self.database, &main.database),
+            params: pick(&self.params, &main.params),
+            schema_search_path: pick(&self.schema_search_path, &main.schema_search_path),
+        }
     }
 }
 
@@ -229,10 +288,58 @@ impl SqliteConnectConfig {
     }
 }
 
+/// 动态配置单独连的库（`[db.live_config.connect]`）：每项都可以不写，不写的沿用连接池的 `[db.connect]`
+#[cfg(live_config_sqlite)]
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SqliteConnectOverride {
+    pub database: Option<String>,
+    pub params: Option<String>,
+    pub create_if_missing: Option<bool>,
+    pub read_only: Option<bool>,
+    pub foreign_keys: Option<bool>,
+    pub shared_cache: Option<bool>,
+    pub journal_mode: Option<String>,
+    pub synchronous: Option<String>,
+    pub busy_timeout_millis: Option<u64>,
+    pub statement_cache_capacity: Option<usize>,
+}
+
+#[cfg(live_config_sqlite)]
+impl SqliteConnectOverride {
+    /// 写了的项盖到 `main` 上
+    pub(crate) fn merge(&self, main: &SqliteConnectConfig) -> SqliteConnectConfig {
+        SqliteConnectConfig {
+            database: self
+                .database
+                .clone()
+                .unwrap_or_else(|| main.database.clone()),
+            params: self.params.clone().unwrap_or_else(|| main.params.clone()),
+            create_if_missing: self.create_if_missing.unwrap_or(main.create_if_missing),
+            read_only: self.read_only.unwrap_or(main.read_only),
+            foreign_keys: self.foreign_keys.unwrap_or(main.foreign_keys),
+            shared_cache: self.shared_cache.unwrap_or(main.shared_cache),
+            journal_mode: self
+                .journal_mode
+                .clone()
+                .or_else(|| main.journal_mode.clone()),
+            synchronous: self
+                .synchronous
+                .clone()
+                .or_else(|| main.synchronous.clone()),
+            busy_timeout_millis: self.busy_timeout_millis.or(main.busy_timeout_millis),
+            statement_cache_capacity: self
+                .statement_cache_capacity
+                .or(main.statement_cache_capacity),
+        }
+    }
+}
+
 // ---- 连接池 -------------------------------------------------------------------
 
 /// 池怎么管，和数据库、框架无关。数字项不写时按连接池给默认值：
 /// 最大连接数 PG 10、SQLite 4，最小连接数 PG 0、SQLite 1；超时都是 acquire 30 秒、空闲 600 秒、最长存活 1800 秒
+#[cfg(any(feature = "sqlx", feature = "seaorm"))]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PoolConfig {
@@ -250,6 +357,7 @@ pub struct PoolConfig {
     pub connect_lazy: bool,
 }
 
+#[cfg(any(feature = "sqlx", feature = "seaorm"))]
 impl Default for PoolConfig {
     fn default() -> Self {
         Self {
@@ -265,17 +373,19 @@ impl Default for PoolConfig {
 }
 
 /// 连接池按后端给的默认连接数
+#[cfg(any(sqlx_pg, sqlx_sqlite))]
 #[derive(Clone, Copy)]
 pub(crate) struct PoolSize {
     pub(crate) max: u32,
     pub(crate) min: u32,
 }
 
-#[cfg(feature = "postgres")]
+#[cfg(sqlx_pg)]
 pub(crate) const PG_POOL_SIZE: PoolSize = PoolSize { max: 10, min: 0 };
 #[cfg(all(feature = "sqlx", feature = "sqlite"))]
 pub(crate) const SQLITE_POOL_SIZE: PoolSize = PoolSize { max: 4, min: 1 };
 
+#[cfg(any(sqlx_pg, sqlx_sqlite))]
 impl PoolConfig {
     pub(crate) fn max_connections(&self, size: PoolSize) -> u32 {
         self.max_connections.unwrap_or(size.max)
@@ -310,54 +420,22 @@ impl PoolConfig {
     }
 }
 
-#[cfg(test)]
+/// 测试用：解析 `config/` 下的配置模板（段名是 `db`，写错或多写的配置项解析失败）。
+/// 模板里有 `[db.live_config]` 段，要开 `live-config`
+#[cfg(all(test, feature = "live-config"))]
+pub(crate) fn parse_template<T: serde::de::DeserializeOwned>(template: &str) -> T {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Template<T> {
+        db: T,
+    }
+    let parsed: Template<T> = toml::from_str(template).unwrap();
+    parsed.db
+}
+
+#[cfg(all(test, any(feature = "postgres", sqlx_sqlite)))]
 mod tests {
     use super::*;
-
-    #[cfg(feature = "postgres")]
-    #[test]
-    fn pg_url() {
-        let config = PgConnectConfig::default();
-        let named_as = |app_name: &str| RegistryConfig {
-            app_name: app_name.to_string(),
-            ..Default::default()
-        };
-        let none = named_as("");
-        assert_eq!(
-            config.url(&none).unwrap(),
-            "postgres://postgres:postgres@localhost:5432/postgres"
-        );
-        let config = PgConnectConfig {
-            params: "sslmode=require".to_string(),
-            schema_search_path: "app".to_string(),
-            ..Default::default()
-        };
-        // search_path 不在 URL 里，各框架另外设
-        assert_eq!(
-            config.url(&none).unwrap(),
-            "postgres://postgres:postgres@localhost:5432/postgres?sslmode=require"
-        );
-        assert_eq!(config.target(), "postgres postgres@localhost:5432/postgres");
-
-        // 应用名：统一用 RegistryConfig 的，params 里不能自己写
-        let app = named_as("dict-jp");
-        assert_eq!(
-            config.url(&app).unwrap(),
-            "postgres://postgres:postgres@localhost:5432/postgres?sslmode=require&application_name=dict-jp"
-        );
-        let named = PgConnectConfig {
-            params: "sslmode=require&application_name=replica".to_string(),
-            ..Default::default()
-        };
-        assert!(named.url(&app).is_err());
-        let odd = named_as("a b&c");
-        assert!(
-            PgConnectConfig::default()
-                .url(&odd)
-                .unwrap()
-                .ends_with("?application_name=a%20b%26c")
-        );
-    }
 
     #[cfg(all(feature = "sqlx", feature = "sqlite"))]
     #[test]
@@ -386,7 +464,47 @@ mod tests {
         assert!(config.sqlx_options().is_err());
     }
 
+    /// 写了的项覆盖，没写的沿用连接池的
+    #[cfg(any(live_config_pg, lock_pg))]
+    #[test]
+    fn pg_override_merges_per_field() {
+        let main = PgConnectConfig {
+            host: "pg-main".to_string(),
+            username: "app".to_string(),
+            schema_search_path: "biz".to_string(),
+            ..Default::default()
+        };
+        let merged = PgConnectOverride {
+            username: Some("app_config".to_string()),
+            schema_search_path: Some(String::new()),
+            ..Default::default()
+        }
+        .merge(&main);
+        assert_eq!(merged.host, "pg-main");
+        assert_eq!(merged.username, "app_config");
+        assert_eq!(merged.schema_search_path, "", "写成空的也算写了");
+        assert_eq!(merged.port, 5432);
+    }
+
+    #[cfg(live_config_sqlite)]
+    #[test]
+    fn sqlite_override_merges_per_field() {
+        let main = SqliteConnectConfig {
+            database: "main.db".to_string(),
+            read_only: true,
+            ..Default::default()
+        };
+        let merged = SqliteConnectOverride {
+            database: Some("config.db".to_string()),
+            ..Default::default()
+        }
+        .merge(&main);
+        assert_eq!(merged.database, "config.db");
+        assert!(merged.read_only);
+    }
+
     /// 只写了一项时，其他项按后端的默认值，不会拿到别的后端的
+    #[cfg(any(sqlx_pg, sqlx_sqlite))]
     #[test]
     fn pool_defaults_follow_backend() {
         let config = PoolConfig {

@@ -1,7 +1,7 @@
-//! Redis 连接池连真实服务，`#[container]` 层（见仓库根目录 AGENTS.md 的测试分层）：
+//! `FredRedisPool`（`src/fred_pool.rs`）的集成测试，连真实服务，`#[container]` 层（见仓库根目录 AGENTS.md 的测试分层）：
 //! 用代码启动官方 redis 容器，需要 Docker（Podman 把 `DOCKER_HOST` 指向它的兼容 socket）
 //! ```sh
-//! cargo test -p hygiea-redis --features fred --test redis -- --ignored ::container::
+//! cargo test -p hygiea-redis --features fred --test fred_pool -- --ignored ::container::
 //! ```
 
 #![cfg(feature = "fred")]

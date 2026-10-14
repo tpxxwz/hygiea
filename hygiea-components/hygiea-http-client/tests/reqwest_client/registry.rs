@@ -1,10 +1,8 @@
 //! `ReqwestComponent` 经 Registry 启动：按组件名提供 `ReqwestClient`，配置在启动时生效
-//!
-//! 运行：`cargo test -p hygiea-http-client --features reqwest --test component`
 
 use std::error::Error as _;
 
-use hygiea_core::app::{AppErr, Component, Name, Registry, ResourceId, Resources};
+use hygiea_core::app::{AppErr, Registry, Resources};
 use hygiea_core::{HyErr, Result};
 use hygiea_http_client::reqwest_client::{
     HttpClientErr, Json, Method, RequestConfig, ReqwestClient, ReqwestComponent, ReqwestConfig,
@@ -17,16 +15,6 @@ fn local_config() -> ReqwestConfig {
         no_proxy: true,
         ..ReqwestConfig::default()
     }
-}
-
-/// 按配置构造：按组件名声明 ReqwestClient 资源
-#[test]
-fn build_declares_named_client() {
-    let component = ReqwestComponent::build(Name::from("moji"), local_config());
-    assert_eq!(
-        component.provides(),
-        vec![ResourceId::named::<ReqwestClient>("moji")]
-    );
 }
 
 /// 启动 registry，把 `Resources` 交给 `check`，拿回它的结果。

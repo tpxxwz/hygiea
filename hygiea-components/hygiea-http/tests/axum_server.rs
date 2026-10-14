@@ -1,8 +1,8 @@
-//! `AxumComponent`：声明的资源、经 Registry 启动后能接请求、缺 router 时启动失败、
+//! `AxumComponent`（`src/axum_server.rs`）的集成测试：经 Registry 启动后能接请求、缺 router 时启动失败、
 //! router 函数取 `before_activate` 放进去的 state（及取不到时启动失败），
 //! 以及绕开 Registry 手动驱动的完整生命周期（绑端口、真实请求、取消后优雅结束）
 //!
-//! 运行：`cargo test -p hygiea-http --features axum --test component`
+//! 运行：`cargo test -p hygiea-http --features axum --test axum_server`
 
 #![cfg(feature = "axum")]
 
@@ -57,14 +57,6 @@ async fn with_resources<T: Send + 'static>(
     let result = rx.await.unwrap();
     task.abort();
     result
-}
-
-/// HTTP 服务不往 Resources 里放东西，也不依赖别的资源
-#[test]
-fn declares_no_resources() {
-    let component = AxumComponent::build(Name::from(""), AxumConfig::default());
-    assert!(component.provides().is_empty());
-    assert!(component.depends_on().is_empty());
 }
 
 /// 经 Registry 启动：`on_ready` 时已经在接请求

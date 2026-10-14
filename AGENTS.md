@@ -77,29 +77,35 @@
   默认值、错误转换、生命周期（启动、按名字放进 Resources、关闭）、日志打码这类附加行为。
   第三方框架自己的功能（连接池怎么复用、协议细节、它自己的配置项各自的效果）由它自己保证，不逐项测；
   只用一两个测试确认接上了、能用就行（比如连上后执行一条查询）。不为了凑覆盖率去测第三方的行为。
-- 组件的测试照这个结构写（新加组件直接参考，`hygiea-aws` 是完整的例子）：
+- 组件的测试照这个结构写（新加组件直接参考，`hygiea-db` 是完整的例子）：
 
   ```
   hygiea-components/hygiea-xxx/
-  ├── src/…              #[cfg(test)] mod tests：纯逻辑的单元测试
+  ├── src/…              #[cfg(test)] mod tests：纯逻辑的单元测试。每个组件至少有两个：
+  │                      配置模板（config/<组件>.toml，include_str! 读进来）解析后等于配置结构体的 Default；
+  │                      provides() 按组件名提供资源（匿名的名字是 ""）。tests/ 下不再有 component.rs、config_template.rs
   └── tests/
-      ├── component.rs   每个 crate 都要有，覆盖 crate 里的每个组件，只写基础的：
-      │                  按配置构造组件、检查 provides()；不依赖外部服务的再经 Registry 启动一次，
-      │                  匿名 / 具名各取一次资源。依赖外部服务的（PG、Redis）这里不启动，
-      │                  启动并连上的测试放进 <服务>.rs 的 container 模块
-      └── <服务>.rs       连真实服务，比如 pg.rs / redis.rs / s3.rs：
-                         #[container] mod <服务名> { .. }      用 ContainerSpec 起容器，镜像写固定 tag
-                         #[live(env = [..])] mod <名字> { .. }  托管服务和自建容器行为有差别时才写（比如 R2）
-                         两个模块共用同一份测试逻辑，文件头写明运行命令和环境变量
+      ├── <源文件名>.rs   每个组件一个主测试文件，和组件的源文件同名：hygiea-redis 的 fred_pool.rs、hygiea-http 的
+      │                  axum_server.rs、hygiea-aws 的 s3.rs；源文件在子目录里的用框架目录加文件名，hygiea-db 的
+      │                  sqlx_postgres.rs（src/sqlx/pool/postgres.rs）、seaorm_postgres.rs、sqlx_sqlite.rs。
+      │                  feature 全开，测这个组件的全部能力，包括经 Registry 启动、取到资源能用、停止时关闭。按主题分模块：
+      │                  #[container] mod <主题> { .. }        用 ContainerSpec 起容器，镜像写固定 tag
+      │                  #[live(env = [..])] mod <名字> { .. }  托管服务和自建容器行为有差别时才写（比如 R2）
+      │                  不需要外部服务的（本地起的服务、SQLite 内存库、本地临时文件）写普通模块，默认的 cargo test 就跑
+      ├── <源文件名>/     主测试文件太大时可以做成目录（main.rs 当入口，比如 hygiea-http-client 的 reqwest_client/）
+      ├── <其他>.rs       某一块测试多、或者比较特殊的，另开文件（比如 hygiea-http 的 axum_layers.rs）；
+      │                  和全开互斥的 feature 放在主测试文件里用 cfg 区分，换一组 feature 再跑一次（hygiea-db 的 sqlx_postgres.rs 不开 lock-row）
+      └── common/mod.rs  几个组件共用的测试逻辑
   ```
+  文件头写明运行命令（带上这个组件全开的 feature）和环境变量。
 - 示例不连外部服务，数据库用 SQLite 内存库（`database = ":memory:"`）。
 - 除 `hygiea-examples` 外不建 `examples/` 目录。
 
 ## 怎么验证
 
-- 改代码过程中只跑改动对应的测试，带上相关 feature，比如 `cargo test -p hygiea-http-client --features reqwest --test reqwest_client`。不要默认跑 `--workspace --all-features` 全量测试，同一条命令不要重复跑。
+- 改代码过程中只 check / test 改到的 crate 和相关 feature，比如 `cargo test -p hygiea-http-client --features reqwest --test reqwest_client`。crate 和 feature 很多，不要动不动 `--workspace`、`--all-features` 全量编译、全量测试，同一条命令不要重复跑。
 - 准备提交时，先分析这次改动需要新增或修改哪些测试，确认后再按范围测。
-- 改了 feature 或 `cfg`，用几种 feature 组合 `cargo check`（不开、只开相关的、`--all-features`）。
+- 改了 feature 或 `cfg`，用几种相关的 feature 组合 `cargo check`（不开、只开相关的）；`--all-features` 留到收尾时跑一次。
 - 改了有 container 层测试的代码，本机有 Docker 时顺带跑对应 crate 的 container 层（`-- --ignored ::container::`）；
   没有 Docker 就说明没跑。live 层不要跑，需要用户的凭证，改了相关代码时告诉用户要手动跑哪条命令。
 - 仓库目前没有 CI。以后加 CI 时：普通测试 `cargo test --workspace --all-features`；有 Docker 的 runner 上再跑
@@ -113,12 +119,14 @@
 - 用 `release/release.sh` 发版：升版本号（`cargo set-version`）、改 README 里的版本号、提交、`cargo publish --workspace`、
   打 tag、push。先 `release/release.sh --dry-run --bump alpha` 检查，再去掉 `--dry-run` 执行。
   被 crates.io 限流时脚本自己等待重试；其他原因中断的，修好后用 `release/release.sh --resume` 接着发。用法见脚本开头。
-- 平时改代码不要求同步 `docs/architecture.md`，但每次发新版本前必须核对一遍，让它和实际结构一致：crate 列表、各 crate 的模块和文件、feature 与 facade 的转发关系、测试和示例放在哪。以 `Cargo.toml` 和源码为准，文档跟着改。
+- 平时改代码不同步 `docs/architecture.md`、README，等用户明确说「收尾」再做；每次发新版本前必须核对一遍，让它和实际结构一致：crate 列表、各 crate 的模块和文件、feature 与 facade 的转发关系、测试和示例放在哪。以 `Cargo.toml` 和源码为准，文档跟着改。
 - 发版前同样核对 README 的 feature 表、组件表、示例表是否和 `Cargo.toml`、`hygiea-examples` 一致。
-- 改了框架或组件的配置结构体，同步改 `docs/config-template.toml`；`cargo test -p hygiea --all-features --test config_template` 会检查两者是否一致。
+- 改了框架或组件的配置结构体，同步改所在 crate 的 `config/<组件>.toml` 模板；结构体所在源文件的单元测试 `template_is_code_defaults` 会检查两者是否一致。
 
 ## 沟通
 
+- 讨论方案时，用户回一句简短的话不等于同意，不要按默认理解直接写下去。只有用户明确说「定了，开始做」才写代码；
+  做完先给用户看，不顺手改别的。补文档、同步 README / architecture、整理提交这类收尾，等用户明确说「收尾」再做。
 - 如实陈述方案的能力、限制和工作量，不替用户判断需求轻重（不说"过度设计""太重"）。
 - 问第三方库的行为就只答第三方库，不顺带分析本项目的代码。
 - 演示某个 API 的用法时只用这个 API 本身，不要混入项目里的 wrapper。

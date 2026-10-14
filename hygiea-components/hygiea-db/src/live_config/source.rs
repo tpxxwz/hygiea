@@ -15,12 +15,13 @@ use hygiea_core::app::{AppErr, CancellationToken, RegistryConfig};
 use hygiea_core::{BaseErr, Result, ResultExt, ensure, err};
 
 use super::Backend;
-use super::LiveConfigOptions;
+use super::LiveConfigConfig;
+use super::Store;
 use super::handle::LiveConfig;
 use super::schema::Tables;
-use super::store::Store;
 use super::worker::{Binding, Command, Effective, HistoryRetention, NsState, Worker};
 use crate::RepoErr;
+use crate::sql::table_prefix;
 
 /// 连接池上的动态配置，没开（`enabled = false`）报 [`RepoErr::LiveConfigDisabled`]
 pub(crate) fn live_config_source(source: &Option<LiveConfigSource>) -> Result<&LiveConfigSource> {
@@ -30,17 +31,20 @@ pub(crate) fn live_config_source(source: &Option<LiveConfigSource>) -> Result<&L
 }
 
 /// 连接池建好时调用：配置里开了才建（只校验配置、不连库），没开是 `None`
-pub(crate) fn live_config_source_for(
+pub(crate) fn live_config_source_for<C>(
     store: impl FnOnce(Tables) -> Result<Store>,
-    config: &LiveConfigOptions,
+    config: &LiveConfigConfig<C>,
     registry_config: &RegistryConfig,
 ) -> Result<Option<LiveConfigSource>> {
     if !config.enabled {
         return Ok(None);
     }
-    // 表名前缀用应用名
-    let tables = Tables::new(&registry_config.app_name)?;
-    LiveConfigSource::new(store(tables)?, config).map(Some)
+    let prefix = table_prefix(
+        config.table_prefix.as_deref(),
+        &registry_config.app_name,
+        "live config",
+    )?;
+    LiveConfigSource::new(store(Tables::new(prefix))?, config).map(Some)
 }
 
 /// 一个连接池的动态配置：后台任务、小池都在这里。连接池持有它，对外的方法见 [`impl_live_config`]。
@@ -77,14 +81,13 @@ impl std::fmt::Debug for LiveConfigSource {
 
 impl LiveConfigSource {
     /// 只校验配置，不连库（小池第一次用时才连）
-    fn new(store: Store, config: &LiveConfigOptions) -> Result<Self> {
+    fn new<C>(store: Store, config: &LiveConfigConfig<C>) -> Result<Self> {
+        // 有推送（PG 的 LISTEN）的轮询只是兜底；没有的（SQLite）主要靠它
         let backend = store.backend();
-        let poll_interval_secs = config.poll_interval_secs.unwrap_or(match backend {
-            #[cfg(feature = "postgres")]
-            Backend::Postgres => 60,
-            #[cfg(feature = "sqlite")]
-            Backend::Sqlite => 1,
-        });
+        let poll_interval_secs =
+            config
+                .poll_interval_secs
+                .unwrap_or(if store.has_push() { 60 } else { 1 });
         ensure!(poll_interval_secs > 0, BaseErr::NotPositive, {
             "param": "live_config.poll_interval_secs",
             "op": "LiveConfigSource::new",
@@ -242,7 +245,7 @@ impl LiveConfigSource {
 }
 
 /// `history_keep_rows`、`history_trim_interval_mins` 要么都配、要么都不配，配了都要是正数
-fn history_retention(config: &LiveConfigOptions) -> Result<Option<HistoryRetention>> {
+fn history_retention<C>(config: &LiveConfigConfig<C>) -> Result<Option<HistoryRetention>> {
     let (keep_rows, interval_mins) = match (
         config.history_keep_rows,
         config.history_trim_interval_mins,

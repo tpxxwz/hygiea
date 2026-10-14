@@ -13,14 +13,14 @@ use hygiea_core::{Result, ResultExt, err};
 use crate::config::{PG_POOL_SIZE, PgConnectConfig, PoolConfig};
 #[cfg(feature = "live-config")]
 use crate::live_config::{
-    LiveConfigOptions, LiveConfigSource, Store, impl_live_config, live_config_source_for,
+    LiveConfigSource, PgLiveConfigConfig, Store, impl_live_config, live_config_source_for,
 };
 #[cfg(feature = "lock")]
-use crate::lock::{PgLock, impl_pg_lock};
+use crate::lock::{LockConfig, PgLock, impl_pg_lock};
 
 // ---- config -----------------------------------------------------------------
 
-/// 配置文件里是 `[db.connect]`、`[db.pool]`、`[db.log]`（还有开了 feature 才有的 `[db.live_config]`），各段不写用默认值
+/// 配置文件里是 `[db.connect]`、`[db.pool]`、`[db.log]`（还有开了 feature 才有的 `[db.live_config]`、`[db.lock]`），各段不写用默认值
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SeaOrmPgConfig {
@@ -28,7 +28,9 @@ pub struct SeaOrmPgConfig {
     pub pool: PoolConfig,
     pub log: SeaOrmLogConfig,
     #[cfg(feature = "live-config")]
-    pub live_config: LiveConfigOptions,
+    pub live_config: PgLiveConfigConfig,
+    #[cfg(feature = "lock")]
+    pub lock: LockConfig,
 }
 
 /// SeaORM 打的 SQL 日志。级别是 trace / debug / info / warn / error / off
@@ -119,8 +121,9 @@ impl ConfigResource for SeaOrmPgPool {
         #[cfg(feature = "live-config")]
         let live_config = live_config_source_for(
             |tables| {
+                let connect = config.live_config.connect.merge(&config.connect);
                 Ok(Store::postgres(
-                    config.connect.sqlx_options(registry_config)?,
+                    connect.sqlx_options(registry_config)?,
                     &config.pool,
                     tables,
                 ))
@@ -136,7 +139,14 @@ impl ConfigResource for SeaOrmPgPool {
         tracing::info!("Database connection established");
         // Database::connect 按 postgres:// 建的，一定是 PG 连接池，get_postgres_connection_pool 不会 panic
         #[cfg(feature = "lock")]
-        let locker = PgLock::new(conn.get_postgres_connection_pool().clone(), registry_config)?;
+        let locker = PgLock::new(
+            conn.get_postgres_connection_pool(),
+            &config.connect,
+            &config.pool,
+            &config.lock,
+            registry_config,
+        )
+        .await?;
         #[cfg(feature = "lock")]
         if !config.pool.connect_lazy {
             locker.prepare().await?;
@@ -150,12 +160,14 @@ impl ConfigResource for SeaOrmPgPool {
         })
     }
 
-    /// 等在途查询跑完后关掉连接池；动态配置的后台任务也退出
+    /// 等在途查询跑完后关掉连接池；动态配置的后台任务也退出，锁单独的池也关掉
     async fn close(&self) -> Result<()> {
         #[cfg(feature = "live-config")]
         if let Some(live_config) = &self.live_config {
             live_config.close().await;
         }
+        #[cfg(feature = "lock")]
+        self.locker.close().await;
         self.inner
             .close_by_ref()
             .await
@@ -186,6 +198,32 @@ pub type SeaOrmPgComponent = ImmediateResourceComponent<SeaOrmPgPool>;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 配置模板 `config/seaorm-pg.toml` 就是代码里的默认值（结构体没有实现 PartialEq，比 Debug 输出）
+    #[cfg(all(feature = "live-config", feature = "lock"))]
+    #[test]
+    fn template_is_code_defaults() {
+        let config: SeaOrmPgConfig =
+            crate::config::parse_template(include_str!("../../../config/seaorm-pg.toml"));
+        assert_eq!(
+            format!("{config:?}"),
+            format!("{:?}", SeaOrmPgConfig::default())
+        );
+    }
+
+    /// 按组件名提供连接池，匿名的名字是 `""`
+    #[test]
+    fn provides_named_pool() {
+        use hygiea_core::app::{Component, Name, ResourceId};
+
+        let named = SeaOrmPgComponent::build(Name::from("primary"), SeaOrmPgConfig::default());
+        assert_eq!(
+            named.provides(),
+            vec![ResourceId::named::<SeaOrmPgPool>("primary")]
+        );
+        let anonymous = SeaOrmPgComponent::build(Name::from(""), SeaOrmPgConfig::default());
+        assert_eq!(anonymous.provides(), vec![ResourceId::of::<SeaOrmPgPool>()]);
+    }
 
     /// 池参数不写时用 PG 的默认值，写了的按写的
     #[test]

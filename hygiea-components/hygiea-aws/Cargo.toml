@@ -30,11 +30,6 @@ toml = { workspace = true }
 hygiea-test = { workspace = true, features = ["container"] }
 
 [[test]]
-name = "component"
-path = "tests/component.rs"
-required-features = ["s3"]
-
-[[test]]
 name = "s3"
 path = "tests/s3.rs"
 required-features = ["s3"]

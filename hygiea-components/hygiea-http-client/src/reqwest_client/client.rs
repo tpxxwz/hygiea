@@ -313,6 +313,34 @@ mod tests {
 
     use super::*;
 
+    /// 配置模板 `config/reqwest.toml` 就是代码里的默认值：按配置结构体解析（deny_unknown_fields，写错、多写的项解析失败），
+    /// 结构体没有实现 PartialEq，比 Debug 输出
+    #[test]
+    fn template_is_code_defaults() {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Template {
+            http_client: ReqwestConfig,
+        }
+        let template: Template = toml::from_str(include_str!("../../config/reqwest.toml")).unwrap();
+        assert_eq!(
+            format!("{:?}", template.http_client),
+            format!("{:?}", ReqwestConfig::default())
+        );
+    }
+
+    /// 按配置构造：按组件名声明 ReqwestClient 资源
+    #[test]
+    fn provides_named_client() {
+        use hygiea_core::app::{Component, Name, ResourceId};
+
+        let component = ReqwestComponent::build(Name::from("moji"), ReqwestConfig::default());
+        assert_eq!(
+            component.provides(),
+            vec![ResourceId::named::<ReqwestClient>("moji")]
+        );
+    }
+
     /// 默认值：和字段文档里写的一致
     mod defaults {
         use super::*;

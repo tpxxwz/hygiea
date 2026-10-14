@@ -7,6 +7,7 @@
 //! - `retry`：带重试的发送
 //! - `api_envelope`：`{code, msg, data}` 外层结构的示范写法
 //! - `debug`：debug 日志（只在 `debug-log` feature 下编译）
+//! - `registry`：`ReqwestComponent` 经 Registry 启动，按组件名提供 `ReqwestClient`
 //!
 //! ## 为什么有这个 main.rs
 //!
@@ -34,5 +35,6 @@ mod client_config;
 mod debug;
 mod logs;
 mod masking;
+mod registry;
 mod retry;
 mod send;

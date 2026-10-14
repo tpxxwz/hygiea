@@ -1,17 +1,16 @@
-//! 连接池的动态配置能力（feature `live-config`）的集成测试。
-//!
-//! SQLite 用临时文件，直接跑；PostgreSQL 是 container 层，要 Docker：
+//! `SqlxSqlitePool`（`src/sqlx/pool/sqlite.rs`，feature `sqlx` + `sqlite`）的集成测试，feature 全开（`live-config`）。SQLite 嵌在进程里，
+//! 不需要 Docker：内存库（`:memory:`）和本地临时文件两种都测，默认的 `cargo test` 就会跑：
 //! ```sh
-//! cargo test -p hygiea-db --all-features --test live_config
-//! cargo test -p hygiea-db --all-features --test live_config -- --ignored ::container::
+//! cargo test -p hygiea-db --features sqlx,sqlite,live-config --test sqlx_sqlite
 //! ```
 
-#![cfg(all(feature = "live-config", feature = "postgres", feature = "sqlite"))]
+#![cfg(all(feature = "sqlx", feature = "sqlite", feature = "live-config"))]
 
-use std::future::Future;
+mod common;
+
 use std::time::Duration;
 
-use hygiea_test::container;
+use common::eventually;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -51,27 +50,170 @@ struct All {
     cache: Cache,
 }
 
-/// 条件在 `secs` 秒内成立
-async fn eventually<F, Fut>(secs: u64, mut check: F)
-where
-    F: FnMut() -> Fut,
-    Fut: Future<Output = bool>,
-{
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(secs);
-    while !check().await {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "{secs} 秒内条件没有成立"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
+/// 连接池本身：内存库、本地文件都能连上、执行，经 Registry 启动和停止
+mod pool {
+    use hygiea_core::app::{Component, ConfigResource, Name, Registry, Resources};
+    use hygiea_db::{
+        PoolConfig, SqliteConnectConfig, SqlxSqliteComponent, SqlxSqliteConfig, SqlxSqlitePool,
+    };
+
+    fn memory_config() -> SqlxSqliteConfig {
+        SqlxSqliteConfig {
+            connect: SqliteConnectConfig {
+                database: ":memory:".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    /// 启动 registry，把 `Resources` 交给 `check`，拿回它的结果。
+    /// 启动成功后 `run` 会一直等退出信号，所以放到后台任务里，拿到结果就 abort
+    async fn with_resources<T: Send + 'static>(
+        registry: Registry,
+        check: impl FnOnce(Resources) -> T + Send + 'static,
+    ) -> T {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _ = registry
+                .on_ready(move |resources| async move {
+                    let _ = tx.send(check(resources));
+                    Ok(())
+                })
+                .run()
+                .await;
+        });
+        let result = rx.await.unwrap();
+        task.abort();
+        result
+    }
+
+    /// 没启动过就 stop，以及 stop 两次，都是空操作
+    #[tokio::test]
+    async fn stop_without_startup_is_noop() {
+        let mut component = SqlxSqliteComponent::build(Name::from("primary"), memory_config());
+        component.stop().await.unwrap();
+        component.stop().await.unwrap();
+    }
+
+    /// 匿名添加：`get::<SqlxSqlitePool>()` 取到能用的连接池
+    #[tokio::test]
+    async fn anonymous_component_provides_pool() {
+        let registry = Registry::new().add::<SqlxSqliteComponent>(memory_config());
+        let pool = with_resources(registry, |res| res.get::<SqlxSqlitePool>())
+            .await
+            .unwrap();
+        let value: i32 = sqlx::query_scalar("SELECT 1")
+            .fetch_one(&*pool)
+            .await
+            .unwrap();
+        assert_eq!(value, 1);
+    }
+
+    /// 具名添加多个实例：按名字各取各的，匿名取不到
+    #[tokio::test]
+    async fn named_components_provide_pools_by_name() {
+        let registry = Registry::new()
+            .add_named::<SqlxSqliteComponent>("primary", memory_config())
+            .add_named::<SqlxSqliteComponent>("replica", memory_config());
+        let (primary, replica, anonymous) = with_resources(registry, |res| {
+            (
+                res.get_named::<SqlxSqlitePool>("primary"),
+                res.get_named::<SqlxSqlitePool>("replica"),
+                res.get::<SqlxSqlitePool>().is_some(),
+            )
+        })
+        .await;
+        for pool in [primary.unwrap(), replica.unwrap()] {
+            let value: i32 = sqlx::query_scalar("SELECT 1")
+                .fetch_one(&*pool)
+                .await
+                .unwrap();
+            assert_eq!(value, 1);
+        }
+        assert!(!anonymous);
+    }
+
+    /// 优雅关闭时组件的 stop 关掉连接池。要给自己发 SIGTERM 触发关闭，只在 unix 上跑
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn graceful_shutdown_closes_pool() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let run = Registry::new()
+            .add_named::<SqlxSqliteComponent>("primary", memory_config())
+            .on_ready(move |res| async move {
+                let _ = tx.send(res.get_named::<SqlxSqlitePool>("primary"));
+                Ok(())
+            })
+            .run();
+
+        tokio::spawn(async {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            // 用系统的 kill 命令给自己发 SIGTERM，不额外引入依赖
+            std::process::Command::new("kill")
+                .args(["-TERM", &std::process::id().to_string()])
+                .status()
+                .unwrap();
+        });
+
+        let (run_result, _log_guard) = run.await;
+        assert!(run_result.is_ok(), "{run_result:?}");
+
+        let pool = rx.await.unwrap().unwrap();
+        let err = sqlx::query("SELECT 1").fetch_one(&*pool).await.unwrap_err();
+        assert!(matches!(err, sqlx::Error::PoolClosed), "{err:?}");
+    }
+
+    /// 内存库和本地文件：连上、建表、在事务里写入再读回
+    #[tokio::test]
+    async fn memory_and_file_databases_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("pool.db").display().to_string();
+        for database in [":memory:".to_string(), file] {
+            // 内存库（不共享缓存）每条连接各是一个库，池限成 1 条连接
+            let config = SqlxSqliteConfig {
+                connect: SqliteConnectConfig {
+                    database: database.clone(),
+                    ..Default::default()
+                },
+                pool: PoolConfig {
+                    max_connections: Some(1),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let pool = SqlxSqlitePool::from_config(&config, &Default::default())
+                .await
+                .unwrap();
+            hygiea_db::sqlx::transaction(&*pool, "create and insert", async |tx| {
+                sqlx::query("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT NOT NULL)")
+                    .execute(&mut **tx)
+                    .await
+                    .unwrap();
+                sqlx::query("INSERT INTO t (id, v) VALUES (1, 'a')")
+                    .execute(&mut **tx)
+                    .await
+                    .unwrap();
+                Ok(())
+            })
+            .await
+            .unwrap();
+            let v: String = sqlx::query_scalar("SELECT v FROM t WHERE id = 1")
+                .fetch_one(&*pool)
+                .await
+                .unwrap();
+            assert_eq!(v, "a", "{database}");
+            pool.close().await.unwrap();
+        }
     }
 }
 
-mod sqlite {
+/// 动态配置（feature `live-config`）：小池另开一条连接，内存库连到的是另一个空库，所以用本地临时文件
+mod live_config {
     use hygiea_core::app::{ConfigResource, RegistryConfig};
     use hygiea_db::{
-        LiveConfigOptions, PoolConfig, RepoErr, SqliteConnectConfig, SqlxSqliteConfig,
-        SqlxSqlitePool,
+        PoolConfig, RepoErr, SqliteConnectConfig, SqliteConnectOverride, SqliteLiveConfigConfig,
+        SqlxSqliteConfig, SqlxSqlitePool,
     };
     use tempfile::TempDir;
 
@@ -85,8 +227,8 @@ mod sqlite {
         }
     }
 
-    fn enabled() -> LiveConfigOptions {
-        LiveConfigOptions {
+    fn enabled() -> SqliteLiveConfigConfig {
+        SqliteLiveConfigConfig {
             enabled: true,
             ..Default::default()
         }
@@ -624,386 +766,47 @@ mod sqlite {
                 .unwrap();
         assert_eq!(tables, 0);
     }
-}
 
-/// 用代码启动的官方 postgres 镜像
-#[container]
-mod postgres {
-    use hygiea_core::app::{ConfigResource, RegistryConfig};
-    use hygiea_db::{
-        LiveConfigOptions, PgConnectConfig, RepoErr, SeaOrmPgConfig, SeaOrmPgPool, SqlxPgConfig,
-        SqlxPgPool,
-    };
-    use hygiea_test::container::{ContainerSpec, RunningContainer};
-
-    use super::*;
-
-    const PASSWORD: &str = "hygiea-test";
-    const PORT: u16 = 5432;
-
-    /// 连接池本身模拟别的程序改表，动态配置走它自己的那条连接
-    struct Env {
-        server: RunningContainer,
-        pool: SqlxPgPool,
-    }
-
-    impl Env {
-        async fn new() -> Self {
-            let server = ContainerSpec::new("postgres", "18")
-                .env("POSTGRES_PASSWORD", PASSWORD)
-                .port(PORT)
-                .wait_log_times("database system is ready to accept connections", 2)
-                .start()
-                .await;
-            let pool = SqlxPgPool::from_config(&sqlx_config(&server), &app())
-                .await
-                .unwrap();
-            Self { server, pool }
-        }
-
-        /// 先绑一个空的 namespace：第一次 bind 才建表，测试要在 bind 前往表里写数据
-        async fn start(&self) -> SqlxPgPool {
-            let source = self.pool.clone();
-            source.live_config("_start", Empty {}).await.unwrap();
-            source
-        }
-
-        async fn exec(&self, sql: &str) {
-            sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
-                .execute(&*self.pool)
-                .await
-                .unwrap();
-        }
-    }
-
-    /// 应用名 `hy`：表是 hy_config 那三张；主池的连接叫 `hy`，live config 的小池叫 `hy-live-config`
-    fn app() -> RegistryConfig {
-        RegistryConfig {
-            app_name: "hy".to_string(),
-            ..Default::default()
-        }
-    }
-
-    /// 轮询间隔很长：测试里的变化只能靠通知收到
-    fn live_config() -> LiveConfigOptions {
-        LiveConfigOptions {
-            enabled: true,
-            poll_interval_secs: Some(3600),
-            ..Default::default()
-        }
-    }
-
-    fn sqlx_config(server: &RunningContainer) -> SqlxPgConfig {
-        SqlxPgConfig {
-            connect: connect(server),
-            live_config: live_config(),
-            ..Default::default()
-        }
-    }
-
-    fn connect(server: &RunningContainer) -> PgConnectConfig {
-        PgConnectConfig {
-            host: server.host().to_string(),
-            port: server.port(PORT),
-            password: PASSWORD.to_string(),
-            ..Default::default()
-        }
-    }
-
-    /// 保留行数在 PG 上也生效：后台任务一启动就删到只剩最新的 N 行
+    /// `[db.live_config.connect]` 换个库文件、`table_prefix` 写空的：表建在那个库里、不带前缀，主库里没有
     #[tokio::test]
-    async fn history_is_trimmed() {
+    async fn own_database_and_empty_prefix() {
         let env = Env::new().await;
-        let source = env.start().await;
-        let _sync = source.live_config("sync", Job::default()).await.unwrap();
-        env.exec("UPDATE hy_config SET value = '[3]' WHERE namespace = 'sync' AND key = 'levels'")
-            .await;
-        // sync 3 条 I + 1 条 U
-        let count = || async {
-            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM hy_config_history")
-                .fetch_one(&*env.pool)
-                .await
-                .unwrap()
+        let other = env._dir.path().join("config.db").display().to_string();
+        let mut config = env.config.clone();
+        config.live_config.table_prefix = Some(String::new());
+        config.live_config.connect = SqliteConnectOverride {
+            database: Some(other.clone()),
+            ..Default::default()
         };
-        assert_eq!(count().await, 4);
+        let pool = SqlxSqlitePool::from_config(&config, &app()).await.unwrap();
+        let cache = pool.live_config("cache", Cache::default()).await.unwrap();
 
-        let mut config = sqlx_config(&env.server);
-        config.live_config.history_keep_rows = Some(2);
-        config.live_config.history_trim_interval_mins = Some(60);
-        let restarted = SqlxPgPool::from_config(&config, &app()).await.unwrap();
-        let _sync = restarted.live_config("sync", Job::default()).await.unwrap();
-        eventually(5, || async { count().await == 2 }).await;
-        let op: String =
-            sqlx::query_scalar("SELECT op FROM hy_config_history ORDER BY id DESC LIMIT 1")
-                .fetch_one(&*env.pool)
-                .await
-                .unwrap();
-        assert_eq!(op, "U", "留下的是最新的");
-    }
-
-    /// 改值靠 NOTIFY 推过来；history 记了数据库账号
-    #[tokio::test]
-    async fn update_is_pushed_by_notify() {
-        let env = Env::new().await;
-        let source = env.start().await;
-        let mut sync = source.live_config("sync", Job::default()).await.unwrap();
-        assert_eq!(*sync.get(), Job::default());
-
-        env.exec(
-            "UPDATE hy_config SET value = '[3, 4]' WHERE namespace = 'sync' AND key = 'levels'",
-        )
-        .await;
-        tokio::time::timeout(Duration::from_secs(5), sync.changed())
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(sync.get().levels, vec![3, 4]);
-
-        let (op, by, revision): (String, String, i64) = sqlx::query_as(
-            "SELECT op, changed_by, revision FROM hy_config_history ORDER BY id DESC LIMIT 1",
-        )
-        .fetch_one(&*env.pool)
-        .await
-        .unwrap();
-        assert_eq!((op.as_str(), by.as_str(), revision), ("U", "postgres", 4));
-    }
-
-    /// bind_all 一次补完所有 namespace 的默认值（一条语句）：表里每个 key 都有，history 每个 key 一条 I，
-    /// 值的类型（布尔、数组、字符串、数字）原样存成 JSON
-    #[tokio::test]
-    async fn bind_all_seeds_every_key() {
-        let env = Env::new().await;
-        let source = env.start().await;
-        let all = source.live_config_all(All::default()).await.unwrap();
-        assert_eq!(*all.get(), All::default());
-
-        let rows: Vec<(String, String, String)> = sqlx::query_as(
-            "SELECT namespace, key, value::text FROM hy_config \
-             WHERE namespace IN ('sync', 'cache') ORDER BY namespace, key",
-        )
-        .fetch_all(&*env.pool)
-        .await
-        .unwrap();
-        let rows: Vec<(&str, &str, &str)> = rows
-            .iter()
-            .map(|(n, k, v)| (n.as_str(), k.as_str(), v.as_str()))
-            .collect();
-        assert_eq!(
-            rows,
-            vec![
-                ("cache", "ttl_secs", "60"),
-                ("sync", "enabled", "false"),
-                ("sync", "levels", "[1, 2]"),
-                ("sync", "start_time", "\"01:00\""),
-            ]
-        );
-        let inserted: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM hy_config_history WHERE namespace IN ('sync', 'cache') AND op = 'I'",
-        )
-        .fetch_one(&*env.pool)
-        .await
-        .unwrap();
-        assert_eq!(inserted, 4);
-    }
-
-    /// 一个事务里改多个 key、删 key：都能收到，删掉的退回默认值
-    #[tokio::test]
-    async fn transaction_with_many_changes() {
-        let env = Env::new().await;
-        let source = env.start().await;
-        let all = source.live_config_all(All::default()).await.unwrap();
-
-        env.exec(
-            "BEGIN; \
-             UPDATE hy_config SET value = 'true' WHERE namespace = 'sync' AND key = 'enabled'; \
-             UPDATE hy_config SET value = '5' WHERE namespace = 'cache' AND key = 'ttl_secs'; \
-             DELETE FROM hy_config WHERE namespace = 'sync' AND key = 'levels'; \
-             COMMIT;",
-        )
-        .await;
-        eventually(5, || async {
-            let all = all.get();
-            all.sync.enabled && all.cache.ttl_secs == 5
-        })
-        .await;
-        assert_eq!(all.get().sync.levels, vec![1, 2]);
-    }
-
-    /// 回滚的修改不发通知，值不变
-    #[tokio::test]
-    async fn rolled_back_change_is_ignored() {
-        let env = Env::new().await;
-        let source = env.start().await;
-        let mut sync = source.live_config("sync", Job::default()).await.unwrap();
-
-        env.exec(
-            "BEGIN; UPDATE hy_config SET value = 'true' WHERE namespace = 'sync' AND key = 'enabled'; ROLLBACK;",
-        )
-        .await;
-        assert!(
-            tokio::time::timeout(Duration::from_millis(1500), sync.changed())
-                .await
-                .is_err()
-        );
-        assert!(!sync.get().enabled);
-    }
-
-    /// 几个实例同时第一次 bind（同时建表），都成功
-    #[tokio::test]
-    async fn concurrent_startup_creates_tables_once() {
-        let env = Env::new().await;
-        let mut handles = Vec::new();
-        for _ in 0..4 {
-            let pool = SqlxPgPool::from_config(&sqlx_config(&env.server), &app())
-                .await
-                .unwrap();
-            handles.push(tokio::spawn(async move {
-                pool.live_config("cache", Cache::default())
-                    .await
-                    .map(|_| ())
-            }));
-        }
-        for handle in handles {
-            handle.await.unwrap().unwrap();
-        }
-    }
-
-    /// 已经建好的表重启时直接用，值不动；表加了一列：拒绝启动
-    #[tokio::test]
-    async fn schema_check_on_restart() {
-        let env = Env::new().await;
-        let source = env.start().await;
-        source.live_config("cache", Cache::default()).await.unwrap();
-        env.exec("UPDATE hy_config SET value = '42' WHERE namespace = 'cache'")
-            .await;
-
-        let restarted = SqlxPgPool::from_config(&sqlx_config(&env.server), &app())
-            .await
-            .unwrap();
-        let cache = restarted
-            .live_config("cache", Cache::default())
-            .await
-            .unwrap();
-        assert_eq!(cache.get().ttl_secs, 42, "表里改过的值不能被默认值覆盖");
-        restarted.close().await.unwrap();
-
-        env.exec("ALTER TABLE hy_config ADD COLUMN note text").await;
-        let restarted = SqlxPgPool::from_config(&sqlx_config(&env.server), &app())
-            .await
-            .unwrap();
-        let e = restarted
-            .live_config("cache", Cache::default())
-            .await
-            .unwrap_err();
-        assert!(e.is(RepoErr::LiveConfigSchemaMismatch), "{e:#}");
-    }
-
-    /// 同名函数不是 hygiea 建的（没有标记）：不动它，拒绝启动
-    #[tokio::test]
-    async fn foreign_function_refuses() {
-        let env = Env::new().await;
-        env.exec(
-            "CREATE FUNCTION hy_config_touch() RETURNS trigger LANGUAGE plpgsql AS $$ \
-             BEGIN RETURN NEW; END $$;",
-        )
-        .await;
-        let e = env
-            .pool
-            .live_config("cache", Cache::default())
-            .await
-            .unwrap_err();
-        assert!(e.is(RepoErr::LiveConfigSchemaMismatch), "{e:#}");
-        let tables: bool = sqlx::query_scalar("SELECT to_regclass('hy_config') IS NULL")
-            .fetch_one(&*env.pool)
-            .await
-            .unwrap();
-        assert!(tables, "拒绝时一张表都不建");
-    }
-
-    /// 连接名：主池用应用名，小池加 `-live-config`；params 里不能自己写 application_name
-    #[tokio::test]
-    async fn application_names_follow_app_name() {
-        let env = Env::new().await;
-        env.start().await;
-        let names = |pool: SqlxPgPool| async move {
-            sqlx::query_scalar::<_, String>(
-                "SELECT DISTINCT application_name FROM pg_stat_activity \
-                 WHERE application_name IN ('hy', 'hy-live-config') ORDER BY 1",
+        let count = |pool: SqlxSqlitePool| async move {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name LIKE '%config%'",
             )
-            .fetch_all(&*pool)
+            .fetch_one(&*pool)
             .await
             .unwrap()
         };
-        assert_eq!(names(env.pool.clone()).await, vec!["hy", "hy-live-config"]);
-
-        let mut config = sqlx_config(&env.server);
-        config.connect.params = "application_name=replica".to_string();
-        let e = SqlxPgPool::from_config(&config, &app()).await.unwrap_err();
-        assert!(e.is(hygiea_core::app::AppErr::InvalidConfig), "{e:#}");
-    }
-
-    /// 换应用名：表名前缀、触发器、通知的 channel 都跟着换
-    #[tokio::test]
-    async fn table_prefix_follows_app_name() {
-        let env = Env::new().await;
-        let cfg = RegistryConfig {
-            app_name: "cfg".to_string(),
-            ..Default::default()
-        };
-        let pool = SqlxPgPool::from_config(&sqlx_config(&env.server), &cfg)
-            .await
-            .unwrap();
-        let cache = pool.live_config("cache", Cache::default()).await.unwrap();
-
-        env.exec("UPDATE cfg_config SET value = '7' WHERE namespace = 'cache'")
-            .await;
-        eventually(5, || async { cache.get().ttl_secs == 7 }).await;
-    }
-
-    /// SeaORM 连接池：动态配置跟着它的 search_path，表建在那个 schema 下
-    #[tokio::test]
-    async fn seaorm_pool_follows_search_path() {
-        let env = Env::new().await;
-        env.exec("CREATE SCHEMA app").await;
-        let config = SeaOrmPgConfig {
-            connect: PgConnectConfig {
-                schema_search_path: "app".to_string(),
-                ..connect(&env.server)
+        assert_eq!(count(pool.clone()).await, 0, "主库里没有");
+        let config_db = SqlxSqlitePool::from_config(
+            &SqlxSqliteConfig {
+                connect: SqliteConnectConfig {
+                    database: other,
+                    ..Default::default()
+                },
+                ..Default::default()
             },
-            live_config: live_config(),
-            ..Default::default()
-        };
-        let pool = SeaOrmPgPool::from_config(&config, &app()).await.unwrap();
-        let cache = pool.live_config("cache", Cache::default()).await.unwrap();
-
-        let created: bool = sqlx::query_scalar("SELECT to_regclass('app.hy_config') IS NOT NULL")
-            .fetch_one(&*env.pool)
-            .await
-            .unwrap();
-        assert!(created);
-        env.exec("UPDATE app.hy_config SET value = '8' WHERE namespace = 'cache'")
-            .await;
-        eventually(5, || async { cache.get().ttl_secs == 8 }).await;
-        pool.close().await.unwrap();
-    }
-
-    /// 监听连接被服务端断掉：重连后对一遍版本，断线期间的修改也能拿到
-    #[tokio::test]
-    async fn reconnects_after_connection_killed() {
-        let env = Env::new().await;
-        let source = env.start().await;
-        let cache = source.live_config("cache", Cache::default()).await.unwrap();
-
-        let killed: Vec<bool> = sqlx::query_scalar(
-            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
-             WHERE application_name = 'hy-live-config'",
+            &app(),
         )
-        .fetch_all(&*env.pool)
         .await
         .unwrap();
-        assert_eq!(killed, vec![true], "应该正好断掉监听的那一条连接");
-        env.exec("UPDATE hy_config SET value = '9' WHERE namespace = 'cache'")
-            .await;
-        eventually(15, || async { cache.get().ttl_secs == 9 }).await;
+        assert_eq!(count(config_db.clone()).await, 3);
+        sqlx::query("UPDATE config SET value = '5' WHERE namespace = 'cache'")
+            .execute(&*config_db)
+            .await
+            .unwrap();
+        eventually(5, || async { cache.get().ttl_secs == 5 }).await;
     }
 }

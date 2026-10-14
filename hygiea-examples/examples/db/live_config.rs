@@ -34,7 +34,7 @@ use axum::Router;
 use axum::routing::{get, post};
 use hygiea::app::Registry;
 use hygiea::db::{
-    LiveConfig, LiveConfigOptions, SqliteConnectConfig, SqlxSqliteComponent, SqlxSqliteConfig,
+    LiveConfig, LiveConfigConfig, SqliteConnectConfig, SqlxSqliteComponent, SqlxSqliteConfig,
     SqlxSqlitePool,
 };
 use hygiea::http::{AxumComponent, AxumConfig, arity0_state, arity1_state};
@@ -124,7 +124,7 @@ async fn main() -> Result<()> {
             ..Default::default()
         },
         // 动态配置默认不开，要用的连接池写 enabled = true
-        live_config: LiveConfigOptions {
+        live_config: LiveConfigConfig {
             enabled: true,
             ..Default::default()
         },

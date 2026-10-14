@@ -1,4 +1,4 @@
--- hygiea 动态配置的表、触发器（SQLite 3.35+）。{p} 是前缀（应用名加 _），时间存 UTC 的 RFC 3339 文本。
+-- hygiea 动态配置的表、触发器（SQLite 3.35+）。{p} 是表名前缀（默认应用名加 _，可以是空的），时间存 UTC 的 RFC 3339 文本。
 -- 第一次 bind 时一个都不存在才执行；手动执行时把 {p} 换掉
 
 CREATE TABLE {p}config (

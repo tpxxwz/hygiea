@@ -1,7 +1,7 @@
-//! `TonicComponent`：按配置构造、经 Registry 两阶段启动、`tonic_serve_fn!` 取资源（及取不到时启动失败），
+//! `TonicComponent`（`src/tonic_server.rs`）的集成测试：经 Registry 两阶段启动、`tonic_serve_fn!` 取资源（及取不到时启动失败），
 //! 以及取消后后台任务能 join。不发真实 gRPC 请求，用自定义的闭包、`FakeRouter` 代替 tonic Router。
 //!
-//! 运行：`cargo test -p hygiea-grpc --features tonic --test component`
+//! 运行：`cargo test -p hygiea-grpc --features tonic --test tonic_server`
 
 #![cfg(feature = "tonic")]
 
@@ -77,16 +77,6 @@ fn local_config(serve_fn: TonicServeFn) -> TonicConfig {
         serve_fn: Some(serve_fn),
         ..Default::default()
     }
-}
-
-/// 不往 Resources 里放东西，也不依赖别的资源
-#[test]
-fn provides_and_depends_on_nothing() {
-    let (tx, _rx) = tokio::sync::oneshot::channel();
-    let component =
-        TonicComponent::build(Name::from(""), local_config(signal_then_wait_serve_fn(tx)));
-    assert!(component.provides().is_empty());
-    assert!(component.depends_on().is_empty());
 }
 
 /// 经 Registry 启动：两阶段都成功，`serve_fn` 被调用

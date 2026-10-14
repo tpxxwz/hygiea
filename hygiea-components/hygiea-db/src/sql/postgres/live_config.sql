@@ -1,5 +1,6 @@
--- hygiea 动态配置的表、函数、触发器（PostgreSQL 11+），建在 search_path 的第一个 schema 里。{p} 是前缀（应用名加 _）。
--- 第一次 bind 时一个都不存在才执行；手动执行时把 {p} 换掉。
+-- hygiea 动态配置的表、函数、触发器，建在 search_path 的第一个 schema 里。{p} 是表名前缀（默认应用名加 _，可以是空的），
+-- {channel} 是 NOTIFY 的 channel：<schema>.{p}config（schema 是建表时的 current_schema()）。
+-- 第一次 bind 时一个都不存在才执行；手动执行时把 {p}、{channel} 换掉（程序日志里打出的是换好的）。
 -- 函数都 SET search_path FROM CURRENT：触发器在改表的那个会话里执行，固定成建表时的 search_path，
 -- 不带 schema 的表名、函数名才找得对（别的程序 search_path 不一样也能改表）
 
@@ -41,7 +42,7 @@ BEGIN
     RETURNING r.revision INTO rev;
     INSERT INTO {p}config_history (namespace, key, op, old_value, new_value, revision)
     VALUES (ns, k, op, old_value, new_value, rev);
-    PERFORM pg_notify('{p}config', ns || ':' || rev);
+    PERFORM pg_notify('{channel}', ns || ':' || rev);
 END $$;
 
 -- 改 namespace 或 key 算删掉旧的、插入新的；只改值算更新；值没变不算变更

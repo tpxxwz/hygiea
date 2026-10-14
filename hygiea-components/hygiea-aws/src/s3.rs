@@ -107,6 +107,22 @@ mod tests {
 
     use super::*;
 
+    /// 按配置构造：按组件名声明 S3 客户端
+    #[test]
+    fn provides_named_client() {
+        use hygiea_core::app::{Component, Name, ResourceId};
+
+        let config = AwsConfig {
+            region: Some("auto".into()),
+            ..AwsConfig::default()
+        };
+        let component = AwsS3Component::build(Name::from("r2"), config);
+        assert_eq!(
+            component.provides(),
+            vec![ResourceId::named::<AwsS3Client>("r2")]
+        );
+    }
+
     fn sdk_config() -> SdkConfig {
         SdkConfig::builder()
             .behavior_version(BehaviorVersion::latest())

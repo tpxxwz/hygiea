@@ -386,6 +386,32 @@ mod tests {
 
     use super::*;
 
+    /// 配置模板 `config/axum.toml` 就是代码里的默认值：按配置结构体解析（deny_unknown_fields，写错、多写的项解析失败），
+    /// 结构体没有实现 PartialEq，比 Debug 输出
+    #[test]
+    fn template_is_code_defaults() {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Template {
+            http: AxumConfig,
+        }
+        let template: Template = toml::from_str(include_str!("../config/axum.toml")).unwrap();
+        assert_eq!(
+            format!("{:?}", template.http),
+            format!("{:?}", AxumConfig::default())
+        );
+    }
+
+    /// HTTP 服务不往 Resources 里放东西，也不依赖别的资源
+    #[test]
+    fn declares_no_resources() {
+        use hygiea_core::app::{Component, Name};
+
+        let component = AxumComponent::build(Name::from(""), AxumConfig::default());
+        assert!(component.provides().is_empty());
+        assert!(component.depends_on().is_empty());
+    }
+
     /// 业务错误：项目前缀取默认的 000，不是框架的 999
     #[derive(hy_err)]
     enum BizErr {

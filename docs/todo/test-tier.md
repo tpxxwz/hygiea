@@ -27,4 +27,4 @@
 
 - `hygiea-test-macros` 的实现和 trybuild 快照
 - `hygiea-test/src/lib.rs` 里测试分层的文档、AGENTS.md 的测试分层表和运行命令
-- 用到宏的测试文件头写的运行命令：hygiea-db `tests/pg.rs`、hygiea-redis、hygiea-aws 等
+- 用到宏的测试文件头写的运行命令：hygiea-db `tests/sqlx_postgres.rs`、hygiea-redis、hygiea-aws 等

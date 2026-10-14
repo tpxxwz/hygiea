@@ -38,13 +38,13 @@ datetime-chrono = ["hygiea-core/datetime-chrono"]
 full = ["hygiea-core/full"]
 
 # ---- 组件：hygiea::db / redis / http / grpc / aws。组件 crate 自己依赖 core 的 app ----
-# 只开框架：和数据库无关的部分（HyUtcDateTime），组合 feature 依赖它们
+# db：框架、数据库、功能三个维度各自独立、只增加功能，一对一转发给 hygiea-db，同时打开的组合才有东西：
+# db-sqlx + db-postgres 得到 SqlxPgComponent，再加 db-lock 它就实现了分布式锁。支持哪些组合见 README
 db-sqlx = ["dep:hygiea-db", "hygiea-db/sqlx"]
 db-seaorm = ["dep:hygiea-db", "hygiea-db/seaorm"]
-db-sqlx-postgres = ["db-sqlx", "hygiea-db/postgres"]
-db-sqlx-sqlite = ["db-sqlx", "hygiea-db/sqlite"]
-db-seaorm-postgres = ["db-seaorm", "hygiea-db/postgres"]
-# 连接池的数据库配置表（动态配置）能力，和上面的组合一起开
+db-postgres = ["dep:hygiea-db", "hygiea-db/postgres"]
+db-sqlite = ["dep:hygiea-db", "hygiea-db/sqlite"]
+# 连接池的数据库配置表（动态配置）
 db-live-config = ["dep:hygiea-db", "hygiea-db/live-config"]
 # 连接池的分布式锁：PG 整数 key 用 advisory lock，字符串 key 哈希成 i64（可能碰撞）；
 # db-lock-row 让字符串 key 改用锁表（精确）。开不开它同一个 key 锁的是两样东西，所有实例要一致

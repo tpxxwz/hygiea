@@ -188,6 +188,36 @@ mod tests {
 
     use super::*;
 
+    /// 配置模板 `config/tonic.toml` 就是代码里的默认值：按配置结构体解析（deny_unknown_fields，写错、多写的项解析失败）。
+    /// TonicConfig 里有建 router 的函数，不实现 Debug，逐项比较
+    #[test]
+    fn template_is_code_defaults() {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Template {
+            grpc: TonicConfig,
+        }
+        let template: Template = toml::from_str(include_str!("../config/tonic.toml")).unwrap();
+        let default = TonicConfig::default();
+        assert_eq!(template.grpc.addr, default.addr);
+        assert_eq!(
+            template.grpc.shutdown_timeout_secs,
+            default.shutdown_timeout_secs
+        );
+    }
+
+    /// 不往 Resources 里放东西，也不依赖别的资源
+    #[test]
+    fn provides_and_depends_on_nothing() {
+        let config = TonicConfig {
+            serve_fn: Some(noop_serve_fn()),
+            ..Default::default()
+        };
+        let component = TonicComponent::build(hygiea_core::app::Name::from(""), config);
+        assert!(component.provides().is_empty());
+        assert!(component.depends_on().is_empty());
+    }
+
     fn noop_serve_fn() -> TonicServeFn {
         Box::new(|_resources: &ReadyResources| {
             Ok(Box::new(

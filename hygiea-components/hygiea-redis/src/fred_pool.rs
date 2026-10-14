@@ -266,6 +266,35 @@ fn build_connection_config(config: &RedisConfig) -> ConnectionConfig {
 mod tests {
     use super::*;
 
+    /// 配置模板 `config/redis.toml` 就是代码里的默认值：按配置结构体解析（deny_unknown_fields，写错、多写的项解析失败），
+    /// 结构体没有实现 PartialEq，比 Debug 输出。改了配置结构体，这个测试失败时同步改模板
+    #[test]
+    fn template_is_code_defaults() {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Template {
+            redis: RedisConfig,
+        }
+        let template: Template = toml::from_str(include_str!("../config/redis.toml")).unwrap();
+        assert_eq!(
+            format!("{:?}", template.redis),
+            format!("{:?}", RedisConfig::default())
+        );
+    }
+
+    /// 具名构造：provides 只有组件名下的 FredRedisPool
+    #[test]
+    fn provides_named_pool() {
+        use hygiea_core::app::{Component, Name, ResourceId};
+
+        let name = Name::from("cache");
+        let component = RedisComponent::build(name.clone(), RedisConfig::default());
+        assert_eq!(
+            component.provides(),
+            vec![ResourceId::named::<FredRedisPool>(name)]
+        );
+    }
+
     #[test]
     fn build_fred_config_standalone_mode() {
         let config = RedisConfig {

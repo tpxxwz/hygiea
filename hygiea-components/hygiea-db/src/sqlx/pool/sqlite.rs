@@ -11,7 +11,7 @@ use hygiea_core::{Result, ResultExt, err};
 use crate::config::{PoolConfig, SQLITE_POOL_SIZE, SqliteConnectConfig};
 #[cfg(feature = "live-config")]
 use crate::live_config::{
-    LiveConfigOptions, LiveConfigSource, Store, impl_live_config, live_config_source_for,
+    LiveConfigSource, SqliteLiveConfigConfig, Store, impl_live_config, live_config_source_for,
 };
 
 // ---- config -----------------------------------------------------------------
@@ -24,7 +24,7 @@ pub struct SqlxSqliteConfig {
     pub pool: PoolConfig,
     /// 动态配置另开一条连接，`:memory:` 库（不共享缓存时）连到的是另一个空库，用不了
     #[cfg(feature = "live-config")]
-    pub live_config: LiveConfigOptions,
+    pub live_config: SqliteLiveConfigConfig,
 }
 
 // ---- pool -------------------------------------------------------------------
@@ -53,7 +53,10 @@ impl ConfigResource for SqlxSqlitePool {
         let connect_options = config.connect.sqlx_options()?;
         #[cfg(feature = "live-config")]
         let live_config = live_config_source_for(
-            |tables| Ok(Store::sqlite(connect_options.clone(), &config.pool, tables)),
+            |tables| {
+                let connect = config.live_config.connect.merge(&config.connect);
+                Ok(Store::sqlite(connect.sqlx_options()?, &config.pool, tables))
+            },
             &config.live_config,
             registry_config,
         )?;
@@ -110,6 +113,35 @@ pub type SqlxSqliteComponent = ImmediateResourceComponent<SqlxSqlitePool>;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 配置模板 `config/sqlx-sqlite.toml` 就是代码里的默认值（结构体没有实现 PartialEq，比 Debug 输出）
+    #[cfg(feature = "live-config")]
+    #[test]
+    fn template_is_code_defaults() {
+        let config: SqlxSqliteConfig =
+            crate::config::parse_template(include_str!("../../../config/sqlx-sqlite.toml"));
+        assert_eq!(
+            format!("{config:?}"),
+            format!("{:?}", SqlxSqliteConfig::default())
+        );
+    }
+
+    /// 按组件名提供连接池，匿名的名字是 `""`
+    #[test]
+    fn provides_named_pool() {
+        use hygiea_core::app::{Component, Name, ResourceId};
+
+        let named = SqlxSqliteComponent::build(Name::from("primary"), SqlxSqliteConfig::default());
+        assert_eq!(
+            named.provides(),
+            vec![ResourceId::named::<SqlxSqlitePool>("primary")]
+        );
+        let anonymous = SqlxSqliteComponent::build(Name::from(""), SqlxSqliteConfig::default());
+        assert_eq!(
+            anonymous.provides(),
+            vec![ResourceId::of::<SqlxSqlitePool>()]
+        );
+    }
 
     fn memory(max_connections: u32) -> SqlxSqliteConfig {
         let mut config = SqlxSqliteConfig::default();

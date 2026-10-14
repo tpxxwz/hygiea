@@ -5,7 +5,7 @@
 # 段名 [http_client] 是应用配置结构体里这个字段的名字（`struct AppConfig { http_client: ReqwestConfig, .. }`），按自己的改。
 # 通用规则（写错的配置项启动报错、配置来源的覆盖顺序、环境变量写法）见 hygiea 的 README「配置」。
 #
-# 本文件由所在 crate 的 tests/config_template.rs 按 ReqwestConfig 解析校验，改了配置结构体要同步改这里。
+# 本文件由所在 crate 的 src/reqwest_client/client.rs 的单元测试（template_is_code_defaults） 按 ReqwestConfig 解析校验，改了配置结构体要同步改这里。
 
 [http_client]
 # ReqwestConfig 默认值；None 类型不写即为 None，需要时取消注释

@@ -1,7 +1,7 @@
 # 分布式锁待办
 
 现状见 `docs/design/lock.md`。字符串 key 的锁表（`lock-row`）已经改成事务里插入不提交的行、靠主键冲突互斥（UNLOGGED，
-表一直是空的）；阻塞版 `timeout` 必须是 1ms～`i32::MAX` ms 的整数毫秒，否则 `LockErr::InvalidTimeout`。
+没有已提交的行）；阻塞版 `timeout` 必须是 1ms～`i32::MAX` ms 的整数毫秒，否则 `LockErr::InvalidTimeout`。
 下面是讨论过、还没定或还没做的。
 
 ## 方法分组和命名（已定，没做）
@@ -16,8 +16,10 @@
 - 名字是"动作 + key 类型 + 等待方式"：`try_lock_for_i64` 会被读成"给 i64 用的"，所以不用 parking_lot 的 `for`；
   `lock_wait` 也不用（现有的带超时版本本来就会等）
 - 带 `try` 的可能拿不到，返回 `Option`；不带的一定拿到或出错
+- `t` 只限 PG 上等锁的时间（`lock_timeout`），不是整个调用的截止时间：取池连接、建连、锁表第一次 `ensure`、BEGIN 都可能先等，
+  `try_lock` 也不保证整个函数立即返回。文档写明；要做端到端截止时间得贯穿这几段，并先解决下面已知限制里的取消问题，不能只在外面套 `timeout`
 - 新 `lock` 的实现：
-  - PG：开事务后直接 `pg_advisory_xact_lock` / `INSERT`，**不发 `set_config`**（省一次往返），等待时间以库的配置为准，见下面的数据库要求
+  - PG：BEGIN 那条消息里 `lock_timeout = 0`（`sql::postgres::begin_sql(0)`），其余照旧，见调查记录（二）的结论
   - `TokioLock`：去掉外层 `tokio::time::timeout`，直接 `entry.lock_owned().await`；取消时 `Cleanup` 照常清理
   - trait 默认实现：不设截止时间，每隔最多 100ms 轮询 `try_lock`
 
@@ -84,9 +86,29 @@ sqlx 的错误能把"PG 服务端中断"和"连接问题"分开：
 
 ## 已知限制（要写进文档）
 
-- 调用方取消等待（外层 `timeout`、`select!`）：future 被 drop、sqlx 断开连接，但 PG 后端等锁时不检查客户端连接，会一直挂在锁队列里
-  占着一个服务端连接，拿到锁、回结果时才发现断了并回滚。带超时的版本最多挂 `t`，`lock` 可能一直挂。
-  PG 14+ 的 `client_connection_check_interval` 能让后端定期检查连接，能不能在事务里设、效果如何没测
+- 调用方取消等待（外层 `timeout`、`select!`、任务 abort）：sqlx **不断开连接，也不发 CancelRequest**。`Transaction::drop` 把 ROLLBACK
+  排进发送队列，`PoolConnection::drop` 在后台归还，归还时 `ping()` 要等原来那条加锁语句的响应。所以等锁的语句在 PG 上照常排队，
+  客户端池里这条连接也一直占着，直到拿到锁、回滚完才回到池里。带超时的版本最多占 `t`，`lock` 可能一直占。
+  实测（sqlx 0.9.0）：`max_connections = 1` 的池等别人持有的 advisory lock，100ms 后丢掉 future；再过 200ms 后端仍是 `active / Lock / advisory`，
+  池 `size = 1, num_idle = 0`，再 `acquire` 300ms 报 `PoolTimedOut`；持有者释放后才恢复。
+  `WaitInterrupted` 解决不了（没人接收结果）。
+  **已改（客户端这半）**：锁不再用 sqlx 的 `Transaction`，自己取连接（`LockTx`），没走到 ROLLBACK 就被丢掉时 `close_on_drop` 关掉连接，
+  池里马上空出位置（container 测试 `cancelled_wait_frees_pool_connection`，本机没 Docker 还没跑）。
+  服务端那半没解决：PG 后端等锁时不读客户端连接，照样挂在锁队列里占一个服务端连接，直到拿到锁才发现断了。
+  没定：要不要再发 CancelRequest（要和关连接同步，否则迟到的取消会打断复用这条连接的下一条查询；关连接后就不存在复用问题），
+  或者事务里 `SET LOCAL client_connection_check_interval`：现在客户端真的关了 TCP，它就能起作用了（直连时；经 PgBouncer 时后端的对端是
+  PgBouncer，不起作用）。实测直接杀掉客户端进程时，设 50ms 约 61ms 后端退出，设 0 时 820ms 后还在等。
+  这个参数只在支持的操作系统上能设成非 0（Linux、macOS、BSD 等，PG 文档），其他平台上 `SET` 会报错、整个 BEGIN 失败，所以先没加
+- 连接预算要算上等锁的：每把 PG 锁各开一个事务，持有的和正在等的都占连接。拿着锁再用同一个池做业务查询，池小时会等自己占着的连接；
+  两个任务分别持有 A、B 再互相等 B、A 时，持有的事务在 PG 上是 idle、等的在另一条连接上，PG 的死锁检测看不到 Rust 任务之间的依赖。
+  带超时的会报错退出，`lock` 会永远卡住。不可重入（自己持有再阻塞拿同一个 key 也是自等）。文档写明：多把锁约定全局获取顺序、按等待者算连接预算；
+  单独锁池只能防止业务池被锁占满，锁池自己照样会耗尽、照样有顺序环（结构分析，没复现）
+- 连接失效时锁会放掉，但持有 `LockGuard` 的业务不会停：四个超时设 0 只防这几个参数主动杀事务，挡不住 `pg_terminate_backend`、网络断开、重启、
+  主库切换。这时另一个实例能拿到锁，两边同时执行；`release()` 报错只能说明释放没确认，撤销不了之前的副作用，加"是否还持有"的查询也有检查之后的窗口。
+  框架只保证连接正常时互斥；不可重复的写入要靠业务幂等、条件更新或 fencing token（现在的接口不提供 token）
+- lock-row 的表没有已提交行，但回滚留下死元组和死索引项，文件照样长，靠 vacuum 回收（UNLOGGED 只省 WAL，不省 vacuum）。
+  实测关掉 autovacuum 回滚 2000 次：0 行、204800 字节，VACUUM 后 122880 字节（普通 VACUUM 只把空间变成可复用，不保证缩回）。
+  回收跟不上（长持锁卡住清理边界、高频加锁）时会膨胀，见调查记录（四）
 - `try_lock`（lock-row）没拿到时 PG 服务端日志记一条 `ERROR: canceling statement due to lock timeout`，
   默认 `log_min_error_statement` 还带上语句；这两个日志参数要超级用户才能改
 - 不保证先来先得：多个人在等时谁先拿到不确定（PG、哈希降级都是；`TokioLock` 是先到先得）
@@ -110,7 +132,7 @@ sqlx 的错误能把"PG 服务端中断"和"连接问题"分开：
   - 行先提交、再 `FOR UPDATE`：每次加锁一条行锁记录（只改元组头），不留死元组；行数 = 用过的不同 key 数，按订单号这类 key 加锁时一直涨
   - 事务内 INSERT、回滚撤销（现在的写法）：普通表每次加锁写堆元组插入 + 主键索引插入 + abort 记录，留一个死元组和死索引项给 vacuum；
     表不增长。建成 UNLOGGED 后堆和索引的插入不写 WAL，只剩事务的 abort 记录
-  - 选现在的写法是为了表不随 key 的个数增长，不是为了写得少
+  - 选现在的写法是为了已提交的行数不随 key 的个数增长，不是为了写得少；物理文件仍会因死元组增长，见已知限制
 
 ## 调查记录（二）：怎么让锁事务里的超时参数是 0
 
@@ -172,14 +194,19 @@ sqlx 0.9 的 `pool.begin_with(sql)` 用简单查询协议发自定义 BEGIN（�
 | 一条消息 `BEGIN` + 四个 `SET LOCAL .. = 0` | 四个都是 0，回滚后恢复原值 |
 | 经 PgBouncer：角色上 lock 3s / statement 5s / idle 2s / transaction 4s，一条消息 BEGIN + 四个 SET LOCAL | 0 / 0 / 0 / 0；之后空闲 3s 再跑 6s 的语句，事务还在；下一个客户端（同一条服务端连接）看到的是角色原值，没泄漏 |
 
-结论（候选，没定）：锁的事务一律 `begin_with("BEGIN; SET LOCAL lock_timeout = ..; SET LOCAL statement_timeout = 0; SET LOCAL idle_in_transaction_session_timeout = 0; [SET LOCAL transaction_timeout = 0]")`：
+结论（**已实现**，`hygiea-db/src/sql/postgres/mod.rs` 的 `begin_sql`；锁和两个建表事务都用，另加了 `ISOLATION LEVEL READ COMMITTED`）：锁的事务一律 `begin_with("BEGIN; SET LOCAL lock_timeout = ..; SET LOCAL statement_timeout = 0; SET LOCAL idle_in_transaction_session_timeout = 0; [SET LOCAL transaction_timeout = 0]")`：
 
 - 直连、PgBouncer 都是同一套，不用检测；不用单独锁池、不用单独用户、不用 DBA 改配置、不用启动校验
 - 往返不增加：`try_lock_*_timeout` 从三次（BEGIN、set_config、加锁）变两次；`lock` 两次，和"不发 SET"一样
 - 只在锁事务里是 0，业务查询保留 DBA 的保护；持有期间被 `idle_in_transaction_session_timeout` 悄悄释放的问题也一起解决
 - 值是框架自己拼的整数，拼进 SQL 安全（`AssertSqlSafe`）
-- `transaction_timeout` 是 PG 17 加的，16 及以下 `SET LOCAL` 它报未知参数、整个 BEGIN 失败：启动时查一次 `server_version_num` 决定带不带
-- 没验证：AWS RDS Proxy 遇到 `SET` 会 pinning，`SET LOCAL` 会不会触发
+- 只支持最新的 PG，`transaction_timeout` 直接带上，不查版本、不做低版本兼容
+- **中途出错要处理连接**：BEGIN 成功、后面的 `SET LOCAL` 报错时，sqlx 0.9.0 的自定义 BEGIN 要全部响应成功才加 `transaction_depth`，
+  回滚保护 `start_rollback` 只在 depth > 0 时入队 ROLLBACK，于是这条连接带着失败的事务回到池里。实测单连接池
+  `begin_with("BEGIN; SET LOCAL hygiea_nonexistent_parameter = 0")` 报未知参数后，下一条 `SELECT 1` 得到 `25P02: current transaction is aborted`。
+  采用这个方案时，`begin_with` 出错要显式回滚或关掉这条连接，并补回归测试。
+  网络错误、取消是否同样留下 25P02 没测
+- 没验证：AWS RDS Proxy 遇到 `SET` 会 pinning，`SET LOCAL` 会不会触发（没有 AWS 实例，PgBouncer 的结果不能代替）
 - 推翻了上面的"`lock` 不发 `set_config`、靠库里是 0"和"启动时校验四个参数"；单独锁池只剩"持有占连接、别和业务抢"这一个理由。
   经 PgBouncer 时客户端分两个池，在 PgBouncer 那边仍是同一个用户 + 库的池，要服务端也隔离只能另建用户
 
@@ -214,7 +241,7 @@ sqlx 0.9 的 `pool.begin_with(sql)` 用简单查询协议发自定义 BEGIN（�
 
 代码上的相关事实：
 
-- 动态配置的 NOTIFY 频道是 `{p}config`（带前缀）。收到通知只看载荷里的版本号是否比当前大，大了就重新读**自己的表**、用表里读出的版本号，
+- 动态配置的 NOTIFY 频道是 `{p}config`（带前缀）（已改：现在是 `<schema>.{p}config`，见下面"已实现"）。收到通知只看载荷里的版本号是否比当前大，大了就重新读**自己的表**、用表里读出的版本号，
   所以串到别人的通知只是多读一次，不会读错（`live_config/worker.rs` 的 `Signal::Changed` 和 `update`）
 - 建表串行化的 advisory lock 是 `(999999999, LiveConfigDdl / LockTableDdl)`，所有应用共用，只是互相排队建表，没问题
 - 整数 key（`try_lock_i64(42)`、`try_lock_i32(类型, id)`）和没开 `lock-row` 的哈希字符串 key 都是 advisory lock，**不带 app_name**；
@@ -227,7 +254,7 @@ sqlx 0.9 的 `pool.begin_with(sql)` 用简单查询协议发自定义 BEGIN（�
 |---|---|---|---|
 | 表（锁表、配置表） | 靠 `app_name` 区分，`app_name` 要在所有项目、所有环境里唯一，撞了就悄悄共用锁和配置 | 按 schema 区分，`app_name` 可以重复 | 按库区分 |
 | advisory lock（整数 key、哈希 key） | 整个库共用，不同应用的同一个数互斥 | 同左 | 隔离 |
-| NOTIFY | 按前缀区分 | `app_name` 重复时串（只多读一次） | 隔离 |
+| NOTIFY | 按前缀区分 | `app_name` 重复时串（只多读一次）；已改成 channel 带 schema 名，不再串 | 隔离 |
 | 权限 | 每应用一个用户时表互相碰不到；一个用户就完全不隔离。advisory lock 都不隔离 | 按 schema 授权，干净 | 按库授权 |
 | 表结构检查 | 每应用一个用户时 `information_schema` 看不到别人的表，名字撞了会去建表报已存在（改查 `pg_class` 能看到） | 只看自己 schema | 只看自己库 |
 | 库级参数（`ALTER DATABASE coord SET ..`） | 所有应用共用 | 共用；按角色 `ALTER ROLE .. IN DATABASE` 可以分 | 每个库自己设 |
@@ -258,6 +285,13 @@ sqlx 0.9 的 `pool.begin_with(sql)` 用简单查询协议发自定义 BEGIN（�
 ### 没定
 
 1. 要不要支持单独的协调库；支持的话配置怎么写：比如单独一段连接配置（`[coord]`）给锁和动态配置用，不配退回业务池（L0）
+   - **已实现**（不用 `[coord]`）：锁和动态配置各自一段 `connect`（`[db.lock.connect]`、`[db.live_config.connect]`，类型
+     `PgConnectOverride`），每项可选，逐项盖到 `[db.connect]` 上，什么都不写就是 L0。动态配置本来就是独立小池（1 条，参数固定）；
+     锁写了 `connect` 或 `max_connections` 就单独建池（只开放 `max_connections`，其余固定）
+   - 表名前缀各段自己配：`table_prefix`，不写用 `app_name`，`""` 不加前缀，`foo` / `foo_` 都是 `foo_`。L1 下 `app_name` 撞了可以用它分开，
+     有意共用一套表就配成一样
+   - 动态配置的 NOTIFY channel 改成 `<schema>.{p}config`（建表时写进函数，超过 63 字节拒绝启动；已有函数的 channel 对不上也拒绝启动）
+   - advisory lock 的整数 key 仍是库级共享，按第 4 条处理，不改
 2. 布局推荐哪个：L1 最省事但 `app_name` 要全局唯一、advisory 不隔离；L2 隔离表和权限、advisory 仍不隔离；L3 全隔离、运维最多
 3. 共用协调库时整数 key 不隔离怎么办：文档要求不同部署用不同的 `err_code_project_prefix` / 约定整数 key 的范围；
    或者共用协调库时整数 key 也转成字符串 key 走锁表（按应用的表区分），放弃原生 advisory
@@ -282,11 +316,11 @@ sqlx 0.9 的 `pool.begin_with(sql)` 用简单查询协议发自定义 BEGIN（�
    | 能力 | `none`：直连（或 session 模式） | `transaction`：transaction 模式的连接池 |
    |---|---|---|
    | 锁事务里的超时参数 | 两种都行：锁专用池用启动参数（每个事务不用带）；或 `begin_with` 里 `SET LOCAL` | 只能 `begin_with` 里 `SET LOCAL`（启动参数被拒或被悄悄丢掉） |
-   | 锁的级别 | 可以用**会话级** advisory lock（`pg_advisory_lock` / `pg_advisory_unlock`）：持锁时不开事务，不受 `idle_in_transaction_session_timeout` / `transaction_timeout` 影响，不挡 vacuum（见调查记录四）。要处理：guard 持有连接，释放时执行 unlock 再还回池；不在运行时里 drop 时没法异步 unlock，只能把连接关掉（断开即释放）；等锁的超时还是要设 | 只能**事务级**：会话级的锁拿在服务端连接上，事务结束这条连接就给了别的客户端，之后 unlock 会在另一条服务端连接上执行、失败，锁留在别人的会话里 |
+   | 锁的级别 | 可以用**会话级** advisory lock（`pg_advisory_lock` / `pg_advisory_unlock`）：持锁时不开事务，不受 `idle_in_transaction_session_timeout` / `transaction_timeout` 影响，不挡 vacuum（见调查记录四）。要处理：guard 持有连接，释放时执行 unlock 再还回池；不在运行时里 drop 时没法异步 unlock，只能把连接关掉（断开即释放）；等锁的超时还是要设。另外：持锁时连接是 idle，`idle_session_timeout` 非 0（或代理回收空闲连接）会断开并悄悄放锁，要一起设 0；同一会话重复加锁有计数，unlock 要配对；取消落在"服务端已拿到、客户端没收到响应"时没有事务回滚兜底，连接不能直接还回池，要确认 unlock 或关掉连接 | 只能**事务级**：会话级的锁拿在服务端连接上，事务结束这条连接就给了别的客户端，之后 unlock 会在另一条服务端连接上执行、失败，锁留在别人的会话里 |
    | 字符串 key 的精确锁 | lock-row（有 xid，持锁期间挡住同库 vacuum）；或者会话级 advisory + 哈希（有损） | lock-row |
    | `search_path`（框架表放在哪） | 启动参数（现状） | PgBouncer 要配 `track_extra_parameters` 带 `search_path`；或者框架的表名直接带 schema 限定，不依赖 `search_path` |
    | 动态配置的 `LISTEN` | 正常 | 用不了（会话级）：给 listener 单独配一个直连地址，或者只轮询并缩短间隔 |
-   | sqlx 的预编译语句（按连接缓存命名语句） | 正常 | PgBouncer 1.21 起支持（`max_prepared_statements`），更老的要关掉 sqlx 的语句缓存（`statement_cache_capacity(0)`）。**没测** |
+   | sqlx 的预编译语句（按连接缓存命名语句） | 正常 | PgBouncer 1.21 起支持（`max_prepared_statements`），更老的要关掉 sqlx 的语句缓存（`statement_cache_capacity(0)`）。PgBouncer 1.24.1 + `max_prepared_statements = 10` 用 psycopg 3.2.12 测过：客户端切到另一条服务端连接后缓存的命名语句仍能执行；**sqlx 没测** |
    | 配置写错了 | 实际有连接池却写 `none`：启动参数被拒（启动报错，显眼）或被悄悄丢掉（启动时查 `current_setting` 能发现，可以据此拒绝启动） | 实际直连却写 `transaction`：都能用，只是做法保守 |
 
 ## 调查记录（四）：持锁的事务挡不挡 vacuum
@@ -302,9 +336,14 @@ sqlx 0.9 的 `pool.begin_with(sql)` 用简单查询协议发自定义 BEGIN（�
 | lock-row（`BEGIN; INSERT .. ` 不提交） | idle in transaction，**有 xid** | **0 removed，1000 are dead but not yet removable** |
 | lock-row 放在另一个库（同一个集群） | idle in transaction，有 xid | 1000 removed |
 | 会话级 advisory（`SELECT pg_advisory_lock(1)`，不开事务） | idle，没有 xid | 1000 removed |
+| 已提交行上 `SELECT .. FOR UPDATE` | idle in transaction，有 xid | 0 removed |
+| REPEATABLE READ 的事务级 advisory | idle in transaction，没有 xid，**有 xmin** | 0 removed |
 
 - lock-row 持锁期间事务分到了 xid，整个库的 vacuum 清理边界被它卡住：持锁越久，这个库里**所有表**的死元组越清不掉、越膨胀。
   advisory lock 不分配 xid，READ COMMITTED 下语句结束快照就释放了，不挡
-- 原来"行先提交、再 `FOR UPDATE`"的写法同样有这个问题：行锁要在元组上记锁持有者的 xid，也会分配 xid（按 PG 的实现推断，**没实测**）
-- vacuum 的清理边界只看同一个库里的事务（普通表），所以锁表放在单独的库（协调库）就不影响业务库，见调查记录三
+- 原来"行先提交、再 `FOR UPDATE`"的写法同样有这个问题（实测，见表）：行锁要在元组上记锁持有者的 xid
+- advisory 不挡是有前提的：锁事务用 READ COMMITTED、只用来加锁。REPEATABLE READ / SERIALIZABLE 的快照留着 xmin，事务里做别的操作分到 xid，都会挡。
+  实现时锁事务固定隔离级别（不跟着库的 `default_transaction_isolation` 走）
+- vacuum 的清理边界只看同一个库里的事务（普通表；`ComputeXidHorizons` 对共享系统表另算一个全集群的边界），所以锁表放在单独的库（协调库）就不影响业务库，
+  见调查记录三。但协调库内部照样受影响：长持锁的 lock-row 会挡住同库的锁表、配置表、历史表的清理
 - 对设计的影响：业务库上用 lock-row 时，持锁时间要短，或者文档写明这个代价；持锁久的场景，用单独的协调库，或者用 advisory lock（整数 key、哈希降级）

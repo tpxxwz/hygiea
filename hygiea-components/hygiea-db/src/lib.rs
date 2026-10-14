@@ -1,13 +1,16 @@
 //! hygiea 的数据库组件：连接池，放进 Resources 给其他组件和业务用。
 //!
-//! 用 feature 选框架和数据库，两个维度分开开，同时打开的组合才会编译：
+//! 用 feature 选框架、数据库和功能，三个维度分开开、只增加功能，同时打开的组合才会编译
+//! （组合条件集中在 `build.rs` 的 cfg 别名里）：
 //!
 //! | feature | 组件 | 连接池（资源类型） |
 //! |---|---|---|
 //! | `sqlx` + `postgres` | [`SqlxPgComponent`] | [`SqlxPgPool`] |
 //! | `sqlx` + `sqlite` | [`SqlxSqliteComponent`] | [`SqlxSqlitePool`] |
 //! | `seaorm` + `postgres` | [`SeaOrmPgComponent`] | [`SeaOrmPgPool`] |
-//! | `mysql` | 预留，还没有实现 | |
+//!
+//! 功能 `live-config`、`lock` / `lock-row` 的 feature 不绑定驱动，实现按驱动各写一份。现在只有 sqlx 的实现
+//! （sqlx、SeaORM 的连接池共用）。加别的框架、数据库照 research/db-drivers 分支的写法。
 //!
 //! 连接池的配置分段：`[db.connect]` 连哪个库（[`PgConnectConfig`] / [`SqliteConnectConfig`]），`[db.pool]` 池的参数
 //! （[`PoolConfig`]，各数据库、框架共用），SeaORM 另有 `[db.log]`。PG 连接的 `application_name` 用 `[registry] app_name`
@@ -85,22 +88,19 @@
 mod config;
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]
 mod datetime;
-#[cfg(any(
-    feature = "live-config",
-    all(feature = "lock-row", feature = "postgres")
-))]
-mod ddl;
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]
 mod error;
-#[cfg(all(feature = "live-config", any(feature = "postgres", feature = "sqlite")))]
+#[cfg(live_config_any)]
 pub mod live_config;
-#[cfg(all(feature = "lock", feature = "postgres"))]
+#[cfg(lock_any)]
 pub mod lock;
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]
 mod page;
 #[cfg(feature = "seaorm")]
 pub mod seaorm;
-#[cfg(feature = "sqlx")]
+#[cfg(any(live_config_any, lock_any))]
+mod sql;
+#[cfg(any(feature = "sqlx", sqlx_live_config, sqlx_lock_pg))]
 pub mod sqlx;
 
 #[cfg(all(feature = "sqlx", feature = "postgres"))]
@@ -109,16 +109,26 @@ pub use self::sqlx::pool::postgres::*;
 pub use self::sqlx::pool::sqlite::*;
 #[cfg(all(any(feature = "sqlx", feature = "seaorm"), feature = "postgres"))]
 pub use config::PgConnectConfig;
+#[cfg(any(live_config_pg, lock_pg))]
+pub use config::PgConnectOverride;
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]
 pub use config::PoolConfig;
 #[cfg(all(feature = "sqlx", feature = "sqlite"))]
 pub use config::SqliteConnectConfig;
+#[cfg(live_config_sqlite)]
+pub use config::SqliteConnectOverride;
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]
 pub use datetime::HyUtcDateTime;
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]
 pub use error::RepoErr;
-#[cfg(all(feature = "live-config", any(feature = "postgres", feature = "sqlite")))]
-pub use live_config::{LiveConfig, LiveConfigOptions, LiveRef, LiveView};
+#[cfg(live_config_pg)]
+pub use live_config::PgLiveConfigConfig;
+#[cfg(live_config_sqlite)]
+pub use live_config::SqliteLiveConfigConfig;
+#[cfg(live_config_any)]
+pub use live_config::{LiveConfig, LiveConfigConfig, LiveRef, LiveView};
+#[cfg(lock_pg)]
+pub use lock::LockConfig;
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]
 pub use page::{Page, PageRequest};
 #[cfg(all(feature = "seaorm", feature = "postgres"))]

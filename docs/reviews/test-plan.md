@@ -189,12 +189,12 @@
   - 默认值（30 / 600，lazy = false）；
   - `connect_lazy = true` 时连一个不存在的主机也能成功（不需要真实服务）。
 - **单元（`sqlx_sqlite.rs`）**：`params = "?a=b"` 时去掉开头的 `?`；文件路径转换成 url。
-- **集成（`tests/sqlite_component.rs`，用内存库）**
+- **集成（`tests/sqlx_sqlite.rs`，用内存库）**
   - `provides` 返回的 ResourceId 带组件名；
   - startup 之后能用 `get_named` 取到连接池；
   - stop 之后连接池已关闭；stop 调用两次不报错；
   - 通过 Registry 注册 primary 和 replica 两个实例。
-- **集成（`tests/pg.rs`，标 ignore）**：sqlx 和 seaorm 两种连接池的 connect、search_path 生效、stop。
+- **集成（`tests/sqlx_postgres.rs`、`tests/seaorm_postgres.rs`，container 层）**：sqlx 和 seaorm 两种连接池的 connect、search_path 生效、stop；锁、动态配置（含单独连库、表名前缀、带 schema 的 channel）。
 
 ### hygiea-redis
 

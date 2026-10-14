@@ -49,10 +49,5 @@ name = "reqwest_client"
 path = "tests/reqwest_client/main.rs"
 required-features = ["reqwest"]
 
-[[test]]
-name = "component"
-path = "tests/component.rs"
-required-features = ["reqwest"]
-
 [package.metadata.docs.rs]
 all-features = true

@@ -82,7 +82,7 @@ pub enum RepoErr {
     LiveConfigDisabled,
 
     // ---- 3x 分布式锁：锁表的建表检查。加锁、释放失败用 hygiea-core 的 LockErr ----
-    /// 锁表（`{app_name}_lock`）建不了，多半是没有 DDL 权限；要手动执行的 DDL 打在日志里
+    /// 锁表（`{p}lock`，前缀默认是应用名加 `_`）建不了，多半是没有 DDL 权限；要手动执行的 DDL 打在日志里
     #[error(err_code = "31", err_tpl = "Db lock table create failed: {{ table }}")]
     LockTableCreateFailed,
     /// 库里已有同名的锁表，但列和代码对不上：不动它，拒绝启动；哪里不对和 DDL 打在日志里

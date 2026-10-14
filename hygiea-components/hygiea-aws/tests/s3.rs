@@ -1,4 +1,11 @@
-//! S3 客户端连真实服务读写对象，分两层（见仓库根目录 AGENTS.md 的测试分层）：
+//! `AwsS3Client` / `AwsS3Component`（`src/s3.rs`）的集成测试：
+//!
+//! - 经 Registry 启动（`registry` 模块）：不连网络，默认的 `cargo test` 就跑
+//!   ```sh
+//!   cargo test -p hygiea-aws --features s3 --test s3
+//!   ```
+//!
+//! 连真实服务读写对象分两层（见仓库根目录 AGENTS.md 的测试分层）：
 //!
 //! - `#[container]`：用代码启动 RustFS 容器，需要 Docker（Podman 把 `DOCKER_HOST` 指向它的兼容 socket）
 //!   ```sh
@@ -166,5 +173,70 @@ mod own_bucket {
             .await
             .unwrap();
         put_get_delete(&client, &env("S3_BUCKET")).await;
+    }
+}
+
+/// 经 Registry 启动：按组件名提供 `AwsS3Client`，不连网络
+mod registry {
+    use hygiea_aws::{AwsConfig, AwsS3Client, AwsS3Component};
+    use hygiea_core::app::{Registry, Resources};
+
+    fn config(region: &str) -> AwsConfig {
+        AwsConfig {
+            region: Some(region.into()),
+            ..AwsConfig::default()
+        }
+    }
+
+    /// 启动 registry，把 `Resources` 交给 `check`，拿回它的结果。
+    /// 启动成功后 `run` 会一直等退出信号，所以放到后台任务里，拿到结果就 abort
+    async fn with_resources<T: Send + 'static>(
+        registry: Registry,
+        check: impl FnOnce(Resources) -> T + Send + 'static,
+    ) -> T {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _ = registry
+                .on_ready(move |resources| async move {
+                    let _ = tx.send(check(resources));
+                    Ok(())
+                })
+                .run()
+                .await;
+        });
+        let result = rx.await.unwrap();
+        task.abort();
+        result
+    }
+
+    /// 匿名添加：`get::<..>()` 就能取到
+    #[tokio::test]
+    async fn anonymous_component_provides_client() {
+        let registry = Registry::new().add::<AwsS3Component>(config("us-east-1"));
+        let found = with_resources(registry, |res| res.get::<AwsS3Client>().is_some()).await;
+        assert!(found);
+    }
+
+    /// 多个实例各用各的配置，按组件名区分
+    #[tokio::test]
+    async fn each_named_instance_uses_its_own_config() {
+        let registry = Registry::new()
+            .add_named::<AwsS3Component>("aws", config("us-east-1"))
+            .add_named::<AwsS3Component>("r2", config("auto"));
+        let (aws, r2, anonymous) = with_resources(registry, |res| {
+            let region = |name: &str| {
+                res.get_named::<AwsS3Client>(name)
+                    .and_then(|c| c.config().region().map(|r| r.to_string()))
+            };
+            (
+                region("aws"),
+                region("r2"),
+                res.get::<AwsS3Client>().is_some(),
+            )
+        })
+        .await;
+        assert_eq!(aws.as_deref(), Some("us-east-1"));
+        assert_eq!(r2.as_deref(), Some("auto"));
+        assert!(!anonymous);
     }
 }

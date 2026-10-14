@@ -6,7 +6,7 @@
 代码在 `hygiea-components/hygiea-db/src/live_config/`，跑起来看效果：
 `cargo run -p hygiea-examples --example db_live_config`。
 
-下面的例子里应用名是 `dict_jp`，所以表名是 `dict_jp_config` 这一套。
+下面的例子里应用名是 `dict_jp`、没配 `table_prefix`，所以表名是 `dict_jp_config` 这一套，schema 是 `dict_jp`。
 
 ---
 
@@ -20,14 +20,26 @@ host = ".."
 schema_search_path = "dict_jp"   # 表建在 search_path 的第一个 schema 里
 
 [registry]
-app_name = "dict_jp"             # 应用名（小写下划线），也是表名前缀：dict_jp_config、dict_jp_config_revision、dict_jp_config_history
+app_name = "dict_jp"             # 应用名（小写下划线），不写 table_prefix 时也是表名前缀：dict_jp_config、dict_jp_config_revision、dict_jp_config_history
 
 [db.live_config]
 enabled = true                   # 默认不开，要用的连接池才写
 # poll_interval_secs = 60        # 不写：PG 60 秒（兜底），SQLite 1 秒（主要靠它）
 # history_keep_rows = 10000      # 变更历史只留最新的多少行、隔多少分钟清一次（启动时先清一次）；
 # history_trim_interval_mins = 60 # 两项要么都写要么都不写，都不写不删
+# table_prefix = "foo"           # 表名前缀：不写用应用名；"foo" 或 "foo_" 都是 foo_config；"" 不加前缀（config）
+
+[db.live_config.connect]         # 单独连的库：只写和 [db.connect] 不一样的项，不写的沿用（整段不写就是连接池那个库）
+# username = "app_config"
+# password = ".."
+# schema_search_path = "config"
 ```
+
+- **表名前缀**：`table_prefix` 比应用名优先。几个应用要共用一套表，就把前缀、库、schema 配成一样；
+  共用时同一个 namespace 的结构要兼容（升级时新旧版本都能读），默认值先启动的那个写进表，历史保留按配得最少的那个删
+- **单独连库**：`[db.live_config.connect]` 逐项盖到 `[db.connect]` 上（SQLite 是换库文件等），live config 本来就走自己的
+  独立小池，换的只是它的连接参数。比如配置放在单独的 schema、用只有这几张表权限的用户
+- **PgBouncer**：transaction 模式下不能 `LISTEN`，连接池走 PgBouncer 时，用 `connect` 把 live config 指到直连地址
 
 ### 代码
 
@@ -128,11 +140,14 @@ flowchart LR
 
 | 文件 | 负责 | 跟框架有关吗 |
 |---|---|---|
-| `mod.rs` | 对外：`LiveConfigOptions`、`LiveConfig<T>`、连接池上的两个方法（宏生成）；bind 入口；默认值 + 表里的值合并成 struct | 无关 |
+| `mod.rs` | 对外：`LiveConfigConfig`、`LiveConfig<T>`、连接池上的两个方法（宏生成）；bind 入口；默认值 + 表里的值合并成 struct | 无关 |
 | `worker.rs` | 后台任务：处理 bind、收通知、轮询、比版本号、重新加载、出错重建 | 无关 |
-| `store.rs` | 独立小池和在上面做的事：建连接、加载、查版本号、补默认值、收通知 | sqlx |
-| `schema.rs` | 表名、期望的列、DDL，第一次 bind 时检查和建表 | sqlx |
-| `sql/*.sql` | PG、SQLite 的建表和触发器 | 各框架通用 |
+| `schema.rs` | 表名、第一次 bind 时的检查规则、各库语句的集合 `Sql` | 无关 |
+| `src/sql/<数据库>/live_config.rs` | 期望的列、函数和触发器名、加载 / 查版本号 / 补默认值 / 清历史的语句，通知 payload 的格式 | 无关 |
+| `store.rs` | `Store`：worker 和驱动之间的接口，按驱动分发 | 无关 |
+| `sqlx/mod.rs` | `SqlxStore`：按数据库分发、转错误，独立小池的固定参数 | sqlx |
+| `sqlx/{postgres,sqlite}.rs` | 各数据库在小池上做的事：建连接、加载、查版本号、补默认值、收通知（只有 PG），以及第一次 bind 时检查和建表 | sqlx |
+| `src/sql/<数据库>/live_config.sql` | PG、SQLite 的建表和触发器 | 无关 |
 
 ---
 
@@ -144,9 +159,9 @@ flowchart LR
 flowchart TD
     A["连接池 from_config"] --> B{"live_config.enabled?"}
     B -- 否 --> C["live_config = None<br/>调用 live_config() 报 LiveConfigDisabled"]
-    B -- 是 --> D["表名前缀 = 应用名 + _<br/>校验 poll_interval_secs > 0"]
+    B -- 是 --> D["表名前缀 = table_prefix（不写用应用名）<br/>校验前缀、poll_interval_secs > 0"]
     D -- 不合法 --> E["from_config 报错，启动失败"]
-    D -- 合法 --> F["建 Store：独立小池（lazy，不连库）<br/>拼好 SQL"]
+    D -- 合法 --> F["建 Store：独立小池（lazy，不连库）<br/>连接参数 = [db.live_config.connect] 盖到 [db.connect] 上<br/>拼好 SQL"]
     F --> G["LiveConfigSource 先保管着 Store"]
 ```
 
@@ -167,10 +182,12 @@ sequenceDiagram
     Note over Src: 第一次 bind 才做下面这段（只做一次）
     Src->>St: open(检查表)
     St->>DB: 小池第一次连上（PG 建 PgListener）
+    St->>DB: PG：查 current_schema()，channel = <schema>.<配置表名><br/>（超过 63 字节拒绝启动）
     St->>DB: 查 current_schema 里三张表的列、函数、触发器
     alt 一个都没有
-        St->>DB: 加锁（PG advisory lock (builtin::LOCK_TYPE, Lock::LiveConfigDdl) / SQLite BEGIN IMMEDIATE）<br/>再查一遍，还是没有就执行 sql/*.sql
+        St->>DB: 加锁（PG advisory lock (builtin::LOCK_TYPE, Lock::LiveConfigDdl) / SQLite BEGIN IMMEDIATE）<br/>再查一遍，还是没有就执行 live_config.sql
     else 都在且列一致
+        St->>DB: PG：再看 config_record 函数通知的 channel<br/>对不上（旧版建的、schema 改过名）也报 LiveConfigSchemaMismatch
         Note over St: 直接用
     else 只有一部分 / 列对不上
         St-->>App: LiveConfigSchemaMismatch（日志里有哪里不对和 DDL）
@@ -214,7 +231,7 @@ flowchart TD
     REC["dict_jp_config_record()"] --> V["dict_jp_config_revision 这一行 revision + 1<br/>（行锁：同 namespace 并发改，版本号按提交顺序递增）"]
     V --> H["dict_jp_config_history 追加一行<br/>旧值、新值、revision、时间、账号"]
     H --> P{"PG?"}
-    P -- 是 --> NT["pg_notify('dict_jp_config', 'markji_sync:4')<br/>事务提交后才真正发出，回滚不发"]
+    P -- 是 --> NT["pg_notify('dict_jp.dict_jp_config', 'markji_sync:4')<br/>channel 带 schema 名，建表时写进函数<br/>事务提交后才真正发出，回滚不发"]
     P -- SQLite --> X["没有通知，等程序轮询"]
 ```
 
@@ -316,7 +333,10 @@ sequenceDiagram
 
 ## 9. 几个规则一句话总结
 
-- **一个连接池最多一条连接给 live config**：PG 是 listener 占着，SQLite 是轮询用；不占主池的名额，第一次 bind 才连
+- **一个连接池最多一条连接给 live config**：PG 是 listener 占着，SQLite 是轮询用；不占主池的名额，第一次 bind 才连。
+  池参数固定，连接参数可以用 `[db.live_config.connect]` 逐项换
+- **表名、channel**：表名前缀默认是应用名，`table_prefix` 可以改、可以不加；PG 的 channel 是 `<schema>.<配置表名>`，
+  不同 schema 里同名的表互不收到对方的通知
 - **表结构**：要么全对上直接用，要么一个都没有全建，有一个对不上就报错不启动；以后改结构手动执行 DDL
 - **默认值**：表里没有的 key 才写进去，表里有的永远以表为准
 - **版本号**：每个 namespace 一个，增删改都 +1，程序只接受更大的

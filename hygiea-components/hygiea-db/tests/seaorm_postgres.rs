@@ -1,30 +1,54 @@
-//! PostgreSQL 连接池集成测试（sqlx 和 seaorm），container 层（见仓库根目录 AGENTS.md 的测试分层）：
+//! `SeaOrmPgPool`（`src/seaorm/pool/postgres.rs`，feature `seaorm` + `postgres`）的集成测试，feature 全开（`lock-row`、`live-config`），container 层：
 //! 用代码启动官方 postgres 容器，需要 Docker（Podman 把 `DOCKER_HOST` 指向它的兼容 socket）
 //! ```sh
-//! cargo test -p hygiea-db --all-features --test pg -- --ignored ::container::
+//! cargo test -p hygiea-db --features seaorm,postgres,lock-row,live-config --test seaorm_postgres -- --ignored ::container::
 //! ```
+//! 锁、动态配置和 `SqlxPgPool` 是同一份实现，完整的测试在 `sqlx_postgres.rs`；这里确认 SeaORM 的连接池接上了
 
-#![cfg(all(feature = "sqlx", feature = "seaorm", feature = "postgres"))]
+#![cfg(all(
+    feature = "seaorm",
+    feature = "postgres",
+    feature = "lock-row",
+    feature = "live-config"
+))]
 
+mod common;
+
+use common::eventually;
+use hygiea_core::lock::{hy_lock_key, lock_key};
 use hygiea_test::container;
+use serde::{Deserialize, Serialize};
 
-/// 用代码启动的官方 postgres 镜像
+#[derive(hy_lock_key)]
+#[lock_internal_module_prefix = "100"]
+enum TestLockKey {
+    #[lock_key(code = "002", tpl = "job:{{ id }}")]
+    Job,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+struct Cache {
+    ttl_secs: u64,
+}
+
+/// 连接池本身：连接、search_path、经 Registry 启动和停止、HyUtcDateTime、事务、`db!`、分页
 #[container]
-mod postgres {
+mod pool {
     use hygiea_core::app::{ConfigResource, Registry, Resources};
     use hygiea_core::datetime::{HygieaDateTimeExt, UtcDateTime};
     use hygiea_db::HyUtcDateTime;
-    use hygiea_db::{
-        PgConnectConfig, SeaOrmPgComponent, SeaOrmPgConfig, SeaOrmPgPool, SqlxPgComponent,
-        SqlxPgConfig, SqlxPgPool,
-    };
+    use hygiea_db::{PgConnectConfig, SeaOrmPgComponent, SeaOrmPgConfig, SeaOrmPgPool};
     use hygiea_test::container::{ContainerSpec, RunningContainer};
     use sea_orm::{ActiveModelTrait, ConnectionTrait, DbBackend, EntityTrait, Set, Statement};
 
     const USER: &str = "postgres";
+
     const PASSWORD: &str = "hygiea-test";
+
     const DATABASE: &str = "postgres";
+
     const PORT: u16 = 5432;
+
     /// 测试用的非 public schema，和 [`create_schema`] 里建的一致
     const SCHEMA: &str = "hygiea_test";
 
@@ -51,13 +75,6 @@ mod postgres {
         }
     }
 
-    fn sqlx_config(server: &RunningContainer) -> SqlxPgConfig {
-        SqlxPgConfig {
-            connect: connect(server),
-            ..Default::default()
-        }
-    }
-
     fn seaorm_config(server: &RunningContainer) -> SeaOrmPgConfig {
         SeaOrmPgConfig {
             connect: connect(server),
@@ -67,11 +84,10 @@ mod postgres {
 
     /// 用默认配置连上去建好 [`SCHEMA`]，search_path 指向不存在的 schema 时 current_schema() 是 NULL
     async fn create_schema(server: &RunningContainer) {
-        let pool = SqlxPgPool::from_config(&sqlx_config(server), &Default::default())
+        let pool = SeaOrmPgPool::from_config(&seaorm_config(server), &Default::default())
             .await
             .unwrap();
-        sqlx::query("CREATE SCHEMA hygiea_test")
-            .execute(&*pool)
+        pool.execute_unprepared("CREATE SCHEMA hygiea_test")
             .await
             .unwrap();
         pool.close().await.unwrap();
@@ -100,56 +116,6 @@ mod postgres {
 
     fn sql(s: &str) -> Statement {
         Statement::from_string(DbBackend::Postgres, s)
-    }
-
-    #[tokio::test]
-    async fn sqlx_connect_success() {
-        let server = start().await;
-        let pool = SqlxPgPool::from_config(&sqlx_config(&server), &Default::default())
-            .await
-            .unwrap();
-
-        let value: i32 = sqlx::query_scalar("SELECT 1")
-            .fetch_one(&*pool)
-            .await
-            .unwrap();
-        assert_eq!(value, 1);
-    }
-
-    #[tokio::test]
-    async fn sqlx_schema_search_path_takes_effect() {
-        let server = start().await;
-        create_schema(&server).await;
-
-        let mut config = sqlx_config(&server);
-        config.connect.schema_search_path = SCHEMA.to_string();
-        let pool = SqlxPgPool::from_config(&config, &Default::default())
-            .await
-            .unwrap();
-
-        let schema: Option<String> = sqlx::query_scalar("SELECT current_schema()")
-            .fetch_one(&*pool)
-            .await
-            .unwrap();
-        assert_eq!(schema.as_deref(), Some(SCHEMA));
-    }
-
-    #[tokio::test]
-    async fn sqlx_stop_closes_pool() {
-        let server = start().await;
-        let mut config = sqlx_config(&server);
-        config.pool.max_connections = Some(2);
-        let pool = SqlxPgPool::from_config(&config, &Default::default())
-            .await
-            .unwrap();
-
-        sqlx::query("SELECT 1").fetch_one(&*pool).await.unwrap();
-
-        pool.close().await.unwrap();
-
-        // 关闭后再发查询应该失败
-        let err = sqlx::query("SELECT 1").fetch_one(&*pool).await.unwrap_err();
-        assert!(matches!(err, sqlx::Error::PoolClosed), "{err:?}");
     }
 
     #[tokio::test]
@@ -204,23 +170,6 @@ mod postgres {
         assert!(result.is_err(), "{result:?}");
     }
 
-    /// SqlxPgComponent 经 Registry 启动，按组件名取到能用的连接池
-    #[tokio::test]
-    async fn sqlx_component_startup_via_registry() {
-        let server = start().await;
-        let registry =
-            Registry::new().add_named::<SqlxPgComponent>("primary", sqlx_config(&server));
-        let pool = with_resources(registry, |res| res.get_named::<SqlxPgPool>("primary"))
-            .await
-            .unwrap();
-
-        let value: i32 = sqlx::query_scalar("SELECT 1")
-            .fetch_one(&*pool)
-            .await
-            .unwrap();
-        assert_eq!(value, 1);
-    }
-
     /// SeaOrmPgComponent 经 Registry 启动，按组件名取到能用的连接
     #[tokio::test]
     async fn seaorm_component_startup_via_registry() {
@@ -267,45 +216,6 @@ mod postgres {
         impl ActiveModelBehavior for ActiveModel {}
     }
 
-    /// sqlx 往 timestamptz 列写入再读回，可空列写 NULL 读回 None；
-    /// 库里按 +08:00 写的值读出来换算成 UTC
-    #[tokio::test]
-    async fn sqlx_hy_utc_datetime_round_trip() {
-        let server = start().await;
-        let pool = SqlxPgPool::from_config(&sqlx_config(&server), &Default::default())
-            .await
-            .unwrap();
-        sqlx::query(CREATE_RECORD).execute(&*pool).await.unwrap();
-
-        let at = HyUtcDateTime(utc("2026-10-05T12:57:24.719Z"));
-        sqlx::query(
-            "INSERT INTO record (id, create_at, delete_at) VALUES ($1, $2, $3), ($4, $5, $6)",
-        )
-        .bind(1_i64)
-        .bind(at)
-        .bind(Some(at))
-        .bind(2_i64)
-        .bind(at)
-        .bind(None::<HyUtcDateTime>)
-        .execute(&*pool)
-        .await
-        .unwrap();
-
-        let rows: Vec<(i64, HyUtcDateTime, Option<HyUtcDateTime>)> =
-            sqlx::query_as("SELECT id, create_at, delete_at FROM record ORDER BY id")
-                .fetch_all(&*pool)
-                .await
-                .unwrap();
-        assert_eq!(rows, vec![(1, at, Some(at)), (2, at, None)]);
-
-        let shanghai: HyUtcDateTime =
-            sqlx::query_scalar("SELECT '2026-10-05 20:57:24.719+08'::timestamptz")
-                .fetch_one(&*pool)
-                .await
-                .unwrap();
-        assert_eq!(shanghai, at);
-    }
-
     /// SeaORM 实体字段用 `HyUtcDateTime`，插入再按主键查回，可空字段 None 对应 NULL；
     /// 库里按 +08:00 写的值读出来换算成 UTC
     #[tokio::test]
@@ -347,53 +257,6 @@ mod postgres {
             .unwrap()
             .unwrap();
         assert_eq!(shanghai.create_at, at);
-    }
-
-    /// sqlx::transaction：闭包 Ok 就提交；Err 就回滚，闭包的错误原样返回
-    #[tokio::test]
-    async fn sqlx_transaction_commits_or_rolls_back() {
-        use hygiea_core::{ResultExt, err};
-        use hygiea_db::RepoErr;
-
-        let server = start().await;
-        let pool = SqlxPgPool::from_config(&sqlx_config(&server), &Default::default())
-            .await
-            .unwrap();
-        sqlx::query("CREATE TABLE item (id INT PRIMARY KEY)")
-            .execute(&*pool)
-            .await
-            .unwrap();
-        let insert = async |tx: &mut sqlx::Transaction<'static, sqlx::Postgres>, id: i32| {
-            sqlx::query("INSERT INTO item VALUES ($1)")
-                .bind(id)
-                .execute(&mut **tx)
-                .await
-                .wrap_err(|| err!(RepoErr::InsertFailed, "insert item"))
-        };
-
-        hygiea_db::sqlx::transaction(&pool, "save item", async |tx| {
-            insert(tx, 1).await?;
-            insert(tx, 2).await?;
-            Ok(())
-        })
-        .await
-        .unwrap();
-
-        // 第二条主键冲突：整个事务回滚，第一条也不留
-        let e = hygiea_db::sqlx::transaction(&pool, "save item", async |tx| {
-            insert(tx, 3).await?;
-            insert(tx, 1).await?;
-            Ok(())
-        })
-        .await
-        .unwrap_err();
-        assert!(e.is(RepoErr::InsertFailed), "{e:#}");
-
-        let ids: Vec<i32> = sqlx::query_scalar("SELECT id FROM item ORDER BY id")
-            .fetch_all(&*pool)
-            .await
-            .unwrap();
-        assert_eq!(ids, vec![1, 2]);
     }
 
     /// seaorm::transaction：闭包 Ok 就提交；Err 就回滚，闭包的错误原样返回
@@ -769,40 +632,6 @@ mod postgres {
         );
     }
 
-    /// sqlx 自己写 LIMIT / OFFSET，绑 PageRequest 的 limit()、offset()，再用 Page::new 拼结果
-    #[tokio::test]
-    async fn sqlx_page_request_binds_limit_offset() {
-        use hygiea_db::{Page, PageRequest};
-
-        let server = start().await;
-        let pool = SqlxPgPool::from_config(&sqlx_config(&server), &Default::default())
-            .await
-            .unwrap();
-        sqlx::query(CREATE_RECORD).execute(&*pool).await.unwrap();
-        sqlx::query(
-            "INSERT INTO record (id, create_at) SELECT g, now() FROM generate_series(1, 5) AS g",
-        )
-        .execute(&*pool)
-        .await
-        .unwrap();
-
-        let request = PageRequest::new(1, 2).unwrap();
-        let items: Vec<i64> =
-            sqlx::query_scalar("SELECT id FROM record ORDER BY id LIMIT $1 OFFSET $2")
-                .bind(request.limit())
-                .bind(request.offset())
-                .fetch_all(&*pool)
-                .await
-                .unwrap();
-        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM record")
-            .fetch_one(&*pool)
-            .await
-            .unwrap();
-        let page = Page::new(items, request, total.unsigned_abs());
-        assert_eq!(page, Page::new(vec![3, 4], request, 5));
-        assert_eq!(page.total_pages, 3);
-    }
-
     /// transaction_snapshot 开出来是 REPEATABLE READ + READ ONLY，里面写数据报错；transaction 是默认的 READ COMMITTED
     #[tokio::test]
     async fn seaorm_transaction_snapshot_is_repeatable_read_only() {
@@ -852,5 +681,173 @@ mod postgres {
         .await
         .unwrap();
         assert_eq!(isolation, "read committed");
+    }
+}
+
+/// 分布式锁：两个 SeaORM 连接池模拟两个实例
+#[container]
+mod lock {
+    use hygiea_core::app::{ConfigResource, RegistryConfig};
+    use hygiea_db::{PgConnectConfig, SeaOrmPgConfig, SeaOrmPgPool};
+    use hygiea_test::container::{ContainerSpec, RunningContainer};
+
+    use super::*;
+
+    const PASSWORD: &str = "hygiea-test";
+
+    const PORT: u16 = 5432;
+
+    async fn start() -> RunningContainer {
+        ContainerSpec::new("postgres", "18")
+            .env("POSTGRES_PASSWORD", PASSWORD)
+            .port(PORT)
+            .wait_log_times("database system is ready to accept connections", 2)
+            .start()
+            .await
+    }
+
+    /// 应用名 `hy`：锁表是 hy_lock
+    fn app(name: &str) -> RegistryConfig {
+        RegistryConfig {
+            app_name: name.to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn connect(server: &RunningContainer) -> PgConnectConfig {
+        PgConnectConfig {
+            host: server.host().to_string(),
+            port: server.port(PORT),
+            password: PASSWORD.to_string(),
+            ..Default::default()
+        }
+    }
+
+    async fn pool(server: &RunningContainer) -> SeaOrmPgPool {
+        let config = SeaOrmPgConfig {
+            connect: connect(server),
+            ..Default::default()
+        };
+        SeaOrmPgPool::from_config(&config, &app("hy"))
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn i64_is_exclusive() {
+        let server = start().await;
+        let (a, b) = (pool(&server).await, pool(&server).await);
+        common::i64_is_exclusive(&a, &b).await;
+    }
+
+    #[tokio::test]
+    async fn blocking_waits_and_times_out() {
+        let server = start().await;
+        let (a, b) = (pool(&server).await, pool(&server).await);
+        common::blocking_waits_and_times_out(&a, &b).await;
+    }
+
+    /// 字符串 key 走锁表
+    #[tokio::test]
+    async fn string_key_is_exclusive() {
+        let server = start().await;
+        let (a, b) = (pool(&server).await, pool(&server).await);
+        common::string_key_is_exclusive(&a, &b, || lock_key!(TestLockKey::Job, 1)).await;
+    }
+}
+
+/// 动态配置：SeaORM 连接池交出连接参数，另开小池
+#[container]
+mod live_config {
+    use hygiea_core::app::{ConfigResource, RegistryConfig};
+    use hygiea_db::{LiveConfigConfig, PgConnectConfig, SeaOrmPgConfig, SeaOrmPgPool};
+    use hygiea_test::container::{ContainerSpec, RunningContainer};
+    use sea_orm::ConnectionTrait;
+
+    use super::*;
+
+    const PASSWORD: &str = "hygiea-test";
+    const PORT: u16 = 5432;
+
+    async fn start() -> RunningContainer {
+        ContainerSpec::new("postgres", "18")
+            .env("POSTGRES_PASSWORD", PASSWORD)
+            .port(PORT)
+            .wait_log_times("database system is ready to accept connections", 2)
+            .start()
+            .await
+    }
+
+    fn app() -> RegistryConfig {
+        RegistryConfig {
+            app_name: "hy".to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// 轮询间隔很长：测试里的变化只能靠通知收到
+    fn config(server: &RunningContainer, search_path: &str) -> SeaOrmPgConfig {
+        SeaOrmPgConfig {
+            connect: PgConnectConfig {
+                host: server.host().to_string(),
+                port: server.port(PORT),
+                password: PASSWORD.to_string(),
+                schema_search_path: search_path.to_string(),
+                ..Default::default()
+            },
+            live_config: LiveConfigConfig {
+                enabled: true,
+                poll_interval_secs: Some(3600),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    /// 第一次 bind 建表、补默认值；改表后 NOTIFY 推过来
+    #[tokio::test]
+    async fn update_is_pushed_by_notify() {
+        let server = start().await;
+        let pool = SeaOrmPgPool::from_config(&config(&server, ""), &app())
+            .await
+            .unwrap();
+        let cache = pool.live_config("cache", Cache::default()).await.unwrap();
+        assert_eq!(cache.get().ttl_secs, 0);
+        pool.execute_unprepared("UPDATE hy_config SET value = '8' WHERE namespace = 'cache'")
+            .await
+            .unwrap();
+        eventually(5, || async { cache.get().ttl_secs == 8 }).await;
+        pool.close().await.unwrap();
+    }
+
+    /// 动态配置跟着连接池的 search_path，表建在那个 schema 下
+    #[tokio::test]
+    async fn follows_search_path() {
+        let server = start().await;
+        let admin = SeaOrmPgPool::from_config(&config(&server, ""), &app())
+            .await
+            .unwrap();
+        admin.execute_unprepared("CREATE SCHEMA app").await.unwrap();
+        let pool = SeaOrmPgPool::from_config(&config(&server, "app"), &app())
+            .await
+            .unwrap();
+        let cache = pool.live_config("cache", Cache::default()).await.unwrap();
+        let created = admin
+            .query_one_raw(sea_orm::Statement::from_string(
+                sea_orm::DbBackend::Postgres,
+                "SELECT to_regclass('app.hy_config') IS NOT NULL",
+            ))
+            .await
+            .unwrap()
+            .unwrap()
+            .try_get_by_index::<bool>(0)
+            .unwrap();
+        assert!(created);
+        admin
+            .execute_unprepared("UPDATE app.hy_config SET value = '8' WHERE namespace = 'cache'")
+            .await
+            .unwrap();
+        eventually(5, || async { cache.get().ttl_secs == 8 }).await;
+        pool.close().await.unwrap();
     }
 }
