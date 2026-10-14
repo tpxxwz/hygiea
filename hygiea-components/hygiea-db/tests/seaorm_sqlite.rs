@@ -10,8 +10,8 @@
 
 mod common;
 
-use common::eventually;
-use hygiea_core::app::{ConfigResource, RegistryConfig};
+use common::{LiveInst, eventually, open_pool, uses};
+use hygiea_core::app::RegistryConfig;
 use hygiea_db::{PoolConfig, SeaOrmSqliteConfig, SeaOrmSqlitePool, SqliteConnectConfig};
 use sea_orm::{ConnectionTrait, DbBackend, Statement};
 use serde::{Deserialize, Serialize};
@@ -107,20 +107,19 @@ mod pool {
     #[tokio::test]
     async fn connect_settings_take_effect() {
         let dir = tempfile::tempdir().unwrap();
-        let pool = SeaOrmSqlitePool::from_config(&file_config(&dir), &app())
+        let db = hygiea_db::DbResources::from_config(&file_config(&dir), &app())
             .await
             .unwrap();
+        let pool = db.pool.clone().unwrap();
         assert_eq!(pragma(&pool, "journal_mode").await, "wal");
         assert_eq!(pragma(&pool, "foreign_keys").await, "1");
         assert_eq!(pragma(&pool, "synchronous").await, "2", "full");
-        pool.close().await.unwrap();
+        db.close().await.unwrap();
 
         let mut config = file_config(&dir);
         config.connect.journal_mode = Some("delete".to_string());
         config.connect.foreign_keys = false;
-        let pool = SeaOrmSqlitePool::from_config(&config, &app())
-            .await
-            .unwrap();
+        let pool = open_pool(&config, &app()).await;
         assert_eq!(pragma(&pool, "journal_mode").await, "delete");
         assert_eq!(pragma(&pool, "foreign_keys").await, "0");
     }
@@ -134,10 +133,10 @@ mod pool {
                 database: ":memory:".to_string(),
                 ..Default::default()
             },
-            pool: PoolConfig {
+            pool: Some(PoolConfig {
                 max_connections: Some(1),
                 ..Default::default()
-            },
+            }),
             ..Default::default()
         };
         let registry = Registry::new().add_named::<SeaOrmSqliteComponent>("primary", config);
@@ -199,16 +198,13 @@ mod live_config {
     async fn update_is_polled() {
         let dir = tempfile::tempdir().unwrap();
         let mut config = file_config(&dir);
-        config.live_config = SqliteLiveConfigConfig {
-            enabled: true,
-            ..Default::default()
-        };
-        let pool = SeaOrmSqlitePool::from_config(&config, &app())
-            .await
-            .unwrap();
-        let cache = pool.live_config("cache", Cache::default()).await.unwrap();
+        config.uses = uses(3);
+        config.live_config = Some(SqliteLiveConfigConfig::default());
+        let pool = LiveInst::open(&config, &app()).await;
+        let cache = pool.bind("cache", Cache::default()).await.unwrap();
         assert_eq!(cache.get().ttl_secs, 0);
-        pool.execute_unprepared("UPDATE hy_config SET value = '8' WHERE namespace = 'cache'")
+        pool.pool()
+            .execute_unprepared("UPDATE hy_config SET value = '8' WHERE namespace = 'cache'")
             .await
             .unwrap();
         eventually(5, || async { cache.get().ttl_secs == 8 }).await;

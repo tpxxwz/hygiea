@@ -4,8 +4,13 @@
 use std::time::Duration;
 
 #[cfg(any(sqlx_pg, sqlx_mysql, sqlx_sqlite))]
-use sea_orm::ConnectOptions;
+use sea_orm::{ConnectOptions, DatabaseConnection};
 use serde::Deserialize;
+
+#[cfg(any(sqlx_pg, sqlx_mysql, sqlx_sqlite))]
+use hygiea_core::app::AppErr;
+#[cfg(any(sqlx_pg, sqlx_mysql, sqlx_sqlite))]
+use hygiea_core::{Result, ResultExt, err};
 
 #[cfg(any(sqlx_pg, sqlx_mysql, sqlx_sqlite))]
 use crate::config::{PoolConfig, PoolSize};
@@ -17,7 +22,7 @@ pub(crate) mod postgres;
 #[cfg(feature = "sqlite")]
 pub(crate) mod sqlite;
 
-/// SeaORM 打的 SQL 日志，配置文件里是 `[db.log]`。级别是 trace / debug / info / warn / error / off
+/// SeaORM 打的 SQL 日志，配置文件里是 `[db.log]`（`uses` 带 1 时才能写）。级别是 trace / debug / info / warn / error / off
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SeaOrmLogConfig {
@@ -63,6 +68,32 @@ pub(crate) fn connect_options(
             Duration::from_secs(log.slow_statements_threshold_secs),
         );
     opt
+}
+
+/// 写了的、只给业务池用的段名（`uses` 没带 1 时不能写）
+#[cfg(any(sqlx_pg, sqlx_mysql, sqlx_sqlite))]
+pub(crate) fn pool_sections(
+    pool: &Option<PoolConfig>,
+    log: &Option<SeaOrmLogConfig>,
+) -> Vec<&'static str> {
+    let mut sections = Vec::new();
+    if pool.is_some() {
+        sections.push("pool");
+    }
+    if log.is_some() {
+        sections.push("log");
+    }
+    sections
+}
+
+/// 等在途查询跑完后关掉连接池
+#[cfg(any(sqlx_pg, sqlx_mysql, sqlx_sqlite))]
+pub(crate) async fn close_connection(conn: &DatabaseConnection) -> Result<()> {
+    conn.close_by_ref()
+        .await
+        .wrap_err(|| err!(AppErr::StopFailed, "close database connection"))?;
+    tracing::info!("Database connection pool closed");
+    Ok(())
 }
 
 #[cfg(any(sqlx_pg, sqlx_mysql, sqlx_sqlite))]

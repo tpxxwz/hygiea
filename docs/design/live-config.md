@@ -1,7 +1,8 @@
 # live config（数据库配置表）：用法和内部流程
 
-配置存在应用自己的库里，改了表，运行中的程序自动拿到新值，不用重启。它是连接池的一种能力：
-开了 feature `live-config`，`SqlxPgPool`、`SqlxSqlitePool`、`SeaOrmPgPool` 上就多了两个方法。
+配置存在库里，改了表，运行中的程序自动拿到新值，不用重启。开了 feature `live-config`，各连接池组件（sqlx、SeaORM 的
+PG、MySQL、SQLite）配置的 `uses` 带 2 时，按组件名把一个源 `DbLiveConfig` 放进 Resources，用它的 `bind` / `bind_all` 绑到 struct。
+几个组件都开就是几个源（比如应用自己的库一个、平台公共配置库一个），各管各的 namespace。PG 靠 NOTIFY 推送，MySQL、SQLite 轮询。
 
 代码在 `hygiea-components/hygiea-db/src/live_config/`，跑起来看效果：
 `cargo run -p hygiea-examples --example db_live_config`。
@@ -15,21 +16,23 @@
 ### 配置
 
 ```toml
+[db]
+uses = 3                         # 1 业务池 + 2 动态配置；只给动态配置用写 2
+
 [db.connect]
 host = ".."
-schema_search_path = "dict_jp"   # 表建在 search_path 的第一个 schema 里
+schema_search_path = "dict_jp"   # 表建在 search_path 的第一个 schema 里（MySQL 是连接的库）
 
 [registry]
 app_name = "dict_jp"             # 应用名（小写下划线），不写 table_prefix 时也是表名前缀：dict_jp_config、dict_jp_config_revision、dict_jp_config_history
 
-[db.live_config]
-enabled = true                   # 默认不开，要用的连接池才写
-# poll_interval_secs = 60        # 不写：PG 60 秒（兜底），SQLite 1 秒（主要靠它）
+[db.live_config]                  # uses 带 2 时才能写，整段不写用默认值
+# poll_interval_secs = 60        # 不写：PG 60 秒（兜底），MySQL、SQLite 1 秒（主要靠它）
 # history_keep_rows = 10000      # 变更历史只留最新的多少行、隔多少分钟清一次（启动时先清一次）；
 # history_trim_interval_mins = 60 # 两项要么都写要么都不写，都不写不删
 # table_prefix = "foo"           # 表名前缀：不写用应用名；"foo" 或 "foo_" 都是 foo_config；"" 不加前缀（config）
 
-[db.live_config.connect]         # 单独连的库：只写和 [db.connect] 不一样的项，不写的沿用（整段不写就是连接池那个库）
+[db.live_config.connect]         # 换几项连接参数：只写和 [db.connect] 不一样的项，不写的沿用（有业务池时才能写）
 # username = "app_config"
 # password = ".."
 # schema_search_path = "config"
@@ -37,8 +40,12 @@ enabled = true                   # 默认不开，要用的连接池才写
 
 - **表名前缀**：`table_prefix` 比应用名优先。几个应用要共用一套表，就把前缀、库、schema 配成一样；
   共用时同一个 namespace 的结构要兼容（升级时新旧版本都能读），默认值先启动的那个写进表，历史保留按配得最少的那个删
-- **单独连库**：`[db.live_config.connect]` 逐项盖到 `[db.connect]` 上（SQLite 是换库文件等），live config 本来就走自己的
-  独立小池，换的只是它的连接参数。比如配置放在单独的 schema、用只有这几张表权限的用户
+- **换连接参数**：`[db.live_config.connect]` 逐项盖到 `[db.connect]` 上（SQLite 是换库文件等），live config 本来就走自己的
+  独立小池，换的只是它的连接参数。比如配置放在单独的 schema、用只有这几张表权限的用户。整个库都不一样的（平台公共配置库），
+  另起一个 `uses = 2` 的组件，没有业务池，连接参数直接写在它的 `[db.connect]` 里
+- **多个源**：每个 `uses` 带 2 的组件是一个源，按组件名取，各自的表、后台任务、小池，同名的 namespace 在不同的源里互不相干
+- **MySQL 的权限**：没有 `SUPER` 的用户建不了触发器（binlog 开着时报 1419），DBA 打开 `log_bin_trust_function_creators`
+  或者先用有权限的账号建好表，见 `live_config/mod.rs` 的「用的时候要注意」
 - **PgBouncer**：transaction 模式下不能 `LISTEN`，连接池走 PgBouncer 时，用 `connect` 把 live config 指到直连地址
 
 ### 代码
@@ -53,7 +60,7 @@ pub struct RuntimeConfig {
 
 #[derive(Serialize, Deserialize)]
 pub struct MarkjiSync {
-    pub auto_sync: bool,      // 业务字段：要不要自动同步（跟 [db.live_config] 的 enabled 开关无关）
+    pub auto_sync: bool,      // 业务字段：要不要自动同步
     pub levels: Vec<i32>,
 }
 impl Default for MarkjiSync {
@@ -61,9 +68,9 @@ impl Default for MarkjiSync {
 }
 
 // before_activate（建 AppState）里绑一次
-let db = resources.require::<SeaOrmPgPool>()?;
-let runtime: LiveConfig<RuntimeConfig> = db.live_config_all(RuntimeConfig::default()).await?;
-// 只要一个 namespace 也行：db.live_config("markji_sync", MarkjiSync::default())
+let source = resources.require_named::<DbLiveConfig>("main")?;     // 组件名
+let runtime: LiveConfig<RuntimeConfig> = source.bind_all(RuntimeConfig::default()).await?;
+// 只要一个 namespace 也行：source.bind("markji_sync", MarkjiSync::default())
 
 // 业务里每次用都 get()，拿到的是当前最新的
 let cfg = runtime.get();                 // Arc<RuntimeConfig>：当前快照，用的时候不持有锁
@@ -91,7 +98,7 @@ tokio::spawn(async move {
 UPDATE dict_jp_config SET value = '[1, 2, 3]' WHERE namespace = 'markji_sync' AND key = 'levels';
 ```
 
-PG 几乎立刻生效，SQLite 最多等 1 秒。
+PG 几乎立刻生效，MySQL、SQLite 最多等 1 秒（MySQL 的 `key` 是保留字，写成 `` `key` ``）。
 
 ### 表里长什么样
 
@@ -105,8 +112,8 @@ PG 几乎立刻生效，SQLite 最多等 1 秒。
 
 | 绑定方式 | namespace 从哪来 | 读 `markji_sync` 的 `auto_sync` |
 |---|---|---|
-| `live_config_all(RuntimeConfig::default())` | 总 struct 的第一层字段名 | `runtime.get().markji_sync.auto_sync` |
-| `live_config("markji_sync", MarkjiSync::default())` | 参数传的字符串 | `sync.get().auto_sync` |
+| `bind_all(RuntimeConfig::default())` | 总 struct 的第一层字段名 | `runtime.get().markji_sync.auto_sync` |
+| `bind("markji_sync", MarkjiSync::default())` | 参数传的字符串 | `sync.get().auto_sync` |
 
 两种读的是表里同一行。
 
@@ -119,9 +126,9 @@ flowchart LR
     subgraph app["应用"]
         biz["业务代码<br/>runtime.get()"]
     end
-    subgraph pool["连接池（SqlxPgPool 等）"]
-        main["主池<br/>业务查询用"]
-        src["LiveConfigSource<br/>（enabled 才有）"]
+    subgraph pool["连接池组件（SqlxPgComponent 等）"]
+        main["业务池<br/>uses 带 1 时有"]
+        src["DbLiveConfig（LiveConfigSource）<br/>uses 带 2 时有，按组件名放进 Resources"]
     end
     subgraph lc["live_config"]
         worker["Worker<br/>后台任务"]
@@ -140,29 +147,29 @@ flowchart LR
 
 | 文件 | 负责 | 跟框架有关吗 |
 |---|---|---|
-| `mod.rs` | 对外：`LiveConfigConfig`、`LiveConfig<T>`、连接池上的两个方法（宏生成）；bind 入口；默认值 + 表里的值合并成 struct | 无关 |
+| `mod.rs` | 对外：`LiveConfigConfig`、`LiveConfig<T>`、源 `DbLiveConfig`（`bind` / `bind_all`）；`source.rs` 一个源的后台任务和绑定，默认值 + 表里的值合并成 struct | 无关 |
 | `worker.rs` | 后台任务：处理 bind、收通知、轮询、比版本号、重新加载、出错重建 | 无关 |
 | `schema.rs` | 表名、第一次 bind 时的检查规则、各库语句的集合 `Sql` | 无关 |
 | `src/sql/<数据库>/live_config.rs` | 期望的列、函数和触发器名、加载 / 查版本号 / 补默认值 / 清历史的语句，通知 payload 的格式 | 无关 |
 | `store.rs` | `Store`：worker 和驱动之间的接口，按驱动分发 | 无关 |
 | `sqlx/mod.rs` | `SqlxStore`：按数据库分发、转错误，独立小池的固定参数 | sqlx |
-| `sqlx/{postgres,sqlite}.rs` | 各数据库在小池上做的事：建连接、加载、查版本号、补默认值、收通知（只有 PG），以及第一次 bind 时检查和建表 | sqlx |
-| `src/sql/<数据库>/live_config.sql` | PG、SQLite 的建表和触发器 | 无关 |
+| `sqlx/{postgres,mysql,sqlite}.rs` | 各数据库在小池上做的事：建连接、加载、查版本号、补默认值、收通知（只有 PG），以及第一次 bind 时检查和建表 | sqlx |
+| `src/sql/<数据库>/live_config.sql` | PG、MySQL、SQLite 的建表和触发器 | 无关 |
 
 ---
 
-## 3. 启动：连接池建好的时候
+## 3. 启动：组件建资源的时候
 
 这一步不连库、不建表，只看配置。
 
 ```mermaid
 flowchart TD
-    A["连接池 from_config"] --> B{"live_config.enabled?"}
-    B -- 否 --> C["live_config = None<br/>调用 live_config() 报 LiveConfigDisabled"]
+    A["组件启动（DbResources::from_config）"] --> B{"uses 带 2？"}
+    B -- 否 --> C["不放 DbLiveConfig<br/>写了 [db.live_config] 段的启动报错"]
     B -- 是 --> D["表名前缀 = table_prefix（不写用应用名）<br/>校验前缀、poll_interval_secs > 0"]
-    D -- 不合法 --> E["from_config 报错，启动失败"]
+    D -- 不合法 --> E["报错，启动失败"]
     D -- 合法 --> F["建 Store：独立小池（lazy，不连库）<br/>连接参数 = [db.live_config.connect] 盖到 [db.connect] 上<br/>拼好 SQL"]
-    F --> G["LiveConfigSource 先保管着 Store"]
+    F --> G["DbLiveConfig 先保管着 Store，按组件名放进 Resources"]
 ```
 
 ---
@@ -172,12 +179,12 @@ flowchart TD
 ```mermaid
 sequenceDiagram
     participant App as 应用（before_activate）
-    participant Src as LiveConfigSource
+    participant Src as DbLiveConfig
     participant St as Store
     participant DB as 数据库
     participant W as Worker（后台任务）
 
-    App->>Src: live_config_all(RuntimeConfig::default())
+    App->>Src: bind_all(RuntimeConfig::default())
     Src->>Src: 默认值转成 JSON 对象<br/>{markji_sync: {..}, moji_cache: {..}}
     Note over Src: 第一次 bind 才做下面这段（只做一次）
     Src->>St: open(检查表)
@@ -185,7 +192,7 @@ sequenceDiagram
     St->>DB: PG：查 current_schema()，channel = <schema>.<配置表名><br/>（超过 63 字节拒绝启动）
     St->>DB: 查 current_schema 里三张表的列、函数、触发器
     alt 一个都没有
-        St->>DB: 加锁（PG advisory lock (builtin::LOCK_TYPE, Lock::LiveConfigDdl) / SQLite BEGIN IMMEDIATE）<br/>再查一遍，还是没有就执行 live_config.sql
+        St->>DB: 加锁（PG advisory lock (builtin::LOCK_TYPE, Lock::LiveConfigDdl) / MySQL GET_LOCK / SQLite BEGIN IMMEDIATE）<br/>再查一遍，还是没有就执行 live_config.sql
     else 都在且列一致
         St->>DB: PG：再看 config_record 函数通知的 channel<br/>对不上（旧版建的、schema 改过名）也报 LiveConfigSchemaMismatch
         Note over St: 直接用
@@ -196,7 +203,7 @@ sequenceDiagram
     Src->>W: 起后台任务，Store 交给它
     Src->>W: Bind 命令（默认值 + 绑定）
     loop 每个 namespace 的每个 key
-        W->>DB: INSERT ... ON CONFLICT DO NOTHING<br/>（表里没有才补默认值）
+        W->>DB: INSERT ... ON CONFLICT DO NOTHING<br/>（MySQL 是 ON DUPLICATE KEY UPDATE 空操作）<br/>（表里没有才补默认值）
     end
     loop 每个 namespace
         W->>DB: 一条语句读出 revision + 所有行
@@ -210,7 +217,7 @@ sequenceDiagram
     end
 ```
 
-后面再调 `live_config` / `live_config_all`，就不用再连库、建表了，直接发 Bind 命令给已经在跑的后台任务，同一个后台任务、同一条连接。
+后面再调 `bind` / `bind_all`，就不用再连库、建表了，直接发 Bind 命令给已经在跑的后台任务，同一个后台任务、同一条连接。
 
 ---
 
@@ -232,7 +239,7 @@ flowchart TD
     V --> H["dict_jp_config_history 追加一行<br/>旧值、新值、revision、时间、账号"]
     H --> P{"PG?"}
     P -- 是 --> NT["pg_notify('dict_jp.dict_jp_config', 'markji_sync:4')<br/>channel 带 schema 名，建表时写进函数<br/>事务提交后才真正发出，回滚不发"]
-    P -- SQLite --> X["没有通知，等程序轮询"]
+    P -- MySQL / SQLite --> X["没有通知，等程序轮询"]
 ```
 
 ### 程序这一侧（worker）
@@ -247,7 +254,7 @@ sequenceDiagram
     alt PG
         DB-->>W: 通知 "markji_sync:4"
         W->>W: 4 比本地的 3 大？大才往下
-    else SQLite（或 PG 每 60 秒兜底）
+    else MySQL / SQLite（或 PG 每 60 秒兜底）
         W->>DB: SELECT namespace, revision FROM dict_jp_config_revision
         W->>W: 找出版本号变大的 namespace
     end
@@ -315,17 +322,17 @@ flowchart TD
 ```mermaid
 sequenceDiagram
     participant R as Registry
-    participant P as 连接池
-    participant Src as LiveConfigSource
+    participant P as 连接池组件
+    participant Src as DbLiveConfig
     participant W as Worker
 
     R->>R: 先关 HTTP / gRPC（处理完手上的请求，这期间配置照常更新）
-    R->>P: 关连接池 close()
-    P->>Src: close()
+    R->>P: stop()（DbResources::close）
+    P->>Src: close()（先关动态配置）
     Src->>W: 取消信号
     W->>W: 退出循环，放掉 listener，关小池
     Src->>Src: 等 worker 结束（没 bind 过的话，这里关小池）
-    P->>P: 关主池
+    P->>P: 再关锁单独的池、业务池
     Note over W: 之后 get() 还是最后的值，<br/>changed() / 再 bind 报 LiveConfigClosed
 ```
 
@@ -333,7 +340,7 @@ sequenceDiagram
 
 ## 9. 几个规则一句话总结
 
-- **一个连接池最多一条连接给 live config**：PG 是 listener 占着，SQLite 是轮询用；不占主池的名额，第一次 bind 才连。
+- **一个源一条连接**：PG 是 listener 占着，MySQL、SQLite 是轮询用；不占业务池的名额，第一次 bind 才连。
   池参数固定，连接参数可以用 `[db.live_config.connect]` 逐项换
 - **表名、channel**：表名前缀默认是应用名，`table_prefix` 可以改、可以不加；PG 的 channel 是 `<schema>.<配置表名>`，
   不同 schema 里同名的表互不收到对方的通知

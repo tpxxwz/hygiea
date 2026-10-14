@@ -3,129 +3,136 @@
 use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 use serde::Deserialize;
 
-use hygiea_core::app::{
-    AppErr, ConfigResource, ImmediateResourceComponent, RegistryConfig, async_trait,
-};
+use hygiea_core::app::{AppErr, RegistryConfig, async_trait};
 use hygiea_core::{Result, ResultExt, err};
 
-use super::{SeaOrmLogConfig, connect_options};
+use super::{SeaOrmLogConfig, close_connection, connect_options, pool_sections};
+use crate::component::{DbComponent, DbConfig, DbUses, Sections};
 use crate::config::{MYSQL_POOL_SIZE, MySqlConnectConfig, PoolConfig};
 #[cfg(feature = "live-config")]
-use crate::live_config::{
-    LiveConfigSource, MySqlLiveConfigConfig, Store, impl_live_config, live_config_source_for,
-};
+use crate::live_config::{DbLiveConfig, MySqlLiveConfigConfig, Store};
 #[cfg(feature = "lock")]
-use crate::lock::{MySqlLock, MySqlLockConfig, impl_lock};
+use crate::lock::{DbLock, MySqlLock, MySqlLockConfig};
 
 // ---- config -----------------------------------------------------------------
 
-/// 配置文件里是 `[db.connect]`、`[db.pool]`、`[db.log]`（还有开了 feature 才有的 `[db.live_config]`、`[db.lock]`），各段不写用默认值
+/// 配置文件里是 `[db]` 的 `uses`，加上 `[db.connect]`、`[db.pool]`、`[db.log]`（还有开了 feature 才有的 `[db.live_config]`、`[db.lock]`）。
+/// `uses` 决定提供什么、哪些段能写，见 [`DbUses`]；能写的段不写用默认值
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SeaOrmMySqlConfig {
+    /// 提供什么：1 业务池、2 动态配置、4 锁，按位加，不写是 1
+    pub uses: DbUses,
     pub connect: MySqlConnectConfig,
-    pub pool: PoolConfig,
-    pub log: SeaOrmLogConfig,
+    /// 业务池的参数，`uses` 带 1 时才能写
+    pub pool: Option<PoolConfig>,
+    /// 业务池的 SQL 日志，`uses` 带 1 时才能写
+    pub log: Option<SeaOrmLogConfig>,
+    /// 动态配置，`uses` 带 2 时才能写
     #[cfg(feature = "live-config")]
-    pub live_config: MySqlLiveConfigConfig,
+    pub live_config: Option<MySqlLiveConfigConfig>,
+    /// 锁，`uses` 带 4 时才能写
     #[cfg(feature = "lock")]
-    pub lock: MySqlLockConfig,
+    pub lock: Option<MySqlLockConfig>,
 }
 
 impl SeaOrmMySqlConfig {
     fn connect_options(&self, registry_config: &RegistryConfig) -> Result<ConnectOptions> {
         Ok(connect_options(
             self.connect.url(registry_config)?,
-            &self.pool,
-            &self.log,
+            &self.pool.clone().unwrap_or_default(),
+            &self.log.clone().unwrap_or_default(),
             MYSQL_POOL_SIZE,
         ))
     }
 }
 
-// ---- pool -------------------------------------------------------------------
-
-/// MySQL 连接（SeaORM），`Deref` 到 `DatabaseConnection`。用 [`ConfigResource::from_config`] 建，
-/// 不经过 Registry 也能用
-#[derive(Clone, Debug)]
-pub struct SeaOrmMySqlPool {
-    inner: DatabaseConnection,
-    #[cfg(feature = "live-config")]
-    /// 配置里没开是 `None`
-    live_config: Option<LiveConfigSource>,
-    /// 分布式锁，用底层的 sqlx 池或 `[db.lock]` 单独建的池
-    #[cfg(feature = "lock")]
-    locker: MySqlLock,
-}
-
 #[async_trait]
-impl ConfigResource for SeaOrmMySqlPool {
-    type Config = SeaOrmMySqlConfig;
+impl DbConfig for SeaOrmMySqlConfig {
+    type Pool = SeaOrmMySqlPool;
+    const LOCK: bool = true;
 
-    async fn from_config(
-        config: &SeaOrmMySqlConfig,
-        registry_config: &RegistryConfig,
-    ) -> Result<Self> {
-        #[cfg(feature = "live-config")]
-        let live_config = live_config_source_for(
-            |tables| {
-                let connect = config.live_config.connect.merge(&config.connect);
-                Ok(Store::mysql(
-                    connect.sqlx_options(registry_config)?,
-                    &config.pool,
-                    tables,
-                ))
-            },
-            &config.live_config,
-            registry_config,
-        )?;
-        let target = config.connect.target();
+    #[allow(clippy::needless_update)] // feature 全开时各项都写了，`..Default::default()` 是给没开的 feature 补的
+    fn sections(&self) -> Sections {
+        Sections {
+            uses: self.uses,
+            pool: pool_sections(&self.pool, &self.log),
+            #[cfg(feature = "live-config")]
+            live_config: self.live_config.is_some(),
+            #[cfg(feature = "live-config")]
+            live_config_connect: self
+                .live_config
+                .as_ref()
+                .is_some_and(|c| !c.connect.is_empty()),
+            #[cfg(feature = "lock")]
+            lock: self.lock.is_some(),
+            #[cfg(feature = "lock")]
+            lock_connect: self.lock.as_ref().is_some_and(|c| !c.connect.is_empty()),
+            ..Default::default()
+        }
+    }
+
+    async fn connect(&self, registry_config: &RegistryConfig) -> Result<SeaOrmMySqlPool> {
+        let target = self.connect.target();
         tracing::info!("Connecting to database: {target}");
-        let conn = Database::connect(config.connect_options(registry_config)?)
+        let inner = Database::connect(self.connect_options(registry_config)?)
             .await
             .wrap_err(|| err!(AppErr::ConnectFailed, target.clone()))?;
         tracing::info!("Database connection established");
-        // Database::connect 按 mysql:// 建的，一定是 MySQL 连接池，get_mysql_connection_pool 不会 panic
-        #[cfg(feature = "lock")]
-        let locker = MySqlLock::new(
-            conn.get_mysql_connection_pool(),
-            &config.connect,
-            &config.pool,
-            &config.lock,
+        Ok(SeaOrmMySqlPool { inner })
+    }
+
+    /// 等在途查询跑完后关掉连接池
+    async fn close(pool: &SeaOrmMySqlPool) -> Result<()> {
+        close_connection(&pool.inner).await
+    }
+
+    #[cfg(feature = "live-config")]
+    fn live_config(&self, registry_config: &RegistryConfig) -> Result<DbLiveConfig> {
+        let config = self.live_config.clone().unwrap_or_default();
+        let pool = self.pool.clone().unwrap_or_default();
+        DbLiveConfig::new(
+            |tables| {
+                let connect = config.connect.merge(&self.connect);
+                Ok(Store::mysql(
+                    connect.sqlx_options(registry_config)?,
+                    &pool,
+                    tables,
+                ))
+            },
+            &config,
+            registry_config,
+        )
+    }
+
+    /// 和业务池共用时用 SeaORM 底下的 sqlx 池：`Database::connect` 按 mysql:// 建的，一定是 MySQL 连接池，
+    /// `get_mysql_connection_pool` 不会 panic
+    #[cfg(feature = "lock")]
+    async fn lock(
+        &self,
+        pool: Option<&SeaOrmMySqlPool>,
+        registry_config: &RegistryConfig,
+    ) -> Result<DbLock> {
+        let lock = MySqlLock::new(
+            pool.map(|p| p.inner.get_mysql_connection_pool()),
+            &self.connect,
+            self.pool.as_ref(),
+            self.lock.as_ref(),
             registry_config,
         )
         .await?;
-        Ok(Self {
-            inner: conn,
-            #[cfg(feature = "live-config")]
-            live_config,
-            #[cfg(feature = "lock")]
-            locker,
-        })
-    }
-
-    /// 等在途查询跑完后关掉连接池；动态配置的后台任务也退出，锁单独的池也关掉
-    async fn close(&self) -> Result<()> {
-        #[cfg(feature = "live-config")]
-        if let Some(live_config) = &self.live_config {
-            live_config.close().await;
-        }
-        #[cfg(feature = "lock")]
-        self.locker.close().await;
-        self.inner
-            .close_by_ref()
-            .await
-            .wrap_err(|| err!(AppErr::StopFailed, "close database connection"))?;
-        tracing::info!("Database connection pool closed");
-        Ok(())
+        Ok(DbLock::mysql(lock))
     }
 }
 
-#[cfg(feature = "live-config")]
-impl_live_config!(SeaOrmMySqlPool);
+// ---- pool -------------------------------------------------------------------
 
-#[cfg(feature = "lock")]
-impl_lock!(SeaOrmMySqlPool);
+/// MySQL 连接（SeaORM），`Deref` 到 `DatabaseConnection`。`uses` 带 1 时按组件名放进 Resources；
+/// 不经过 Registry 用 [`DbResources::from_config`](crate::DbResources::from_config) 建
+#[derive(Clone, Debug)]
+pub struct SeaOrmMySqlPool {
+    inner: DatabaseConnection,
+}
 
 impl std::ops::Deref for SeaOrmMySqlPool {
     type Target = DatabaseConnection;
@@ -136,8 +143,8 @@ impl std::ops::Deref for SeaOrmMySqlPool {
 
 // ---- component --------------------------------------------------------------
 
-/// MySQL 连接组件（SeaORM），按组件名放进 Resources 的是 [`SeaOrmMySqlPool`]。用法见 [`ImmediateResourceComponent`]
-pub type SeaOrmMySqlComponent = ImmediateResourceComponent<SeaOrmMySqlPool>;
+/// MySQL 连接组件（SeaORM），按 `uses` 放进 Resources 的是 [`SeaOrmMySqlPool`]、`DbLiveConfig`、`DbLock`，见 [`DbComponent`]
+pub type SeaOrmMySqlComponent = DbComponent<SeaOrmMySqlConfig>;
 
 #[cfg(test)]
 mod tests {
@@ -145,44 +152,43 @@ mod tests {
 
     use super::*;
 
-    /// 配置模板 `config/seaorm-mysql.toml` 就是代码里的默认值（结构体没有实现 PartialEq，比 Debug 输出）
+    /// 配置模板 `config/seaorm-mysql.toml` 就是代码里的默认值，加上 `uses = 7` 和写出来的各段（结构体没有实现 PartialEq，比 Debug 输出）
     #[cfg(all(feature = "live-config", feature = "lock"))]
     #[test]
     fn template_is_code_defaults() {
         let config: SeaOrmMySqlConfig =
             crate::config::parse_template(include_str!("../../../config/seaorm-mysql.toml"));
-        assert_eq!(
-            format!("{config:?}"),
-            format!("{:?}", SeaOrmMySqlConfig::default())
-        );
+        let full = SeaOrmMySqlConfig {
+            uses: DbUses::try_from(7).unwrap(),
+            pool: Some(Default::default()),
+            log: Some(Default::default()),
+            live_config: Some(Default::default()),
+            lock: Some(Default::default()),
+            ..Default::default()
+        };
+        assert_eq!(format!("{config:?}"), format!("{full:?}"));
     }
 
-    /// 按组件名提供连接池，匿名的名字是 `""`
+    /// 按 `uses` 提供资源：业务池、动态配置按组件名，锁匿名
     #[test]
-    fn provides_named_pool() {
-        use hygiea_core::app::{Component, Name, ResourceId};
-
-        let named =
-            SeaOrmMySqlComponent::build(Name::from("primary"), SeaOrmMySqlConfig::default());
-        assert_eq!(
-            named.provides(),
-            vec![ResourceId::named::<SeaOrmMySqlPool>("primary")]
-        );
-        let anonymous = SeaOrmMySqlComponent::build(Name::from(""), SeaOrmMySqlConfig::default());
-        assert_eq!(
-            anonymous.provides(),
-            vec![ResourceId::of::<SeaOrmMySqlPool>()]
-        );
+    fn provides_by_uses() {
+        crate::component::check_provides(SeaOrmMySqlConfig::default(), |uses| SeaOrmMySqlConfig {
+            uses,
+            ..Default::default()
+        });
     }
 
     /// 池参数不写时用 MySQL 的默认值，写了的按写的
     #[test]
     fn pool_options_applied() {
+        let config = SeaOrmMySqlConfig::default();
+        let options = config.connect_options(&RegistryConfig::default()).unwrap();
+        assert_eq!(options.get_max_connections(), Some(10));
         let config = SeaOrmMySqlConfig {
-            pool: PoolConfig {
+            pool: Some(PoolConfig {
                 max_connections: Some(3),
                 ..Default::default()
-            },
+            }),
             ..Default::default()
         };
         let options = config.connect_options(&RegistryConfig::default()).unwrap();

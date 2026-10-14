@@ -1,6 +1,6 @@
 //! 动态配置的 sqlx 实现，一种数据库一个文件（`postgres.rs`、`sqlite.rs`、`mysql.rs`），这里的 [`SqlxStore`] 只做分发和转错误；
-//! worker 和上层的 `mod.rs` 不碰 sqlx。SQL 在 `sql/<数据库>/live_config.*`。sqlx、SeaORM 的连接池共用
-//! （SeaORM 交出它底下的连接参数）
+//! worker 和上层的 `mod.rs` 不碰 sqlx。SQL 在 `sql/<数据库>/live_config.*`。sqlx、SeaORM 的连接池组件共用
+//! （小池按组件配置里的 `[db.connect]` 直接用 sqlx 建，和组件用哪个框架无关）
 //!
 //! [`Store`] 持有一个独立小池：连接参数和主池一样（库、search_path、SQLite 的打开方式），池参数固定——
 //! 最多 1 条、不空闲回收、不到期替换、拿之前先检查，只有 acquire 超时跟主池走。不占主池的名额，

@@ -1,12 +1,19 @@
 # SqlxSqliteConfig（hygiea::db，feature db-sqlx + db-sqlite；live_config 段要再开 db-live-config）的配置模板
 #
-# 列出全部配置项：生效的值等于代码默认值，默认不启用的可选项写成注释。复制到自己项目的 config/<env>.toml，
+# 列出全部配置项：除了 uses（模板写的是全开，代码默认是 1），生效的值等于代码默认值，默认不启用的可选项写成注释。复制到自己项目的 config/<env>.toml，
 # 删掉用不到的项、改需要改的值；只需要写和默认值不同的项。互斥的写法（二选一）都在这里，注释里写明了怎么切换。
 # 段名 [db] 是应用配置结构体里这个字段的名字（`struct AppConfig { db: SqlxSqliteConfig, .. }`），按自己的改。
 # 通用规则（写错的配置项启动报错、配置来源的覆盖顺序、环境变量写法）见 hygiea 的 README「配置」。
 # 连哪个库和打开方式在 connect 段（SqliteConnectConfig），池在 pool 段（PoolConfig）
 #
 # 本文件由连接池源文件里的单元测试（template_is_code_defaults）按 SqlxSqliteConfig 解析校验，改了配置结构体要同步改这里。
+
+[db]
+# 这个组件提供什么，按位加：1 业务池、2 动态配置（feature db-live-config）。SQLite 没有锁，不能带 4。不写是 1。
+# 模板写的是 3（全部），下面各段都能写；没带的位对应的段要删掉，写了启动报错：
+# 没带 1 时删 [db.pool]（没有业务池，动态配置连 [db.connect]，也不能写 [db.live_config.connect]），
+# 没带 2 时删 [db.live_config]
+uses = 3
 
 [db.connect]
 # 数据库文件路径；":memory:" 是内存库（进程退出数据就没了）
@@ -31,7 +38,7 @@ busy_timeout_millis = 5000
 statement_cache_capacity = 100
 
 [db.pool]
-# 连接池。数字项不写时用默认值（注释里的值）
+# 业务池（uses 带 1 时才能写）。数字项不写时用默认值（注释里的值）
 # max_connections = 4
 # min_connections = 1
 # 从连接池拿连接最多等多久（秒），拿不到就报错
@@ -46,9 +53,8 @@ test_before_acquire = true
 connect_lazy = false
 
 [db.live_config]
-# 连接池的数据库配置表（动态配置，feature db-live-config）。默认不开，要用的连接池写 true。
+# 数据库配置表（动态配置，feature db-live-config，uses 带 2 时才能写）。
 # 表名前缀见下面的 table_prefix，见 docs/design/live-config.md
-enabled = false
 # 对一遍版本号的间隔（秒）。不写：PostgreSQL 60（兜底，变更靠 NOTIFY 推过来），SQLite 1（主要靠它）
 # poll_interval_secs = 60
 # 变更历史表（{前缀}config_history）只留最新的多少行、隔多少分钟清一次（后台任务启动时先清一次）。
@@ -60,5 +66,5 @@ enabled = false
 # table_prefix = "foo"
 
 [db.live_config.connect]
-# 动态配置单独连的库（独立小池，固定 1 条连接）。各项都可以不写，不写的沿用 [db.connect]，只写不一样的，比如：
+# 动态配置单独连的库（独立小池，固定 1 条连接，uses 带 1 时才能写）。各项都可以不写，不写的沿用 [db.connect]，只写不一样的，比如：
 # database = "config.db"

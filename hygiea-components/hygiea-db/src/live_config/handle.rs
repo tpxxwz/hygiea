@@ -41,7 +41,7 @@ impl<T> LiveConfig<T> {
         }
     }
 
-    /// 固定值、不连库的句柄：业务的单元测试里用它代替 `live_config` / `live_config_all` 绑出来的，
+    /// 固定值、不连库的句柄：业务的单元测试里用它代替 `DbLiveConfig` 的 `bind` / `bind_all` 绑出来的，
     /// `get()`、`view()` 照常用，值不会变，`changed()` 一直等不到
     ///
     /// ```ignore
@@ -76,7 +76,7 @@ impl<T: Send + Sync + 'static> LiveConfig<T> {
     /// 从整份配置里指向其中一块（比如 `bind_all` 的一个 namespace），交给只用这一块的地方：
     ///
     /// ```ignore
-    /// let runtime = pool.live_config_all(RuntimeConfig::default()).await?;
+    /// let runtime = source.bind_all(RuntimeConfig::default()).await?;
     /// let markji = MarkjiService::new(runtime.view(|c| &c.markji_sync));   // LiveView<MarkjiSync>
     /// // MarkjiService 里：self.config.get().auto_sync
     /// ```

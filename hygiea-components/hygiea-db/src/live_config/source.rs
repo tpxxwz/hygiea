@@ -11,43 +11,17 @@ use serde_json::{Map, Value};
 use tokio::sync::{OnceCell, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
-use hygiea_core::app::{AppErr, CancellationToken, RegistryConfig};
+use hygiea_core::app::{AppErr, CancellationToken};
 use hygiea_core::{BaseErr, Result, ResultExt, ensure, err};
 
 use super::Backend;
 use super::LiveConfigConfig;
 use super::Store;
 use super::handle::LiveConfig;
-use super::schema::Tables;
 use super::worker::{Binding, Command, Effective, HistoryRetention, NsState, Worker};
 use crate::RepoErr;
-use crate::sql::table_prefix;
 
-/// 连接池上的动态配置，没开（`enabled = false`）报 [`RepoErr::LiveConfigDisabled`]
-pub(crate) fn live_config_source(source: &Option<LiveConfigSource>) -> Result<&LiveConfigSource> {
-    source
-        .as_ref()
-        .ok_or_else(|| err!(RepoErr::LiveConfigDisabled))
-}
-
-/// 连接池建好时调用：配置里开了才建（只校验配置、不连库），没开是 `None`
-pub(crate) fn live_config_source_for<C>(
-    store: impl FnOnce(Tables) -> Result<Store>,
-    config: &LiveConfigConfig<C>,
-    registry_config: &RegistryConfig,
-) -> Result<Option<LiveConfigSource>> {
-    if !config.enabled {
-        return Ok(None);
-    }
-    let prefix = table_prefix(
-        config.table_prefix.as_deref(),
-        &registry_config.app_name,
-        "live config",
-    )?;
-    LiveConfigSource::new(store(Tables::new(prefix))?, config).map(Some)
-}
-
-/// 一个连接池的动态配置：后台任务、小池都在这里。连接池持有它，对外的方法见 [`impl_live_config`]。
+/// 一个动态配置源：后台任务、小池都在这里。[`DbLiveConfig`](super::DbLiveConfig) 持有它。
 /// `Clone` 后共用同一个后台任务
 #[derive(Clone)]
 pub(crate) struct LiveConfigSource {
@@ -81,7 +55,7 @@ impl std::fmt::Debug for LiveConfigSource {
 
 impl LiveConfigSource {
     /// 只校验配置，不连库（小池第一次用时才连）
-    fn new<C>(store: Store, config: &LiveConfigConfig<C>) -> Result<Self> {
+    pub(super) fn new<C>(store: Store, config: &LiveConfigConfig<C>) -> Result<Self> {
         // 有推送（PG 的 LISTEN）的轮询只是兜底；没有的（SQLite）主要靠它
         let backend = store.backend();
         let poll_interval_secs =
@@ -107,7 +81,7 @@ impl LiveConfigSource {
         })
     }
 
-    /// 连接池关闭时调用：后台任务退出、小池关掉，之后 bind 报 [`RepoErr::LiveConfigClosed`]
+    /// 组件关闭时调用：后台任务退出、小池关掉，之后 bind 报 [`RepoErr::LiveConfigClosed`]
     pub(crate) async fn close(&self) {
         self.inner.shutdown.cancel();
         let handle = self

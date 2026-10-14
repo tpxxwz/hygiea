@@ -103,6 +103,10 @@ impl LockType {
 /// 模板有多个变量时，变量的值里不要带模板里的分隔符：模板 `{{ a }}:{{ b }}` 下 `a = "x:y", b = "z"` 和
 /// `a = "x", b = "y:z"` 渲染出来一样，是同一把锁。传 id、日期、数字不会有这个问题。
 ///
+/// **key 要尽量短**：后端可以限制 key 的长度，超长的 key 加锁时返回 [`LockErr::InvalidKey`](super::LockErr::InvalidKey)，
+/// 不截断、不哈希，也不发给后端。开头的 `<9 位编号>:` 固定占 10 个字符，留给模板渲染结果的只有余下的部分；
+/// 上限各后端不同，见所用后端的文档。变量的值长度不固定（名字、路径这类）时，按最长的情况算
+///
 /// 模板渲染失败（`{ .. }` 写法里 key 用了表达式，编译期查不了，运行时缺变量）时 [`as_str`](Self::as_str) 返回错误
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct LockKey(pub(super) std::result::Result<String, String>);

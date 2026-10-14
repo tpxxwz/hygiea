@@ -1,67 +1,59 @@
-//! SQLite 连接池组件（sqlx），feature `sqlx` + `sqlite`
+//! SQLite 连接池组件（sqlx），feature `sqlx` + `sqlite`。SQLite 没有锁的实现，`uses` 只能带 1、2
 
 use serde::Deserialize;
 use sqlx::SqlitePool;
 
-use hygiea_core::app::{
-    AppErr, ConfigResource, ImmediateResourceComponent, RegistryConfig, async_trait,
-};
+use hygiea_core::app::{AppErr, RegistryConfig, async_trait};
 use hygiea_core::{Result, ResultExt, err};
 
+use crate::component::{DbComponent, DbConfig, DbUses, Sections};
 use crate::config::{PoolConfig, SQLITE_POOL_SIZE, SqliteConnectConfig};
 #[cfg(feature = "live-config")]
-use crate::live_config::{
-    LiveConfigSource, SqliteLiveConfigConfig, Store, impl_live_config, live_config_source_for,
-};
+use crate::live_config::{DbLiveConfig, SqliteLiveConfigConfig, Store};
 
 // ---- config -----------------------------------------------------------------
 
-/// 配置文件里是 `[db.connect]`、`[db.pool]`（还有开了 feature 才有的 `[db.live_config]`），各段不写用默认值
+/// 配置文件里是 `[db]` 的 `uses`，加上 `[db.connect]`、`[db.pool]`（还有开了 feature 才有的 `[db.live_config]`）。
+/// `uses` 决定提供什么、哪些段能写，见 [`DbUses`]；能写的段不写用默认值
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SqlxSqliteConfig {
+    /// 提供什么：1 业务池、2 动态配置，按位加，不写是 1。SQLite 没有锁，带 4 启动报错
+    pub uses: DbUses,
     pub connect: SqliteConnectConfig,
-    pub pool: PoolConfig,
-    /// 动态配置另开一条连接，`:memory:` 库（不共享缓存时）连到的是另一个空库，用不了
+    /// 业务池的参数，`uses` 带 1 时才能写
+    pub pool: Option<PoolConfig>,
+    /// 动态配置，`uses` 带 2 时才能写。动态配置另开一条连接，`:memory:` 库（不共享缓存时）连到的是另一个空库，用不了
     #[cfg(feature = "live-config")]
-    pub live_config: SqliteLiveConfigConfig,
-}
-
-// ---- pool -------------------------------------------------------------------
-
-/// SQLite 连接池，`Deref` 到 sqlx 的 `SqlitePool`。用 [`ConfigResource::from_config`] 建，不经过 Registry 也能用
-#[derive(Clone, Debug)]
-pub struct SqlxSqlitePool {
-    inner: SqlitePool,
-    #[cfg(feature = "live-config")]
-    /// 配置里没开是 `None`
-    live_config: Option<LiveConfigSource>,
+    pub live_config: Option<SqliteLiveConfigConfig>,
 }
 
 #[async_trait]
-impl ConfigResource for SqlxSqlitePool {
-    type Config = SqlxSqliteConfig;
+impl DbConfig for SqlxSqliteConfig {
+    type Pool = SqlxSqlitePool;
+    const LOCK: bool = false;
 
-    async fn from_config(
-        config: &SqlxSqliteConfig,
-        registry_config: &RegistryConfig,
-    ) -> Result<Self> {
-        // SQLite 没有连接名，应用名只有动态配置拿来当表名前缀
-        #[cfg(not(feature = "live-config"))]
-        let _ = registry_config;
-        tracing::info!("Connecting to SQLite database: {}", config.connect.database);
-        let connect_options = config.connect.sqlx_options()?;
-        #[cfg(feature = "live-config")]
-        let live_config = live_config_source_for(
-            |tables| {
-                let connect = config.live_config.connect.merge(&config.connect);
-                Ok(Store::sqlite(connect.sqlx_options()?, &config.pool, tables))
-            },
-            &config.live_config,
-            registry_config,
-        )?;
-        let pool_options = config.pool.sqlx::<sqlx::Sqlite>(SQLITE_POOL_SIZE);
-        let pool = if config.pool.connect_lazy {
+    fn sections(&self) -> Sections {
+        Sections {
+            uses: self.uses,
+            pool: self.pool.iter().map(|_| "pool").collect(),
+            #[cfg(feature = "live-config")]
+            live_config: self.live_config.is_some(),
+            #[cfg(feature = "live-config")]
+            live_config_connect: self
+                .live_config
+                .as_ref()
+                .is_some_and(|c| !c.connect.is_empty()),
+            ..Default::default()
+        }
+    }
+
+    async fn connect(&self, _registry_config: &RegistryConfig) -> Result<SqlxSqlitePool> {
+        tracing::info!("Connecting to SQLite database: {}", self.connect.database);
+        let connect_options = self.connect.sqlx_options()?;
+        let pool = self.pool.clone().unwrap_or_default();
+        let pool_options = pool.sqlx::<sqlx::Sqlite>(SQLITE_POOL_SIZE);
+        let inner = if pool.connect_lazy {
             pool_options.connect_lazy_with(connect_options)
         } else {
             pool_options
@@ -70,32 +62,45 @@ impl ConfigResource for SqlxSqlitePool {
                 .wrap_err(|| {
                     err!(
                         AppErr::ConnectFailed,
-                        format!("sqlite {}", config.connect.database)
+                        format!("sqlite {}", self.connect.database)
                     )
                 })?
         };
         tracing::info!("SQLite database connection established");
-        Ok(Self {
-            inner: pool,
-            #[cfg(feature = "live-config")]
-            live_config,
-        })
+        Ok(SqlxSqlitePool { inner })
     }
 
-    /// 不再发新连接，等借出去的连接还回来（在途查询跑完）后全部关掉；动态配置的后台任务也退出
-    async fn close(&self) -> Result<()> {
-        #[cfg(feature = "live-config")]
-        if let Some(live_config) = &self.live_config {
-            live_config.close().await;
-        }
-        self.inner.close().await;
+    /// 不再发新连接，等借出去的连接还回来（在途查询跑完）后全部关掉
+    async fn close(pool: &SqlxSqlitePool) -> Result<()> {
+        pool.inner.close().await;
         tracing::info!("SQLite connection pool closed");
         Ok(())
     }
+
+    /// SQLite 没有连接名，应用名只拿来当表名前缀
+    #[cfg(feature = "live-config")]
+    fn live_config(&self, registry_config: &RegistryConfig) -> Result<DbLiveConfig> {
+        let config = self.live_config.clone().unwrap_or_default();
+        let pool = self.pool.clone().unwrap_or_default();
+        DbLiveConfig::new(
+            |tables| {
+                let connect = config.connect.merge(&self.connect);
+                Ok(Store::sqlite(connect.sqlx_options()?, &pool, tables))
+            },
+            &config,
+            registry_config,
+        )
+    }
 }
 
-#[cfg(feature = "live-config")]
-impl_live_config!(SqlxSqlitePool);
+// ---- pool -------------------------------------------------------------------
+
+/// SQLite 连接池，`Deref` 到 sqlx 的 `SqlitePool`。`uses` 带 1 时按组件名放进 Resources；
+/// 不经过 Registry 用 [`DbResources::from_config`](crate::DbResources::from_config) 建
+#[derive(Clone, Debug)]
+pub struct SqlxSqlitePool {
+    inner: SqlitePool,
+}
 
 impl std::ops::Deref for SqlxSqlitePool {
     type Target = SqlitePool;
@@ -107,54 +112,56 @@ impl std::ops::Deref for SqlxSqlitePool {
 
 // ---- component --------------------------------------------------------------
 
-/// SQLite 连接池组件（sqlx），按组件名放进 Resources 的是 [`SqlxSqlitePool`]。用法见 [`ImmediateResourceComponent`]
-pub type SqlxSqliteComponent = ImmediateResourceComponent<SqlxSqlitePool>;
+/// SQLite 连接池组件（sqlx），按 `uses` 放进 Resources 的是 [`SqlxSqlitePool`]、`DbLiveConfig`，见 [`DbComponent`]
+pub type SqlxSqliteComponent = DbComponent<SqlxSqliteConfig>;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// 配置模板 `config/sqlx-sqlite.toml` 就是代码里的默认值（结构体没有实现 PartialEq，比 Debug 输出）
+    /// 配置模板 `config/sqlx-sqlite.toml` 就是代码里的默认值，加上 `uses = 3` 和写出来的各段（结构体没有实现 PartialEq，比 Debug 输出）
     #[cfg(feature = "live-config")]
     #[test]
     fn template_is_code_defaults() {
         let config: SqlxSqliteConfig =
             crate::config::parse_template(include_str!("../../../config/sqlx-sqlite.toml"));
-        assert_eq!(
-            format!("{config:?}"),
-            format!("{:?}", SqlxSqliteConfig::default())
-        );
+        let full = SqlxSqliteConfig {
+            uses: DbUses::try_from(3).unwrap(),
+            pool: Some(Default::default()),
+            live_config: Some(Default::default()),
+            ..Default::default()
+        };
+        assert_eq!(format!("{config:?}"), format!("{full:?}"));
     }
 
-    /// 按组件名提供连接池，匿名的名字是 `""`
+    /// 按 `uses` 提供资源：业务池、动态配置按组件名
     #[test]
-    fn provides_named_pool() {
-        use hygiea_core::app::{Component, Name, ResourceId};
+    fn provides_by_uses() {
+        crate::component::check_provides(SqlxSqliteConfig::default(), |uses| SqlxSqliteConfig {
+            uses,
+            ..Default::default()
+        });
+    }
 
-        let named = SqlxSqliteComponent::build(Name::from("primary"), SqlxSqliteConfig::default());
-        assert_eq!(
-            named.provides(),
-            vec![ResourceId::named::<SqlxSqlitePool>("primary")]
-        );
-        let anonymous = SqlxSqliteComponent::build(Name::from(""), SqlxSqliteConfig::default());
-        assert_eq!(
-            anonymous.provides(),
-            vec![ResourceId::of::<SqlxSqlitePool>()]
-        );
+    /// 建业务池，不经过 Registry
+    async fn open(config: &SqlxSqliteConfig) -> Result<SqlxSqlitePool> {
+        let db = crate::DbResources::from_config(config, &Default::default()).await?;
+        Ok(db.pool.unwrap())
     }
 
     fn memory(max_connections: u32) -> SqlxSqliteConfig {
         let mut config = SqlxSqliteConfig::default();
         config.connect.database = ":memory:".to_string();
-        config.pool.max_connections = Some(max_connections);
+        config.pool = Some(PoolConfig {
+            max_connections: Some(max_connections),
+            ..Default::default()
+        });
         config
     }
 
     #[tokio::test]
     async fn connect_and_query_memory_database() {
-        let pool = SqlxSqlitePool::from_config(&memory(1), &Default::default())
-            .await
-            .unwrap();
+        let pool = open(&memory(1)).await.unwrap();
 
         sqlx::query("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
             .execute(&*pool)
@@ -181,9 +188,7 @@ mod tests {
         config.connect.synchronous = Some("normal".to_string());
         config.connect.busy_timeout_millis = Some(2_500);
         config.connect.statement_cache_capacity = Some(64);
-        let pool = SqlxSqlitePool::from_config(&config, &Default::default())
-            .await
-            .unwrap();
+        let pool = open(&config).await.unwrap();
 
         let journal_mode: String = sqlx::query_scalar("PRAGMA journal_mode")
             .fetch_one(&*pool)
@@ -215,9 +220,7 @@ mod tests {
             },
             ..Default::default()
         };
-        SqlxSqlitePool::from_config(&config, &Default::default())
-            .await
-            .unwrap();
+        open(&config).await.unwrap();
         assert!(path.exists());
     }
 
@@ -234,11 +237,7 @@ mod tests {
             },
             ..Default::default()
         };
-        assert!(
-            SqlxSqlitePool::from_config(&config, &Default::default())
-                .await
-                .is_err()
-        );
+        assert!(open(&config).await.is_err());
         assert!(!path.exists());
     }
 }

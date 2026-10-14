@@ -1,5 +1,5 @@
-//! PostgreSQL 锁的 sqlx 实现（规则在 [`super::super::table`]，SQL 在 `sql/postgres/lock.rs`）。`SqlxPgPool`、`SeaOrmPgPool` 共用：
-//! SeaORM 交出它底下的 sqlx 池
+//! PostgreSQL 锁的 sqlx 实现（规则在 [`super::super::table`]，SQL 在 `sql/postgres/lock.rs`）。sqlx、SeaORM 的 PG 连接池组件共用：
+//! 和业务池共用连接时 SeaORM 交出它底下的 sqlx 池
 
 use std::time::Duration;
 
@@ -29,12 +29,12 @@ use crate::sql::table_prefix;
 #[cfg(sqlx_lock_row)]
 use crate::sqlx::internal::postgres::columns;
 
-/// 连接池上锁的实现，`SqlxPgPool`、`SeaOrmPgPool` 各持有一个，对外的方法见 [`impl_lock`]
+/// PG 的锁，[`DbLock`](super::super::DbLock) 里放的就是它
 #[derive(Clone, Debug)]
 pub(crate) struct PgLock {
-    /// 连接池本身的 sqlx 池，或者按 `[db.lock]` 单独建的池
+    /// 业务池的 sqlx 池，或者单独建的池
     pool: PgPool,
-    /// `pool` 是单独建的：连接池关闭时一起关
+    /// `pool` 是单独建的：组件关闭时一起关
     own_pool: bool,
     #[cfg(sqlx_lock_row)]
     table: LockTable,
@@ -44,47 +44,59 @@ pub(crate) struct PgLock {
 }
 
 impl PgLock {
-    /// `main` 是连接池本身的 sqlx 池，`connect`、`pool` 是它的配置。`[db.lock]` 的 `connect`、`max_connections` 都没写时
-    /// 用 `main`；写了就单独建池（见 [`own_pool`]），连接池是 `connect_lazy` 时它也不连，否则连上确认能用。
-    /// 锁表在 [`prepare`](Self::prepare) 里建
+    /// `main` 是业务池的 sqlx 池（`uses` 带 1 时有），`connect`、`pool` 是组件的配置（`pool` 没写是 `None`，用默认值），
+    /// `config` 是 `[lock]` 段（没写是 `None`）。有 `main`、`[lock]` 的 `connect`、`max_connections` 都没写时和业务池共用；
+    /// 否则单独建池（见 [`own_pool`]）。不是 `connect_lazy` 时连上确认能用，开了 `lock-row` 的再检查、建锁表
     pub(crate) async fn new(
-        main: &PgPool,
+        main: Option<&PgPool>,
         connect: &PgConnectConfig,
-        pool: &PoolConfig,
-        config: &PgLockConfig,
+        pool: Option<&PoolConfig>,
+        config: Option<&PgLockConfig>,
         registry_config: &RegistryConfig,
     ) -> Result<Self> {
+        let config = config.cloned().unwrap_or_default();
+        let pool = pool.cloned().unwrap_or_default();
         #[cfg(sqlx_lock_row)]
         let table = LockTable::new(table_prefix(
             config.table_prefix.as_deref(),
             &registry_config.app_name,
             "lock table",
         )?);
-        let own = !config.connect.is_empty() || config.max_connections.is_some();
-        let lock_pool = if own {
-            own_pool(connect, pool, config, registry_config).await?
-        } else {
-            main.clone()
+        let (lock_pool, own) = match main {
+            Some(main) if config.connect.is_empty() && config.max_connections.is_none() => {
+                (main.clone(), false)
+            }
+            _ => (
+                own_pool(connect, &pool, &config, registry_config).await?,
+                true,
+            ),
         };
-        Ok(Self {
+        let lock = Self {
             pool: lock_pool,
             own_pool: own,
             #[cfg(sqlx_lock_row)]
             table,
             #[cfg(sqlx_lock_row)]
             table_ready: Default::default(),
-        })
+        };
+        if !pool.connect_lazy
+            && let Err(e) = lock.prepare().await
+        {
+            lock.close().await;
+            return Err(e);
+        }
+        Ok(lock)
     }
 
-    /// 连接池关闭时调用：单独建的池等借出去的连接（持有中的锁）还回来后关掉；用连接池本身的什么都不做
+    /// 组件关闭时调用：单独建的池等借出去的连接（持有中的锁）还回来后关掉；和业务池共用的什么都不做
     pub(crate) async fn close(&self) {
         if self.own_pool {
             self.pool.close().await;
         }
     }
 
-    /// 启动时调用：开了 `lock-row` 就检查、建锁表
-    pub(crate) async fn prepare(&self) -> Result<()> {
+    /// 建的时候调用：开了 `lock-row` 就检查、建锁表
+    async fn prepare(&self) -> Result<()> {
         #[cfg(sqlx_lock_row)]
         self.ensure_table().await?;
         Ok(())
@@ -216,7 +228,7 @@ impl PgLock {
 }
 
 /// 锁单独用的池：连接参数是 `[db.lock.connect]` 盖到连接池的 `[db.connect]` 上，`application_name` 是 `<应用名>-lock`
-/// （`pg_stat_activity` 里认得出来）。池参数只有 `max_connections` 能配（不写沿用连接池的），其余固定：
+/// （`pg_stat_activity` 里认得出来）。池参数只有 `max_connections` 能配（不写沿用 `[pool]` 的，没写 `[pool]` 是默认值），其余固定：
 /// 不预先建连接、空闲 10 分钟回收、最长存活 30 分钟、拿之前先检查，acquire 超时跟连接池走。
 /// 空闲回收、到期替换只作用于还回池里的连接，持有中的锁那条连接不会被断开
 async fn own_pool(

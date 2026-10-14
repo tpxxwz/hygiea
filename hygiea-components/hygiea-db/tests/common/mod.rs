@@ -5,8 +5,88 @@
 use std::future::Future;
 use std::time::Duration;
 
+use hygiea_core::app::RegistryConfig;
 #[cfg(feature = "lock")]
 use hygiea_core::lock::{DistributedLock, LockKey};
+use hygiea_db::{DbConfig, DbResources, DbUses};
+
+// ---- 建资源：不经过 Registry，用 DbResources ------------------------------------------
+
+/// 写 `uses` 的数字
+pub fn uses(bits: u8) -> DbUses {
+    DbUses::try_from(bits).unwrap()
+}
+
+/// 按配置的 `uses` 建出资源
+pub async fn open<C: DbConfig>(config: &C, app: &RegistryConfig) -> DbResources<C> {
+    DbResources::from_config(config, app).await.unwrap()
+}
+
+/// 只要业务池（配置的 `uses` 带 1）
+pub async fn open_pool<C: DbConfig>(config: &C, app: &RegistryConfig) -> C::Pool {
+    open(config, app).await.pool.unwrap()
+}
+
+/// 锁的测试里的一个实例：`uses` 带 4 建出来的资源，方法直接是锁的（`Deref` 到 `DbLock`），查询用 [`pool`](Self::pool)
+#[cfg(all(feature = "lock", any(feature = "postgres", feature = "mysql")))]
+#[derive(Clone)]
+pub struct LockInst<C: DbConfig>(pub DbResources<C>);
+
+#[cfg(all(feature = "lock", any(feature = "postgres", feature = "mysql")))]
+impl<C: DbConfig> LockInst<C> {
+    pub async fn open(config: &C, app: &RegistryConfig) -> Self {
+        Self(open(config, app).await)
+    }
+
+    /// 业务池（`uses` 带 1）
+    pub fn pool(&self) -> &C::Pool {
+        self.0.pool.as_ref().unwrap()
+    }
+
+    pub async fn close(&self) -> hygiea_core::Result<()> {
+        self.0.close().await
+    }
+}
+
+#[cfg(all(feature = "lock", any(feature = "postgres", feature = "mysql")))]
+impl<C: DbConfig> std::ops::Deref for LockInst<C> {
+    type Target = hygiea_db::DbLock;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.lock.as_ref().unwrap()
+    }
+}
+
+/// 动态配置的测试里的一个源：`uses` 带 2 建出来的资源，方法直接是动态配置的（`Deref` 到 `DbLiveConfig`），
+/// 查询用 [`pool`](Self::pool)
+#[cfg(feature = "live-config")]
+#[derive(Clone)]
+pub struct LiveInst<C: DbConfig>(pub DbResources<C>);
+
+#[cfg(feature = "live-config")]
+impl<C: DbConfig> LiveInst<C> {
+    pub async fn open(config: &C, app: &RegistryConfig) -> Self {
+        Self(open(config, app).await)
+    }
+
+    /// 业务池（`uses` 带 1）
+    pub fn pool(&self) -> &C::Pool {
+        self.0.pool.as_ref().unwrap()
+    }
+
+    pub async fn close(&self) -> hygiea_core::Result<()> {
+        self.0.close().await
+    }
+}
+
+#[cfg(feature = "live-config")]
+impl<C: DbConfig> std::ops::Deref for LiveInst<C> {
+    type Target = hygiea_db::DbLiveConfig;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.live_config.as_ref().unwrap()
+    }
+}
 
 /// 条件在 `secs` 秒内成立
 pub async fn eventually<F, Fut>(secs: u64, mut check: F)

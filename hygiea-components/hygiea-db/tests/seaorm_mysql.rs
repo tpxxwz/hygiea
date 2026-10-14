@@ -16,8 +16,8 @@ mod common;
 
 use std::time::Duration;
 
-use common::eventually;
-use hygiea_core::app::{ConfigResource, RegistryConfig};
+use common::{LiveInst, LockInst, eventually, uses};
+use hygiea_core::app::RegistryConfig;
 use hygiea_core::lock::{hy_lock_key, lock_key};
 use hygiea_db::{MySqlConnectConfig, SeaOrmMySqlConfig, SeaOrmMySqlPool};
 use hygiea_test::container;
@@ -63,8 +63,10 @@ fn app() -> RegistryConfig {
     }
 }
 
+/// 业务池加锁（`uses = 5`）
 fn config(server: &RunningContainer) -> SeaOrmMySqlConfig {
     SeaOrmMySqlConfig {
+        uses: uses(5),
         connect: MySqlConnectConfig {
             host: server.host().to_string(),
             port: server.port(PORT),
@@ -76,10 +78,9 @@ fn config(server: &RunningContainer) -> SeaOrmMySqlConfig {
     }
 }
 
-async fn pool(server: &RunningContainer) -> SeaOrmMySqlPool {
-    SeaOrmMySqlPool::from_config(&config(server), &app())
-        .await
-        .unwrap()
+/// 一个实例：业务池加锁
+async fn pool(server: &RunningContainer) -> LockInst<SeaOrmMySqlConfig> {
+    LockInst::open(&config(server), &app()).await
 }
 
 /// 连接池本身：经 Registry 启动、实体里的 HyUtcDateTime、seaorm::transaction
@@ -190,7 +191,7 @@ mod pool {
     }
 }
 
-/// 锁：用 SeaORM 底下的 sqlx 池
+/// 锁：和业务池共用时用 SeaORM 底下的 sqlx 池
 #[container]
 mod lock {
     use hygiea_core::lock::DistributedLock;
@@ -225,7 +226,7 @@ mod lock {
     }
 }
 
-/// 动态配置：SeaORM 连接池交出连接参数，另开小池，只靠轮询
+/// 动态配置：用 `[db.connect]` 另开小池，只靠轮询
 #[container]
 mod live_config {
     use hygiea_db::MySqlLiveConfigConfig;
@@ -236,15 +237,16 @@ mod live_config {
     async fn update_is_polled() {
         let server = start().await;
         let mut config = config(&server);
-        config.live_config = MySqlLiveConfigConfig {
-            enabled: true,
+        config.uses = uses(3);
+        config.live_config = Some(MySqlLiveConfigConfig {
             poll_interval_secs: Some(1),
             ..Default::default()
-        };
-        let pool = SeaOrmMySqlPool::from_config(&config, &app()).await.unwrap();
-        let cache = pool.live_config("cache", Cache::default()).await.unwrap();
+        });
+        let pool = LiveInst::open(&config, &app()).await;
+        let cache = pool.bind("cache", Cache::default()).await.unwrap();
         assert_eq!(cache.get().ttl_secs, 0);
-        pool.execute_unprepared("UPDATE hy_config SET value = '8' WHERE namespace = 'cache'")
+        pool.pool()
+            .execute_unprepared("UPDATE hy_config SET value = '8' WHERE namespace = 'cache'")
             .await
             .unwrap();
         eventually(5, || async { cache.get().ttl_secs == 8 }).await;

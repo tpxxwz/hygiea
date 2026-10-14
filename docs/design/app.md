@@ -204,17 +204,17 @@ ready.registry_config().app_name          // Deferred::activate
 
 ### ConfigResource / ImmediateResourceComponent
 
-连接池类组件做的事都一样：按配置建出资源、按组件名放进 Resources、关闭时关掉。差别只在怎么建、怎么关，
+Redis 连接池、HTTP 客户端这类组件做的事都一样：按配置建出资源、按组件名放进 Resources、关闭时关掉。差别只在怎么建、怎么关，
 所以资源实现 `ConfigResource`，组件直接用通用的 `ImmediateResourceComponent<R>`：
 
 ```rust
 #[async_trait]
-impl ConfigResource for SqlxPgPool {
-    type Config = SqlxPgConfig;
-    async fn from_config(config: &SqlxPgConfig, registry_config: &RegistryConfig) -> Result<Self> { .. }
+impl ConfigResource for FredRedisPool {
+    type Config = RedisConfig;
+    async fn from_config(config: &RedisConfig, registry_config: &RegistryConfig) -> Result<Self> { .. }
     async fn close(&self) -> Result<()> { .. }
 }
-pub type SqlxPgComponent = ImmediateResourceComponent<SqlxPgPool>;
+pub type RedisComponent = ImmediateResourceComponent<FredRedisPool>;
 ```
 
 `ImmediateResourceComponent<R>`：
@@ -227,9 +227,11 @@ pub type SqlxPgComponent = ImmediateResourceComponent<SqlxPgPool>;
 `from_config` 要第二个参数，是因为它不经过 Registry 也要能调（测试、脚本），这时没有 `Resources`；
 而有的资源在建的时候就要用应用名（PG 连接的 `application_name`、live config 的表前缀）。
 
-不经过 Registry：`SqlxPgPool::from_config(&config, &RegistryConfig::default())`，应用名是默认的 `hygiea`，和经过 Registry 不配时一样。
+不经过 Registry：`FredRedisPool::from_config(&config, &RegistryConfig::default())`，应用名是默认的 `hygiea`，和经过 Registry 不配时一样。
 
-一个配置建多个资源、要跑后台任务、Deferred 组件，照常手写组件。
+一个配置建多个资源、要跑后台任务、Deferred 组件，照常手写组件。数据库组件就是一个配置按 `uses` 建多个资源（业务池、
+`DbLiveConfig`、`DbLock`）：6 种连接池共用一个手写的泛型组件 `DbComponent<C>`，不经过 Registry 用 `DbResources::from_config`
+一次建出全部，规则一样（参数是配置和 `RegistryConfig`）。
 
 ---
 

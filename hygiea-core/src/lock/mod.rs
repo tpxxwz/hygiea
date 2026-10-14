@@ -101,7 +101,8 @@ const POLL_INTERVAL: Duration = Duration::from_millis(100);
 #[async_trait]
 pub trait DistributedLock: Send + Sync {
     /// 字符串 key（[`LockKey`]）加锁，拿不到（被别人占着，包括被自己持有）立即返回 `Ok(None)`；
-    /// 后端出错返回 [`LockErr::AcquireFailed`]
+    /// 后端出错返回 [`LockErr::AcquireFailed`]。后端可以限制 key 的长度，超长返回 [`LockErr::InvalidKey`]，
+    /// 不截断、不发给后端（见 [`LockKey`]）
     async fn try_lock(&self, key: LockKey) -> Result<Option<LockGuard>>;
 
     /// 一个 `i64` 做 key（[`LockKeyI64`]），其余同 [`try_lock`](Self::try_lock)。默认转成字符串 key `999999999:<数字>` 调 `try_lock`

@@ -1,7 +1,8 @@
-//! 连接池的动态配置能力（数据库配置表）：配置存在库里，改了表，运行中的程序自动拿到新值。
+//! 动态配置（数据库配置表）：配置存在库里，改了表，运行中的程序自动拿到新值。
 //!
-//! 1. 第一阶段：SQLite 连接池建好，`live_config.enabled = true` 打开动态配置（SQLite 默认 1 秒轮询一次）
-//! 2. `before_activate`：`pool.live_config_all(..)` 第一次绑定时建表、把默认值写进表（表里已有的 key 不动），
+//! 1. 第一阶段：SQLite 连接池组件 `uses = 3`（1 业务池 + 2 动态配置），建好业务池、把 `DbLiveConfig` 放进 Resources
+//!    （SQLite 默认 1 秒轮询一次）
+//! 2. `before_activate`：`DbLiveConfig::bind_all(..)` 第一次绑定时建表、把默认值写进表（表里已有的 key 不动），
 //!    读出来转成 `RuntimeConfig`，放进 `AppState`
 //! 3. handler 每次 `get()` 拿当前最新的值；另起一个任务等 `changed()`，变了打日志
 //! 4. 改表（这里用 `/admin/config` 接口模拟别的程序、手写 SQL 改表），一个轮询间隔内 handler 看到新值
@@ -34,7 +35,7 @@ use axum::Router;
 use axum::routing::{get, post};
 use hygiea::app::Registry;
 use hygiea::db::{
-    LiveConfig, LiveConfigConfig, SqliteConnectConfig, SqlxSqliteComponent, SqlxSqliteConfig,
+    DbLiveConfig, DbUses, LiveConfig, SqliteConnectConfig, SqlxSqliteComponent, SqlxSqliteConfig,
     SqlxSqlitePool,
 };
 use hygiea::http::{AxumComponent, AxumConfig, arity0_state, arity1_state};
@@ -123,11 +124,8 @@ async fn main() -> Result<()> {
             database: path.display().to_string(),
             ..Default::default()
         },
-        // 动态配置默认不开，要用的连接池写 enabled = true
-        live_config: LiveConfigConfig {
-            enabled: true,
-            ..Default::default()
-        },
+        // 业务池 + 动态配置，配置文件里写 uses = 3；[db.live_config] 段不写用默认值
+        uses: DbUses::try_from(DbUses::POOL | DbUses::LIVE_CONFIG)?,
         ..Default::default()
     };
     let http = AxumConfig {
@@ -149,7 +147,10 @@ async fn main() -> Result<()> {
         .before_activate(move |resources| async move {
             let db = resources.require::<SqlxSqlitePool>()?;
             // 第一次 bind：建表、补默认值、加载；失败的话启动失败
-            let runtime = db.live_config_all(RuntimeConfig::default()).await?;
+            let runtime = resources
+                .require::<DbLiveConfig>()?
+                .bind_all(RuntimeConfig::default())
+                .await?;
             tracing::info!("live config loaded from {}", path.display());
 
             // 配置变了要做点什么（比如定时任务改了时间要重新排期）就等 changed()

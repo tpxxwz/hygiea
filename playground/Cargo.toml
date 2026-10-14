@@ -35,6 +35,8 @@ httpmock = { version = "0.8", features = ["record"] }
 toml = "1"
 rhai = { version = "1.26", features = ["sync", "serde"] }
 serde = { version = "1", features = ["derive"] }
+# tests/tagged_db_config：和 hygiea 的 load_config 一样经 config-rs 加载
+config = "0.15"
 # 脚本里 request.form() 解析 x-www-form-urlencoded，request.text() 按 charset 解码
 form_urlencoded = "1"
 encoding_rs = "0.8"

@@ -1,4 +1,5 @@
-//! 连接池的分布式锁：PG 连接池直接实现 `DistributedLock`，两个连接池模拟两个实例抢同一把锁。
+//! 分布式锁：PG 连接池组件 `uses` 带 4 时放进 Resources 的 `DbLock` 实现 `DistributedLock`。这里不经过 Registry，
+//! 用 `DbResources::from_config` 直接建两份（`uses = 5`：业务池 + 锁，锁和业务池共用连接），模拟两个实例抢同一把锁。
 //!
 //! 1. 注册锁类型（`#[derive(hy_lock_type)]`）和字符串 key 的模板（`#[derive(hy_lock_key)]`），
 //!    编号 = 项目前缀（Cargo.toml 的 `err_code_project_prefix`，这里是 001）+ 模块前缀 + code
@@ -19,8 +20,8 @@
 use std::time::Duration;
 
 use hygiea::Result;
-use hygiea::app::{ConfigResource, RegistryConfig};
-use hygiea::db::{PgConnectConfig, SqlxPgConfig, SqlxPgPool};
+use hygiea::app::RegistryConfig;
+use hygiea::db::{DbLock, DbResources, DbUses, PgConnectConfig, SqlxPgConfig, SqlxPgPool};
 use hygiea::lock::{DistributedLock, LockKeyI64, hy_lock_key, hy_lock_type, lock_key};
 use hygiea_test::container::{ContainerSpec, RunningContainer};
 
@@ -55,9 +56,9 @@ async fn main() -> Result<()> {
         .wait_log_times("database system is ready to accept connections", 2)
         .start()
         .await;
-    // 两个连接池模拟两个实例
-    let a = pool(&server).await?;
-    let b = pool(&server).await?;
+    // 两个实例，各自的锁；a 的业务池用来查锁表
+    let (pool_a, a) = instance(&server).await?;
+    let (_, b) = instance(&server).await?;
 
     // ---- 锁类型 + id ----
     let guard = a.try_lock_i32(OrderLockType::Pay, 42u32).await?;
@@ -111,7 +112,7 @@ async fn main() -> Result<()> {
 
     // 持有中的行没提交，别的会话查不到；释放时回滚，行跟着撤掉，表一直是空的
     let rows: Vec<String> = sqlx::query_scalar("SELECT key FROM example_lock ORDER BY key")
-        .fetch_all(&*a)
+        .fetch_all(&*pool_a)
         .await
         .map_err(|e| hygiea::err!(hygiea::BaseErr::SysErr).with_source(e))?;
     println!("锁表 example_lock 里看得到的行（持有中也是空的）：{rows:?}");
@@ -160,9 +161,10 @@ a 拿锁（哈希成 i64）：{:?}",
     Ok(())
 }
 
-/// 应用名 example：锁表是 example_lock
-async fn pool(server: &RunningContainer) -> Result<SqlxPgPool> {
+/// 一个实例的业务池和锁。应用名 example：锁表是 example_lock
+async fn instance(server: &RunningContainer) -> Result<(SqlxPgPool, DbLock)> {
     let config = SqlxPgConfig {
+        uses: DbUses::try_from(DbUses::POOL | DbUses::LOCK)?,
         connect: PgConnectConfig {
             host: server.host().to_string(),
             port: server.port(PORT),
@@ -175,5 +177,10 @@ async fn pool(server: &RunningContainer) -> Result<SqlxPgPool> {
         app_name: "example".to_string(),
         ..Default::default()
     };
-    SqlxPgPool::from_config(&config, &registry_config).await
+    let db = DbResources::from_config(&config, &registry_config).await?;
+    match (db.pool, db.lock) {
+        (Some(pool), Some(lock)) => Ok((pool, lock)),
+        // uses 带了 1、4，from_config 成功时两样都有
+        _ => Err(hygiea::err!(hygiea::BaseErr::SysErr)),
+    }
 }

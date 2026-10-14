@@ -69,11 +69,11 @@ async fn main() -> Result<()> {
             ..Default::default()
         },
         // 内存库每个连接各是一个库，只留一个连接，建的表 handler 才看得到
-        pool: PoolConfig {
+        pool: Some(PoolConfig {
             max_connections: Some(1),
             min_connections: Some(1),
             ..Default::default()
-        },
+        }),
         ..Default::default()
     };
     let http = AxumConfig {

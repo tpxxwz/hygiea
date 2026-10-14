@@ -15,10 +15,10 @@ mod common;
 
 use std::time::Duration;
 
-use common::eventually;
-use hygiea_core::app::{ConfigResource, RegistryConfig};
+use common::{LiveInst, LockInst, eventually, uses};
+use hygiea_core::app::RegistryConfig;
 use hygiea_core::lock::{DistributedLock, hy_lock_key, hy_lock_type, lock_key};
-use hygiea_db::{MySqlConnectConfig, SqlxMySqlConfig, SqlxMySqlPool};
+use hygiea_db::{MySqlConnectConfig, PoolConfig, SqlxMySqlConfig, SqlxMySqlPool};
 use hygiea_test::container;
 use hygiea_test::container::{ContainerSpec, RunningContainer};
 
@@ -72,18 +72,20 @@ fn app() -> RegistryConfig {
     }
 }
 
+/// 业务池加锁（`uses = 5`），锁和业务池共用连接
 fn config(server: &RunningContainer) -> SqlxMySqlConfig {
     SqlxMySqlConfig {
+        uses: uses(5),
         connect: connect(server),
         ..Default::default()
     }
 }
 
-/// 一个连接池模拟一个实例
-async fn pool(server: &RunningContainer) -> SqlxMySqlPool {
-    SqlxMySqlPool::from_config(&config(server), &app())
-        .await
-        .unwrap()
+type Inst = LockInst<SqlxMySqlConfig>;
+
+/// 一个实例：业务池加锁
+async fn pool(server: &RunningContainer) -> Inst {
+    Inst::open(&config(server), &app()).await
 }
 
 async fn exec(pool: &SqlxMySqlPool, sql: &str) {
@@ -177,7 +179,7 @@ mod pool {
             .unwrap();
         assert_eq!(count, 1, "回滚了");
 
-        pool.close().await.unwrap();
+        pool.close().await;
         let err = sqlx::query("SELECT 1").fetch_one(&*pool).await.unwrap_err();
         assert!(matches!(err, sqlx::Error::PoolClosed), "{err:?}");
     }
@@ -211,7 +213,7 @@ mod lock {
         assert!(a.try_lock_i64(1).await.unwrap().is_none());
         assert!(b.try_lock_i64(2).await.unwrap().is_some());
         guard.release().await.unwrap();
-        assert!(is_free(&a, "i64:1").await);
+        assert!(is_free(a.pool(), "i64:1").await);
         assert!(b.try_lock_i64(1).await.unwrap().is_some());
 
         let pair = a
@@ -303,20 +305,23 @@ mod lock {
         let server = start().await;
         let root = pool(&server).await;
         exec(
-            &root,
+            root.pool(),
             "SET GLOBAL wait_timeout = 2; SET GLOBAL max_execution_time = 300",
         )
         .await;
         // 全局值只对之后建的连接生效
         let mut one = config(&server);
-        one.pool.max_connections = Some(1);
-        let a = SqlxMySqlPool::from_config(&one, &app()).await.unwrap();
+        one.pool = Some(PoolConfig {
+            max_connections: Some(1),
+            ..Default::default()
+        });
+        let a = Inst::open(&one, &app()).await;
         let b = pool(&server).await;
 
         let guard = a.try_lock_i64(1).await.unwrap().unwrap();
         tokio::time::sleep(Duration::from_secs(4)).await;
         assert!(
-            !is_free(&root, "i64:1").await,
+            !is_free(root.pool(), "i64:1").await,
             "持锁的连接空闲 4 秒没被断开"
         );
 
@@ -334,7 +339,7 @@ mod lock {
 
         guard.release().await.unwrap();
         let restored: u64 = sqlx::query_scalar("SELECT @@session.wait_timeout")
-            .fetch_one(&*a)
+            .fetch_one(&**a.pool())
             .await
             .unwrap();
         assert_eq!(restored, 2, "还回池的连接恢复成全局值");
@@ -346,9 +351,12 @@ mod lock {
         let server = start().await;
         let a = pool(&server).await;
         let mut one = config(&server);
-        one.pool.max_connections = Some(1);
-        one.pool.acquire_timeout_secs = Some(2);
-        let b = SqlxMySqlPool::from_config(&one, &app()).await.unwrap();
+        one.pool = Some(PoolConfig {
+            max_connections: Some(1),
+            acquire_timeout_secs: Some(2),
+            ..Default::default()
+        });
+        let b = Inst::open(&one, &app()).await;
         let guard = a.try_lock_i64(1).await.unwrap().unwrap();
 
         let waiting = tokio::time::timeout(
@@ -360,7 +368,7 @@ mod lock {
         assert!(b.try_lock_i64(2).await.unwrap().is_some());
 
         guard.release().await.unwrap();
-        eventually(5, || async { is_free(&a, "i64:1").await }).await;
+        eventually(5, || async { is_free(a.pool(), "i64:1").await }).await;
     }
 
     /// `[db.lock]` 写了 max_connections：锁用单独的池，持锁不占连接池的连接
@@ -368,15 +376,24 @@ mod lock {
     async fn own_pool_does_not_use_main_pool() {
         let server = start().await;
         let mut own = config(&server);
-        own.pool.max_connections = Some(1);
-        own.pool.acquire_timeout_secs = Some(2);
-        own.lock.max_connections = Some(2);
-        let a = SqlxMySqlPool::from_config(&own, &app()).await.unwrap();
+        own.pool = Some(PoolConfig {
+            max_connections: Some(1),
+            acquire_timeout_secs: Some(2),
+            ..Default::default()
+        });
+        own.lock = Some(hygiea_db::MySqlLockConfig {
+            max_connections: Some(2),
+            ..Default::default()
+        });
+        let a = Inst::open(&own, &app()).await;
         let held: Vec<LockGuard> = vec![
             a.try_lock_i64(1).await.unwrap().unwrap(),
             a.try_lock_i64(2).await.unwrap().unwrap(),
         ];
-        let value: i32 = sqlx::query_scalar("SELECT 1").fetch_one(&*a).await.unwrap();
+        let value: i32 = sqlx::query_scalar("SELECT 1")
+            .fetch_one(&**a.pool())
+            .await
+            .unwrap();
         assert_eq!(value, 1, "连接池的唯一一条连接没被锁占着");
         for guard in held {
             guard.release().await.unwrap();
@@ -391,6 +408,8 @@ mod live_config {
     use serde::{Deserialize, Serialize};
 
     use super::*;
+
+    type Source = LiveInst<SqlxMySqlConfig>;
 
     #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
     struct Job {
@@ -429,19 +448,23 @@ mod live_config {
     /// 轮询间隔 1 秒
     fn live_config() -> MySqlLiveConfigConfig {
         MySqlLiveConfigConfig {
-            enabled: true,
             poll_interval_secs: Some(1),
             ..Default::default()
         }
     }
 
-    async fn live_pool(server: &RunningContainer) -> SqlxMySqlPool {
-        let config = SqlxMySqlConfig {
+    /// 业务池加动态配置（`uses = 3`）
+    fn live_config_of(server: &RunningContainer) -> SqlxMySqlConfig {
+        SqlxMySqlConfig {
+            uses: uses(3),
             connect: connect(server),
-            live_config: live_config(),
+            live_config: Some(live_config()),
             ..Default::default()
-        };
-        SqlxMySqlPool::from_config(&config, &app()).await.unwrap()
+        }
+    }
+
+    async fn live_pool(server: &RunningContainer) -> Source {
+        Source::open(&live_config_of(server), &app()).await
     }
 
     /// 第一次 bind 建表、补默认值（类型原样存成 JSON，已有的 key 不动、不记历史）；改值、删 key（退回默认值）
@@ -450,13 +473,13 @@ mod live_config {
     async fn seeds_and_polls_changes() {
         let server = start().await;
         let source = live_pool(&server).await;
-        let all = source.live_config_all(All::default()).await.unwrap();
+        let all = source.bind_all(All::default()).await.unwrap();
         assert_eq!(*all.get(), All::default());
 
         let rows: Vec<(String, String, String)> = sqlx::query_as(
             "SELECT namespace, `key`, CAST(value AS CHAR) FROM hy_config ORDER BY namespace, `key`",
         )
-        .fetch_all(&*source)
+        .fetch_all(&**source.pool())
         .await
         .unwrap();
         let rows: Vec<(&str, &str, &str)> = rows
@@ -474,7 +497,7 @@ mod live_config {
         );
 
         exec(
-            &source,
+            source.pool(),
             "BEGIN; \
              UPDATE hy_config SET value = 'true' WHERE namespace = 'sync' AND `key` = 'enabled'; \
              UPDATE hy_config SET value = '5' WHERE namespace = 'cache' AND `key` = 'ttl_secs'; \
@@ -490,24 +513,24 @@ mod live_config {
         assert_eq!(all.get().sync.levels, vec![1, 2], "删掉的 key 退回默认值");
 
         // 再绑一次同一个 namespace：已有的 key 不动、不记历史，删掉的 key 补回默认值
-        let mut sync = source.live_config("sync", Job::default()).await.unwrap();
+        let mut sync = source.bind("sync", Job::default()).await.unwrap();
         assert!(sync.get().enabled);
         let ops: Vec<String> = sqlx::query_scalar(
             "SELECT op FROM hy_config_history WHERE namespace = 'sync' ORDER BY id",
         )
-        .fetch_all(&*source)
+        .fetch_all(&**source.pool())
         .await
         .unwrap();
         assert_eq!(ops, vec!["I", "I", "I", "U", "D", "I"]);
         let by: String =
             sqlx::query_scalar("SELECT changed_by FROM hy_config_history ORDER BY id DESC LIMIT 1")
-                .fetch_one(&*source)
+                .fetch_one(&**source.pool())
                 .await
                 .unwrap();
         assert!(by.starts_with("root@"), "{by}");
 
         exec(
-            &source,
+            source.pool(),
             "UPDATE hy_config SET value = '\"02:00\"' WHERE namespace = 'sync' AND `key` = 'start_time'",
         )
         .await;
@@ -525,11 +548,7 @@ mod live_config {
         let mut binds = tokio::task::JoinSet::new();
         for _ in 0..4 {
             let pool = live_pool(&server).await;
-            binds.spawn(async move {
-                pool.live_config("cache", Cache::default())
-                    .await
-                    .map(|_| ())
-            });
+            binds.spawn(async move { pool.bind("cache", Cache::default()).await.map(|_| ()) });
         }
         while let Some(result) = binds.join_next().await {
             result.unwrap().unwrap();
@@ -537,16 +556,17 @@ mod live_config {
 
         let config = SqlxMySqlConfig {
             connect: connect(&server),
-            live_config: MySqlLiveConfigConfig {
+            uses: uses(3),
+            live_config: Some(MySqlLiveConfigConfig {
                 table_prefix: Some("custom".to_string()),
                 ..live_config()
-            },
+            }),
             ..Default::default()
         };
-        let custom = SqlxMySqlPool::from_config(&config, &app()).await.unwrap();
-        custom.live_config("cache", Cache::default()).await.unwrap();
+        let custom = Source::open(&config, &app()).await;
+        custom.bind("cache", Cache::default()).await.unwrap();
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM custom_config")
-            .fetch_one(&*custom)
+            .fetch_one(&**custom.pool())
             .await
             .unwrap();
         assert_eq!(count, 1);
@@ -558,44 +578,39 @@ mod live_config {
         let server = start().await;
         let other = pool(&server).await;
         exec(
-            &other,
+            other.pool(),
             "CREATE TABLE bad_config (namespace INT PRIMARY KEY)",
         )
         .await;
         let config = SqlxMySqlConfig {
             connect: connect(&server),
-            live_config: MySqlLiveConfigConfig {
+            uses: uses(3),
+            live_config: Some(MySqlLiveConfigConfig {
                 table_prefix: Some("bad".to_string()),
                 ..live_config()
-            },
+            }),
             ..Default::default()
         };
-        let bad = SqlxMySqlPool::from_config(&config, &app()).await.unwrap();
-        let e = bad
-            .live_config("cache", Cache::default())
-            .await
-            .unwrap_err();
+        let bad = Source::open(&config, &app()).await;
+        let e = bad.bind("cache", Cache::default()).await.unwrap_err();
         assert!(e.is(RepoErr::LiveConfigSchemaMismatch), "{e:#}");
 
         let source = live_pool(&server).await;
-        source.live_config("sync", Job::default()).await.unwrap();
+        source.bind("sync", Job::default()).await.unwrap();
         exec(
-            &source,
+            source.pool(),
             "UPDATE hy_config SET value = '[3]' WHERE `key` = 'levels'",
         )
         .await;
-        let mut trimmed = SqlxMySqlConfig {
-            connect: connect(&server),
-            live_config: live_config(),
-            ..Default::default()
-        };
-        trimmed.live_config.history_keep_rows = Some(2);
-        trimmed.live_config.history_trim_interval_mins = Some(60);
-        let restarted = SqlxMySqlPool::from_config(&trimmed, &app()).await.unwrap();
-        restarted.live_config("sync", Job::default()).await.unwrap();
+        let mut trimmed = live_config_of(&server);
+        let retention = trimmed.live_config.as_mut().unwrap();
+        retention.history_keep_rows = Some(2);
+        retention.history_trim_interval_mins = Some(60);
+        let restarted = Source::open(&trimmed, &app()).await;
+        restarted.bind("sync", Job::default()).await.unwrap();
         eventually(5, || async {
             let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM hy_config_history")
-                .fetch_one(&*source)
+                .fetch_one(&**source.pool())
                 .await
                 .unwrap();
             count == 2
@@ -609,15 +624,15 @@ mod live_config {
         let server = start().await;
         let root = pool(&server).await;
         exec(
-            &root,
+            root.pool(),
             "SET GLOBAL wait_timeout = 2; SET GLOBAL max_execution_time = 1",
         )
         .await;
         let source = live_pool(&server).await;
-        let mut cache = source.live_config("cache", Cache::default()).await.unwrap();
+        let mut cache = source.bind("cache", Cache::default()).await.unwrap();
         tokio::time::sleep(Duration::from_secs(3)).await;
         exec(
-            &root,
+            root.pool(),
             "UPDATE hy_config SET value = '9' WHERE namespace = 'cache'",
         )
         .await;

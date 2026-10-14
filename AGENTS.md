@@ -37,7 +37,8 @@
   - 不存完整的 Config：配置在注册组件的地方本来就有。运行时要用的值在构建时转换好，作为单独的字段存放
   - 不经过 Registry 也能直接从配置建出来。一个配置建一个资源的，资源实现 `ConfigResource`（`from_config` / `close`），
     组件写成 `pub type XxxComponent = ImmediateResourceComponent<XxxPool>;`；一个配置建多个资源、有后台任务、
-    Deferred 组件照常手写
+    Deferred 组件照常手写。一个配置按开关建多个资源的参考 hygiea-db：几种连接池共用一个泛型组件（`DbComponent<C>`），
+    不经过 Registry 用 `DbResources::from_config` 一次建出全部
 
 ## feature
 
@@ -83,11 +84,13 @@
   hygiea-components/hygiea-xxx/
   ├── src/…              #[cfg(test)] mod tests：纯逻辑的单元测试。每个组件至少有两个：
   │                      配置模板（config/<组件>.toml，include_str! 读进来）解析后等于配置结构体的 Default；
-  │                      provides() 按组件名提供资源（匿名的名字是 ""）。tests/ 下不再有 component.rs、config_template.rs
+  │                      provides() 按组件名提供资源（匿名的名字是 ""）。这两种不再单独放进 tests/ 的 component.rs、
+  │                      config_template.rs（hygiea-db 的 tests/component.rs 是源文件 src/component.rs 的主测试文件，不是这个）
   └── tests/
       ├── <源文件名>.rs   每个组件一个主测试文件，和组件的源文件同名：hygiea-redis 的 fred_pool.rs、hygiea-http 的
       │                  axum_server.rs、hygiea-aws 的 s3.rs；源文件在子目录里的用框架目录加文件名，hygiea-db 的
-      │                  sqlx_postgres.rs（src/sqlx/pool/postgres.rs）、seaorm_postgres.rs、sqlx_sqlite.rs。
+      │                  sqlx_postgres.rs（src/sqlx/pool/postgres.rs）、seaorm_postgres.rs、sqlx_mysql.rs、sqlx_sqlite.rs ..，
+      │                  6 种连接池共用的组件 src/component.rs 对应 component.rs（7 个组件一起起的综合测试）。
       │                  feature 全开，测这个组件的全部能力，包括经 Registry 启动、取到资源能用、停止时关闭。按主题分模块：
       │                  #[container] mod <主题> { .. }        用 ContainerSpec 起容器，镜像写固定 tag
       │                  #[live(env = [..])] mod <名字> { .. }  托管服务和自建容器行为有差别时才写（比如 R2）

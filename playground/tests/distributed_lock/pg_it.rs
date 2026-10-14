@@ -1,8 +1,10 @@
 //! SeaORM + PostgreSQL 锁的端到端测试，要连真实的 PostgreSQL（`CLOUD_PG_*` 环境变量）。
 //! 手动跑：`cd playground && cargo test --test distributed_lock -- --ignored pg_it`
 
-use hygiea::app::{ConfigResource, RegistryConfig};
-use hygiea::db::{PgConnectConfig, SeaOrmLogConfig, SeaOrmPgConfig, SeaOrmPgPool};
+use hygiea::app::RegistryConfig;
+use hygiea::db::{
+    DbResources, PgConnectConfig, PoolConfig, SeaOrmLogConfig, SeaOrmPgConfig, SeaOrmPgPool,
+};
 use hygiea::env::{BuiltinKey, env_get, env_get_or_else};
 
 fn cloud_pg_config() -> SeaOrmPgConfig {
@@ -22,18 +24,25 @@ fn cloud_pg_config() -> SeaOrmPgConfig {
             schema_search_path: "dict_jp".to_string(),
             ..Default::default()
         },
-        log: SeaOrmLogConfig {
+        log: Some(SeaOrmLogConfig {
             level: "warn".to_string(),
             ..Default::default()
-        },
+        }),
         ..SeaOrmPgConfig::default()
     }
 }
 
-async fn make_db() -> SeaOrmPgPool {
-    SeaOrmPgPool::from_config(&cloud_pg_config(), &RegistryConfig::default())
+/// 只建业务池（uses 默认是 1）
+async fn open(config: &SeaOrmPgConfig) -> SeaOrmPgPool {
+    DbResources::from_config(config, &RegistryConfig::default())
         .await
         .unwrap()
+        .pool
+        .unwrap()
+}
+
+async fn make_db() -> SeaOrmPgPool {
+    open(&cloud_pg_config()).await
 }
 
 #[tokio::test]
@@ -130,10 +139,11 @@ async fn test_concurrent_distinct_keys_under_pool_pressure() {
     const MAX_CONNECTIONS: u32 = 50;
 
     let mut config = cloud_pg_config();
-    config.pool.max_connections = Some(MAX_CONNECTIONS);
-    let db = SeaOrmPgPool::from_config(&config, &RegistryConfig::default())
-        .await
-        .unwrap();
+    config.pool = Some(PoolConfig {
+        max_connections: Some(MAX_CONNECTIONS),
+        ..Default::default()
+    });
+    let db = open(&config).await;
 
     let completed = Arc::new(AtomicU32::new(0));
     let start = std::time::Instant::now();

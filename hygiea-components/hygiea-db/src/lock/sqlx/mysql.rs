@@ -1,5 +1,5 @@
-//! MySQL 锁的 sqlx 实现：会话级命名锁 `GET_LOCK`（规则和 SQL 在 `sql/mysql/lock.rs`）。`SqlxMySqlPool`、`SeaOrmMySqlPool` 共用：
-//! SeaORM 交出它底下的 sqlx 池
+//! MySQL 锁的 sqlx 实现：会话级命名锁 `GET_LOCK`（规则和 SQL 在 `sql/mysql/lock.rs`）。sqlx、SeaORM 的 MySQL 连接池组件共用：
+//! 和业务池共用连接时 SeaORM 交出它底下的 sqlx 池
 
 use std::time::Duration;
 
@@ -16,30 +16,35 @@ use crate::sql::mysql::lock::{
     ACQUIRE, ACQUIRED, RELEASE, RESTORE, i64_name, key_name, pair_name, timeout_secs,
 };
 
-/// 连接池上锁的实现，`SqlxMySqlPool`、`SeaOrmMySqlPool` 各持有一个，对外的方法见 [`impl_lock`](super::super::impl_lock)
+/// MySQL 的锁，[`DbLock`](super::super::DbLock) 里放的就是它
 #[derive(Clone, Debug)]
 pub(crate) struct MySqlLock {
-    /// 连接池本身的 sqlx 池，或者按 `[db.lock]` 单独建的池
+    /// 业务池的 sqlx 池，或者单独建的池
     pool: MySqlPool,
-    /// `pool` 是单独建的：连接池关闭时一起关
+    /// `pool` 是单独建的：组件关闭时一起关
     own_pool: bool,
 }
 
 impl MySqlLock {
-    /// `main` 是连接池本身的 sqlx 池，`connect`、`pool` 是它的配置。`[db.lock]` 的 `connect`、`max_connections` 都没写时
-    /// 用 `main`；写了就单独建池（见 [`own_pool`]），连接池是 `connect_lazy` 时它也不连，否则连上确认能用
+    /// 参数和 PG 的一样：有 `main`、`[lock]` 的 `connect`、`max_connections` 都没写时和业务池共用；
+    /// 否则单独建池（见 [`own_pool`]），不是 `connect_lazy` 时连上确认能用
     pub(crate) async fn new(
-        main: &MySqlPool,
+        main: Option<&MySqlPool>,
         connect: &MySqlConnectConfig,
-        pool: &PoolConfig,
-        config: &MySqlLockConfig,
+        pool: Option<&PoolConfig>,
+        config: Option<&MySqlLockConfig>,
         registry_config: &RegistryConfig,
     ) -> Result<Self> {
-        let own = !config.connect.is_empty() || config.max_connections.is_some();
-        let lock_pool = if own {
-            own_pool(connect, pool, config, registry_config).await?
-        } else {
-            main.clone()
+        let config = config.cloned().unwrap_or_default();
+        let pool = pool.cloned().unwrap_or_default();
+        let (lock_pool, own) = match main {
+            Some(main) if config.connect.is_empty() && config.max_connections.is_none() => {
+                (main.clone(), false)
+            }
+            _ => (
+                own_pool(connect, &pool, &config, registry_config).await?,
+                true,
+            ),
         };
         Ok(Self {
             pool: lock_pool,
@@ -47,7 +52,7 @@ impl MySqlLock {
         })
     }
 
-    /// 连接池关闭时调用：单独建的池等借出去的连接（持有中的锁）还回来后关掉；用连接池本身的什么都不做
+    /// 组件关闭时调用：单独建的池等借出去的连接（持有中的锁）还回来后关掉；和业务池共用的什么都不做
     pub(crate) async fn close(&self) {
         if self.own_pool {
             self.pool.close().await;
@@ -130,7 +135,7 @@ fn wait_secs(timeout: Duration) -> Result<u64> {
 }
 
 /// 锁单独用的池：连接参数是 `[db.lock.connect]` 盖到连接池的 `[db.connect]` 上。池参数只有 `max_connections` 能配
-/// （不写沿用连接池的），其余固定：不预先建连接、空闲 10 分钟回收、最长存活 30 分钟、拿之前先检查，acquire 超时跟连接池走。
+/// （不写沿用 `[pool]` 的，没写 `[pool]` 是默认值），其余固定：不预先建连接、空闲 10 分钟回收、最长存活 30 分钟、拿之前先检查，acquire 超时跟连接池走。
 /// 空闲回收、到期替换只作用于还回池里的连接，持有中的锁那条连接不会被断开
 async fn own_pool(
     connect: &MySqlConnectConfig,

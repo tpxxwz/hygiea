@@ -61,10 +61,10 @@
 | facade feature | crate | 提供 |
 |---|---|---|
 | `db-sqlx` / `db-seaorm` | `hygiea-db`（`sqlx` / `seaorm`） | 选框架，和下面的数据库组合出连接池组件；开 `db-sqlx` 或 `db-seaorm` 就有 `hygiea::db::HyUtcDateTime` |
-| `db-postgres` / `db-sqlite` | `hygiea-db`（`postgres` / `sqlite`） | 选数据库，对开了的框架都生效 |
-| `db-live-config` | `hygiea-db`（`live-config`） | 连接池上的 `live_config` / `live_config_all`：数据库配置表，改了表程序自动拿到新值（`hygiea::db::LiveConfig` 等）；`[db.live_config]` 可以改表名前缀、单独连别的库 / schema / 用户 |
-| `db-lock` | `hygiea-db`（`lock`），带上 `lock` | PG 连接池实现 `DistributedLock`：整数 key 用原生 advisory lock；字符串 key 哈希成 i64（可能碰撞）；`[db.lock]` 可以给锁单独的池、单独连别的库 |
-| `db-lock-row` | `hygiea-db`（`lock-row`），带上 `db-lock` | PG 的字符串 key 改用 `{前缀}lock` 表（前缀默认应用名加 `_`，`[db.lock] table_prefix` 可改）（UNLOGGED，插入不提交的行、靠主键冲突互斥），精确；开不开要所有实例一致，见设计说明 |
+| `db-postgres` / `db-sqlite` / `db-mysql` | `hygiea-db`（`postgres` / `sqlite` / `mysql`） | 选数据库，对开了的框架都生效。MySQL 要 8.0 以上 |
+| `db-live-config` | `hygiea-db`（`live-config`） | 数据库配置表（动态配置）：组件的 `uses` 带 2 时按组件名提供 `hygiea::db::DbLiveConfig`（`bind` / `bind_all` 绑到 struct），改了表程序自动拿到新值。PG 靠 NOTIFY 推送，MySQL、SQLite 轮询；`[db.live_config]` 可以改表名前缀、轮询间隔，覆盖段换 schema / 用户 |
+| `db-lock` | `hygiea-db`（`lock`），带上 `lock` | 分布式锁：PG、MySQL 组件的 `uses` 带 4 时匿名提供 `hygiea::db::DbLock`（实现 `DistributedLock`，整个应用只能有一个）。PG 整数 key 用原生 advisory lock，字符串 key 要开 `db-lock-row`（不开返回 `LockErr::Unsupported`，想不建表的自己 `LockKeyI64::xxh3_64` 后走 i64）；MySQL 全部用 `GET_LOCK`、不建表，锁名最长 64 个字符；`[db.lock]` 可以给锁单独的池、覆盖连接参数 |
+| `db-lock-row` | `hygiea-db`（`lock-row`），带上 `db-lock` | PG 的字符串 key 用 `{前缀}lock` 表（前缀默认应用名加 `_`，`[db.lock] table_prefix` 可改）（UNLOGGED，插入不提交的行、靠主键冲突互斥），精确；开不开要所有实例一致，见设计说明。和 MySQL 无关 |
 | `redis-fred` | `hygiea-redis`（`fred`） | `hygiea::redis::RedisComponent` / `FredRedisPool` |
 | `http-axum` | `hygiea-http`（`axum`） | `hygiea::http::AxumComponent` |
 | `http-client-reqwest` | `hygiea-http-client`（`reqwest`） | `hygiea::http_client::reqwest_client::ReqwestComponent` / `ReqwestConfig`，请求 API 也在这个模块；在 `Resources` 中提供 `ReqwestClient` |
@@ -74,13 +74,40 @@
 
 db 的三个维度各自独立、只增加功能，同时打开的组合才有东西，比如 `features = ["db-sqlx", "db-postgres", "db-lock"]`。支持的组合：
 
-| 框架 | 数据库 | 连接池组件 | `db-live-config` | `db-lock` / `db-lock-row` |
+| 框架 | 数据库 | 组件 / 业务池 | `db-live-config` | `db-lock` / `db-lock-row` |
 |---|---|---|---|---|
-| `db-sqlx` | `db-postgres` | `SqlxPgComponent` / `SqlxPgPool` | 支持 | 支持 |
-| `db-sqlx` | `db-sqlite` | `SqlxSqliteComponent` / `SqlxSqlitePool` | 支持 | — |
-| `db-seaorm` | `db-postgres` | `SeaOrmPgComponent` / `SeaOrmPgPool` | 支持 | 支持 |
+| `db-sqlx` | `db-postgres` | `SqlxPgComponent` / `SqlxPgPool` | 支持（NOTIFY） | 支持 |
+| `db-sqlx` | `db-mysql` | `SqlxMySqlComponent` / `SqlxMySqlPool` | 支持（轮询） | 支持（`GET_LOCK`，`db-lock-row` 不影响） |
+| `db-sqlx` | `db-sqlite` | `SqlxSqliteComponent` / `SqlxSqlitePool` | 支持（轮询） | — |
+| `db-seaorm` | `db-postgres` | `SeaOrmPgComponent` / `SeaOrmPgPool` | 支持（NOTIFY） | 支持 |
+| `db-seaorm` | `db-mysql` | `SeaOrmMySqlComponent` / `SeaOrmMySqlPool` | 支持（轮询） | 支持（`GET_LOCK`，`db-lock-row` 不影响） |
+| `db-seaorm` | `db-sqlite` | `SeaOrmSqliteComponent` / `SeaOrmSqlitePool` | 支持（轮询） | — |
 
-表里没有的组合（比如 `db-seaorm` + `db-sqlite`）开了也不编译出组件，不报错
+6 个组件都是同一个泛型组件 `DbComponent` 的别名，提供什么由配置的 `uses` 决定，按位加：1 业务池、2 动态配置、4 锁，不写是 1。
+没带的位对应的段（`[db.pool]`、`[db.live_config]`、`[db.lock]` ..）写了启动报错。几个库推荐都放在应用配置的 `[db.<名字>]` 下，注册时组件名和字段名写成一样：
+
+```toml
+[db.main]                     # PG 主库：业务池 + 动态配置
+uses = 3
+[db.main.connect]
+host = "pg-main"
+[db.main.live_config.connect] # 动态配置同一个库，换个用户、schema
+username = "app_config"
+schema_search_path = "config"
+
+[db.coord]                    # MySQL：只给锁用，没有业务池
+uses = 4
+[db.coord.connect]
+host = "mysql-coord"
+```
+
+```rust
+let pool = resources.require_named::<SqlxPgPool>("main")?;
+let sync = resources.require_named::<DbLiveConfig>("main")?.bind("sync", Sync::default()).await?;
+let lock = resources.require::<DbLock>()?;   // 里面是哪种数据库调用方不用管
+```
+
+不经过 Registry（测试、脚本）用 `DbResources::from_config` 直接建。完整的规则见 `hygiea-db` 的 crate 文档
 
 ## 快速开始
 
@@ -171,7 +198,7 @@ async fn main() -> Result<()> {
 - 启动分两个阶段：先连上 SQLite、HTTP 绑好端口，然后 HTTP 才开始接请求；要在接请求之前做的初始化放进 `before_activate`（见 `app_two_phase`）。
 - 按 Ctrl+C 退出时，先停 HTTP（处理完手上的请求），再按启动的逆序关连接池。
 
-- 框架和每个组件的全部配置项、默认值和说明，在各自 crate 的 `config/` 下（模板里生效的值就是代码默认值，可选项写成注释，互斥的写法写在同一份里、注释说明怎么切换），复制过去删掉用不到的项、改需要改的值即可；段名按自己 `AppConfig` 的字段名改：
+- 框架和每个组件的全部配置项、默认值和说明，在各自 crate 的 `config/` 下（模板里生效的值就是代码默认值，可选项写成注释，互斥的写法写在同一份里、注释说明怎么切换），复制过去删掉用不到的项、改需要改的值即可；段名按自己 `AppConfig` 的字段名改。db 的模板例外的是 `uses`：模板写的是全开（列出全部段），代码默认是 1：
 
   | 配置 | 模板 |
   |---|---|
@@ -179,6 +206,9 @@ async fn main() -> Result<()> {
   | `SqlxPgConfig`（`db-sqlx` + `db-postgres`） | [hygiea-components/hygiea-db/config/sqlx-pg.toml](hygiea-components/hygiea-db/config/sqlx-pg.toml) |
   | `SeaOrmPgConfig`（`db-seaorm` + `db-postgres`） | [hygiea-components/hygiea-db/config/seaorm-pg.toml](hygiea-components/hygiea-db/config/seaorm-pg.toml) |
   | `SqlxSqliteConfig`（`db-sqlx` + `db-sqlite`） | [hygiea-components/hygiea-db/config/sqlx-sqlite.toml](hygiea-components/hygiea-db/config/sqlx-sqlite.toml) |
+  | `SeaOrmSqliteConfig`（`db-seaorm` + `db-sqlite`） | [hygiea-components/hygiea-db/config/seaorm-sqlite.toml](hygiea-components/hygiea-db/config/seaorm-sqlite.toml) |
+  | `SqlxMySqlConfig`（`db-sqlx` + `db-mysql`） | [hygiea-components/hygiea-db/config/sqlx-mysql.toml](hygiea-components/hygiea-db/config/sqlx-mysql.toml) |
+  | `SeaOrmMySqlConfig`（`db-seaorm` + `db-mysql`） | [hygiea-components/hygiea-db/config/seaorm-mysql.toml](hygiea-components/hygiea-db/config/seaorm-mysql.toml) |
   | `RedisConfig`（`redis-fred`） | [hygiea-components/hygiea-redis/config/redis.toml](hygiea-components/hygiea-redis/config/redis.toml) |
   | `AxumConfig`（`http-axum`） | [hygiea-components/hygiea-http/config/axum.toml](hygiea-components/hygiea-http/config/axum.toml) |
   | `ReqwestConfig`（`http-client-reqwest`） | [hygiea-components/hygiea-http-client/config/reqwest.toml](hygiea-components/hygiea-http-client/config/reqwest.toml) |
@@ -233,7 +263,7 @@ fn main() {
 
 ### 分布式锁
 
-`lock` feature 提供 trait 和 key，后端由组件实现（目前是 `db-lock` 的 PostgreSQL 连接池）；只要进程内互斥的用 `lock-tokio` 的 `TokioLock`。锁不可重入，拿不到返回 `Ok(None)`。
+`lock` feature 提供 trait 和 key，后端由组件实现（`db-lock`：PG、MySQL 连接池组件提供的 `hygiea::db::DbLock`）；只要进程内互斥的用 `lock-tokio` 的 `TokioLock`。锁不可重入，拿不到返回 `Ok(None)`。
 key 有三种，锁类型和字符串 key 都要注册，编号的规则和错误码一样（项目前缀 3 位 + 模块前缀 + 编号，共 9 位，和错误码共用项目前缀），
 两个 derive 共用一套编号，同模块编译期、跨 crate 启动时查重：
 
@@ -269,6 +299,7 @@ async fn run(db: &impl DistributedLock, order_id: u32, day: &str) -> hygiea::Res
 
 - 不写模块前缀时编号 6 位；`999` 段给 hygiea 自己（3 位内部模块前缀 + 3 位编号），`999999999` 是 hygiea 内置保留的（`hygiea_core::builtin::LOCK_TYPE`：`try_lock_i64` 默认实现转成的字符串 key 的前缀、hygiea 组件自己用的锁）
 - 模板有多个变量时，值里不要带模板里的分隔符（`{{ a }}:{{ b }}` 下 `"x:y"` + `"z"` 和 `"x"` + `"y:z"` 是同一把锁）
+- 后端可以限制 key 的长度（MySQL 的锁名最长 64 个字符，去掉开头 10 个字符的编号，模板渲染结果最多 54 个），超长返回 `LockErr::InvalidKey`，不截断
 - 后端不提供的方法返回 `LockErr::Unsupported`；设计说明见 [docs/design/lock.md](docs/design/lock.md)
 
 ### HTTP 与日志打码
@@ -392,7 +423,7 @@ hygiea                         facade：重新导出全部内容，按 feature �
 | `hygiea` | 是 | 使用方唯一需要依赖的 crate。重新导出 core 和各组件，由 feature 决定编译哪些 |
 | `hygiea-core` | 是 | 应用框架；错误处理、日志、打码、分布式锁的 trait、日期时间、环境变量、字符串、WebSocket 客户端 |
 | `hygiea-macros` | 是 | `#[derive(hy_err)]`、`#[derive(hy_lock_type)]` / `#[derive(hy_lock_key)]`、`#[component]` 和 `#[redact]` |
-| `hygiea-db` | 是 | 数据库连接池组件（PostgreSQL、SQLite）；SeaORM 的错误转换（`db!`）、事务、分页；连接池的数据库配置表（动态配置，[设计说明](docs/design/live-config.md)）；PG 连接池的分布式锁（[设计说明](docs/design/lock.md)）。用法见 crate 文档 |
+| `hygiea-db` | 是 | 数据库组件（PostgreSQL、MySQL、SQLite，sqlx / SeaORM），按配置的 `uses` 提供业务池、数据库配置表（动态配置，[设计说明](docs/design/live-config.md)）、分布式锁（PG、MySQL，[设计说明](docs/design/lock.md)）；SeaORM 的错误转换（`db!`）、事务、分页。用法见 crate 文档 |
 | `hygiea-redis` | 是 | Redis 连接池组件 |
 | `hygiea-http` | 是 | HTTP 服务组件 |
 | `hygiea-http-client` | 是 | reqwest HTTP 客户端及组件 |
@@ -488,7 +519,6 @@ pub enum LegacyErrors {
 | `99910023` | `RepoErr::LiveConfigClosed` | Db live config closed |
 | `99910024` | `RepoErr::LiveConfigCreateFailed` | Db live config tables create failed: {{ table }} |
 | `99910025` | `RepoErr::LiveConfigSchemaMismatch` | Db live config schema mismatch: {{ table }} |
-| `99910026` | `RepoErr::LiveConfigDisabled` | Db live config not enabled on this pool |
 | `99910031` | `RepoErr::LockTableCreateFailed` | Db lock table create failed: {{ table }} |
 | `99910032` | `RepoErr::LockTableSchemaMismatch` | Db lock table schema mismatch: {{ table }} |
 | `99910091` | `RepoErr::PageOutOfRange` | Db page out of range: page {{ page }}, page_size {{ page_size }} |
@@ -516,8 +546,8 @@ pub enum LegacyErrors {
 | `app_two_phase` | 两阶段启动：`before_activate` 在 HTTP 开始接请求之前建表、把 `AppState` 放进 Resources，router 函数取出它交给 `with_state`，handler 用 `arity0_state` 拿到连接池 |
 | `app_background_task` | 后台任务、优雅关闭、超时强制结束、`stop` 收尾 |
 | `app_config` | 配置文件、`-f`、环境变量、`--set` 的合并，框架参数合进自己的命令行 |
-| `db_live_config` | 连接池的数据库配置表：绑定到 struct、改表后程序自动拿到新值（SQLite 文件库） |
-| `db_lock` | PG 连接池的分布式锁：注册锁类型和字符串 key，两个连接池抢同一把锁，不可重入、release / drop 释放、阻塞版等待和超时；字符串 key 用锁表（`db-lock-row`）和哈希成 i64 两种方式对比（Docker 起临时 postgres） |
+| `db_live_config` | 数据库配置表：SQLite 组件 `uses = 3` 提供的 `DbLiveConfig` 绑定到 struct、改表后程序自动拿到新值（SQLite 文件库） |
+| `db_lock` | PG 的分布式锁 `DbLock`：注册锁类型和字符串 key，`DbResources` 直接建两个实例抢同一把锁，不可重入、release / drop 释放、阻塞版等待和超时；字符串 key 用锁表（`db-lock-row`）和哈希成 i64 两种方式对比（Docker 起临时 postgres） |
 | `lock_tokio` | 进程内的锁 `TokioLock`：业务代码只依赖 `DistributedLock`，多个任务抢同一个 key、阻塞版先到先得、整数 key 转成字符串 key |
 | `error_basic` | 错误 enum、`err!` 的写法、错误码 |
 | `string_template` | `fmt_tpl!`、`fmt_tpl_once!`、`fmt_pos!` |

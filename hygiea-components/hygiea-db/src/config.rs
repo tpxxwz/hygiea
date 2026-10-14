@@ -116,8 +116,8 @@ impl PgConnectConfig {
     }
 }
 
-/// 动态配置、锁单独连的库（`[db.live_config.connect]`、`[db.lock.connect]`）：每项都可以不写，不写的沿用连接池的
-/// `[db.connect]`，只写不一样的（比如换个用户、schema）
+/// 动态配置、锁单独连的库（`[db.live_config.connect]`、`[db.lock.connect]`）：每项都可以不写，不写的沿用
+/// `[db.connect]`，只写不一样的（比如换个用户、schema）。只有 `uses` 带 1（有业务池）时能写，没有业务池时直接写在 `[db.connect]` 里
 #[cfg(all(feature = "postgres", any(live_config_pg, lock_pg)))]
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -135,7 +135,6 @@ pub struct PgConnectOverride {
 #[cfg(all(feature = "postgres", any(live_config_pg, lock_pg)))]
 impl PgConnectOverride {
     /// 一项都没写
-    #[cfg(lock_pg)]
     pub(crate) fn is_empty(&self) -> bool {
         let Self {
             scheme,
@@ -257,8 +256,8 @@ impl MySqlConnectConfig {
     }
 }
 
-/// 动态配置、锁单独连的库（`[db.live_config.connect]`、`[db.lock.connect]`）：每项都可以不写，不写的沿用连接池的
-/// `[db.connect]`，只写不一样的（比如换个用户、库）
+/// 动态配置、锁单独连的库（`[db.live_config.connect]`、`[db.lock.connect]`）：每项都可以不写，不写的沿用
+/// `[db.connect]`，只写不一样的（比如换个用户、库）。只有 `uses` 带 1（有业务池）时能写，没有业务池时直接写在 `[db.connect]` 里
 #[cfg(any(live_config_mysql, lock_mysql))]
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -274,7 +273,6 @@ pub struct MySqlConnectOverride {
 #[cfg(any(live_config_mysql, lock_mysql))]
 impl MySqlConnectOverride {
     /// 一项都没写
-    #[cfg(lock_mysql)]
     pub(crate) fn is_empty(&self) -> bool {
         let Self {
             host,
@@ -459,7 +457,7 @@ impl SqliteSettings {
     }
 }
 
-/// 动态配置单独连的库（`[db.live_config.connect]`）：每项都可以不写，不写的沿用连接池的 `[db.connect]`
+/// 动态配置单独连的库（`[db.live_config.connect]`）：每项都可以不写，不写的沿用 `[db.connect]`。只有 `uses` 带 1（有业务池）时能写
 #[cfg(live_config_sqlite)]
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -478,6 +476,32 @@ pub struct SqliteConnectOverride {
 
 #[cfg(live_config_sqlite)]
 impl SqliteConnectOverride {
+    /// 一项都没写
+    pub(crate) fn is_empty(&self) -> bool {
+        let Self {
+            database,
+            params,
+            create_if_missing,
+            read_only,
+            foreign_keys,
+            shared_cache,
+            journal_mode,
+            synchronous,
+            busy_timeout_millis,
+            statement_cache_capacity,
+        } = self;
+        database.is_none()
+            && params.is_none()
+            && create_if_missing.is_none()
+            && read_only.is_none()
+            && foreign_keys.is_none()
+            && shared_cache.is_none()
+            && journal_mode.is_none()
+            && synchronous.is_none()
+            && busy_timeout_millis.is_none()
+            && statement_cache_capacity.is_none()
+    }
+
     /// 写了的项盖到 `main` 上
     pub(crate) fn merge(&self, main: &SqliteConnectConfig) -> SqliteConnectConfig {
         SqliteConnectConfig {

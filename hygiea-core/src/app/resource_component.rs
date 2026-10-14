@@ -1,28 +1,28 @@
 //! 一个配置建一个资源的组件：资源实现 [`ConfigResource`]，组件直接用 [`ImmediateResourceComponent`]
 //!
-//! 数据库、Redis 连接池、HTTP 客户端这类组件做的事都一样：启动时按配置建出资源、按组件名放进 Resources，
+//! Redis 连接池、HTTP 客户端这类组件做的事都一样：启动时按配置建出资源、按组件名放进 Resources，
 //! 关闭时把资源关掉。差别只在资源怎么建、怎么关，所以组件只写这两步，其余的由
 //! [`ImmediateResourceComponent`] 统一做：
 //!
 //! ```ignore
-//! pub struct SqlxPgPool {
-//!     inner: PgPool,
+//! pub struct FredRedisPool {
+//!     inner: fred::clients::Pool,
 //! }
 //!
 //! #[async_trait]
-//! impl ConfigResource for SqlxPgPool {
-//!     type Config = SqlxPgConfig;
+//! impl ConfigResource for FredRedisPool {
+//!     type Config = RedisConfig;
 //!
-//!     async fn from_config(config: &SqlxPgConfig, registry_config: &RegistryConfig) -> Result<Self> { .. }
+//!     async fn from_config(config: &RedisConfig, registry_config: &RegistryConfig) -> Result<Self> { .. }
 //!
 //!     async fn close(&self) -> Result<()> { .. }
 //! }
 //!
-//! pub type SqlxPgComponent = ImmediateResourceComponent<SqlxPgPool>;
+//! pub type RedisComponent = ImmediateResourceComponent<FredRedisPool>;
 //! ```
 //!
-//! 不经过 Registry 时直接调 `SqlxPgPool::from_config(&config, &RegistryConfig::default())`。一个配置建出多个资源、要跑后台任务、
-//! Deferred 组件这些情况照常手写组件。
+//! 不经过 Registry 时直接调 `FredRedisPool::from_config(&config, &RegistryConfig::default())`。一个配置建出多个资源
+//! （比如数据库组件按 `uses` 建业务池、动态配置、锁）、要跑后台任务、Deferred 组件这些情况照常手写组件。
 
 use async_trait::async_trait;
 use tokio::task::JoinHandle;

@@ -1,10 +1,10 @@
-//! 数据库配置表（动态配置）：连接池的一种能力，feature `live-config`
+//! 数据库配置表（动态配置），feature `live-config`
 //!
-//! 配置存在应用自己的库里，改了表，运行中的程序自动拿到新值。开了 feature 后各连接池（[`SqlxPgPool`](crate::SqlxPgPool)、
-//! [`SqlxSqlitePool`](crate::SqlxSqlitePool)、[`SeaOrmPgPool`](crate::SeaOrmPgPool)，MySQL 的 `SqlxMySqlPool`、`SeaOrmMySqlPool`）
-//! 都有 `live_config` / `live_config_all`，
-//! 默认连同一个库（连接参数、search_path 和连接池一样），`[db.live_config.connect]` 里写了的项换成写的（别的库、schema、用户），
-//! 走自己的独立小池（固定 1 条连接），不占连接池。
+//! 配置存在库里，改了表，运行中的程序自动拿到新值。各连接池组件（sqlx、SeaORM 的 PG、MySQL、SQLite）`uses` 带 2 时，
+//! 按组件名把一个源 [`DbLiveConfig`] 放进 Resources。几个组件都开就是几个源（比如应用自己的库一个、平台公共配置库一个），
+//! 各管各的 namespace，按组件名取。
+//! 源连 `[db.connect]` 的库（连接参数、search_path 一样），有业务池（`uses` 带 1）时 `[db.live_config.connect]` 里写了的项
+//! 换成写的（换个 schema、用户）；整个库都不一样的另起一个 `uses = 2` 的组件。走自己的独立小池（固定 1 条连接），不占业务池。
 //! 第一次绑定时才连库、建表，不用的话什么都不做。
 //!
 //! ```ignore
@@ -15,15 +15,14 @@
 //!     pub moji_cache: MojiCache,
 //! }
 //!
-//! let pool = resources.require::<SeaOrmPgPool>()?;
-//! let runtime = pool.live_config_all(RuntimeConfig::default()).await?;    // LiveConfig<RuntimeConfig>
-//! let sync = pool.live_config("markji_sync", MarkjiSync::default()).await?; // 只绑一个 namespace
+//! let source = resources.require_named::<DbLiveConfig>("main")?;
+//! let runtime = source.bind_all(RuntimeConfig::default()).await?;            // LiveConfig<RuntimeConfig>
+//! let sync = source.bind("markji_sync", MarkjiSync::default()).await?;       // 只绑一个 namespace
 //!
 //! let cfg = runtime.get();   // Arc<RuntimeConfig>，当前最新的快照；用的时候不持有锁
 //! ```
 //!
-//! 配置在连接池配置的 `live_config` 段（[`LiveConfigConfig`]），比如 `[db.live_config]`。默认不开，
-//! 要用的连接池写 `enabled = true`；没开时调用报 [`RepoErr::LiveConfigDisabled`](crate::RepoErr::LiveConfigDisabled)。
+//! 配置在连接池配置的 `live_config` 段（[`LiveConfigConfig`]），比如 `[db.live_config]`，`uses` 带 2 时才能写，不写用默认值。
 //!
 //!
 //! # 原理
@@ -40,7 +39,7 @@
 //!   [`RepoErr::LiveConfigDecodeFailed`](crate::RepoErr::LiveConfigDecodeFailed)，运行中转不了保留旧值
 //! - 变更：PG 靠触发器 NOTIFY 推送（channel 是 `<schema>.{p}config`，不同 schema 里同名的表互不打扰），另每 `poll_interval_secs`（默认 60 秒）兜底；SQLite、MySQL 没有推送，每 `poll_interval_secs`（默认 1 秒）
 //!   轮询版本号。只接受更大的版本号，变了只重新读那个 namespace
-//! - 一个连接池一个后台任务、一个独立小池（1 条连接），不占主池；断线由 sqlx 重连，PG 的 listener 坏了在小池上重建
+//! - 一个源一个后台任务、一个独立小池（1 条连接），不占业务池；断线由 sqlx 重连，PG 的 listener 坏了在小池上重建
 //!
 //! 文件：和驱动无关的是 `source.rs` 绑定入口和后台任务的启动，`handle.rs` 对外的句柄，`worker.rs` 后台任务，
 //! `schema.rs` 表结构和检查规则；SQL 在 `sql/<数据库>/live_config.rs`；执行在 `sqlx/`（一种数据库一个文件，`mod.rs` 的 `Store` 分发），
@@ -55,9 +54,18 @@
 //!   先把表里的值改成新类型，或者换个 key 名
 //! - **删 key**：等于恢复成代码当前的默认值，下次绑定时补回表里。不想要默认值就改值，不要删行
 //! - 要表达"没有值"（比如不限）别用 `Option`，用单独的开关字段或者约定的值（比如 0）
-//! - PG **只读从库**（hot standby）上不能 `LISTEN`，也建不了表：只在主库的连接池上开
+//! - PG **只读从库**（hot standby）上不能 `LISTEN`，也建不了表：只在连主库的组件上开
+//! - MySQL 默认开着 binlog，没有 `SUPER` 的用户建不了触发器（报 1419）：DBA 打开 `log_bin_trust_function_creators`，
+//!   或者用有权限的账号先建好表，之后普通用户就能用：
+//!   - DDL 在 `sql/mysql/live_config.sql`：`{p}` 换成表名前缀，按 `-- @@` 逐条执行（`mysql` 命令行要先改 `DELIMITER`），
+//!     在组件 `[db.connect]` 的那个库里执行。建表失败时 error 日志里有换好前缀的完整 DDL，直接复制更省事
+//!   - 业务用户对三张表要有 `SELECT`、`INSERT`、`UPDATE`、`DELETE`（绑定时补默认值、清理历史要删行）。
+//!     触发器的定义者是建它的账号，历史表的 `changed_by` 记的是 `USER()`（实际改的账号），不受影响
+//!   - DDL 会隐式提交，普通用户建到触发器才报 1419 时，库里留下有表、没触发器的半成品，下次启动报
+//!     [`RepoErr::LiveConfigSchemaMismatch`](crate::RepoErr::LiveConfigSchemaMismatch)：用有权限的账号只执行剩下的三条
+//!     `CREATE TRIGGER`，或者删掉三张表再整份执行
 //! - SQLite 的 `:memory:` 库（不共享缓存）用不了：小池另开一条连接，连到的是另一个空库
-//! - 关闭连接池后 `get()` 还是最后一次的值，`changed()` 返回 [`RepoErr::LiveConfigClosed`](crate::RepoErr::LiveConfigClosed)
+//! - 组件关闭后 `get()` 还是最后一次的值，`changed()` 返回 [`RepoErr::LiveConfigClosed`](crate::RepoErr::LiveConfigClosed)
 
 mod handle;
 mod schema;
@@ -90,18 +98,15 @@ pub(crate) enum Backend {
     #[cfg(live_config_mysql)]
     MySql,
 }
-pub(crate) use source::{LiveConfigSource, live_config_source, live_config_source_for};
+use source::LiveConfigSource;
 pub(crate) use store::Store;
 
 // ---- config -----------------------------------------------------------------
 
-/// 连接池配置里的 `live_config` 段。`C` 是单独连库的覆盖项：PG 是 `PgConnectOverride`、SQLite 是 `SqliteConnectOverride`、MySQL 是 `MySqlConnectOverride`
+/// 连接池配置里的 `live_config` 段，`uses` 带 2 时才能写。`C` 是单独连库的覆盖项：PG 是 `PgConnectOverride`、SQLite 是 `SqliteConnectOverride`、MySQL 是 `MySqlConnectOverride`
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LiveConfigConfig<C> {
-    /// 这个连接池开不开动态配置，默认不开。没开时调 `live_config` / `live_config_all` 报
-    /// [`RepoErr::LiveConfigDisabled`](crate::RepoErr::LiveConfigDisabled)，下面几项也不校验
-    pub enabled: bool,
     /// 对一遍版本号的间隔（秒）。PostgreSQL 上是兜底（变更靠 NOTIFY 推过来），不写是 60；
     /// SQLite、MySQL 上是主要的检查方式（改了表最多等这么久生效），不写是 1
     pub poll_interval_secs: Option<u64>,
@@ -113,7 +118,8 @@ pub struct LiveConfigConfig<C> {
     /// 表名前缀：不写用应用名（`[registry] app_name`）加 `_`，写 `""` 不加前缀，写 `foo` 或 `foo_` 都是 `foo_`。
     /// 去掉末尾的 `_` 后得是小写下划线 `[a-z][a-z0-9_]*`
     pub table_prefix: Option<String>,
-    /// 单独连的库：`[db.live_config.connect]`，只写和连接池的 `[db.connect]` 不一样的项，不写的沿用
+    /// 单独连的库：`[db.live_config.connect]`，只写和 `[db.connect]` 不一样的项，不写的沿用。
+    /// 只有 `uses` 带 1（有业务池）时能写，没有业务池时直接写在 `[db.connect]` 里
     pub connect: C,
 }
 
@@ -129,42 +135,51 @@ pub type SqliteLiveConfigConfig = LiveConfigConfig<SqliteConnectOverride>;
 #[cfg(live_config_mysql)]
 pub type MySqlLiveConfigConfig = LiveConfigConfig<MySqlConnectOverride>;
 
-// ---- 连接池上的方法 -------------------------------------------------------------
+// ---- 资源 ---------------------------------------------------------------------
 
-/// 给连接池加动态配置的方法，各连接池（sqlx 的 PG、SQLite、MySQL，SeaORM 的 PG、MySQL）一样，用它生成。
-/// 连接池要有字段 `live_config: Option<LiveConfigSource>`（没开是 `None`）
-macro_rules! impl_live_config {
-    ($pool:ty) => {
-        impl $pool {
-            /// 把一个 namespace 绑定到 `T`（第一层字段是 key），见 [`live_config`](crate::live_config)。
-            /// 配置里没开（`enabled = false`）报 [`RepoErr::LiveConfigDisabled`](crate::RepoErr::LiveConfigDisabled)。
-            /// `defaults` 是表里没有的 key 用的值，第一次 bind 时补进表里
-            pub async fn live_config<T>(
-                &self,
-                namespace: &str,
-                defaults: T,
-            ) -> hygiea_core::Result<crate::LiveConfig<T>>
-            where
-                T: serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static,
-            {
-                crate::live_config::live_config_source(&self.live_config)?
-                    .bind(namespace, defaults)
-                    .await
-            }
-
-            /// 把多个 namespace 绑定到 `T`（第一层字段是 namespace，第二层是 key），见 [`live_config`](crate::live_config)
-            pub async fn live_config_all<T>(
-                &self,
-                defaults: T,
-            ) -> hygiea_core::Result<crate::LiveConfig<T>>
-            where
-                T: serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static,
-            {
-                crate::live_config::live_config_source(&self.live_config)?
-                    .bind_all(defaults)
-                    .await
-            }
-        }
-    };
+/// 一个动态配置源：`uses` 带 2（见 [`DbUses`](crate::DbUses)）的连接池组件按组件名放进 Resources。
+/// 几个组件都开就是几个源，各管各的 namespace。一个源一个后台任务、一个独立小池（1 条连接），第一次绑定时才连库、建表。
+/// `Clone` 后共用同一个后台任务
+#[derive(Clone, Debug)]
+pub struct DbLiveConfig {
+    source: LiveConfigSource,
 }
-pub(crate) use impl_live_config;
+
+impl DbLiveConfig {
+    /// 只校验配置、不连库。`store` 拿表名建出各数据库的 [`Store`]
+    pub(crate) fn new<C>(
+        store: impl FnOnce(schema::Tables) -> hygiea_core::Result<Store>,
+        config: &LiveConfigConfig<C>,
+        registry_config: &hygiea_core::app::RegistryConfig,
+    ) -> hygiea_core::Result<Self> {
+        let prefix = crate::sql::table_prefix(
+            config.table_prefix.as_deref(),
+            &registry_config.app_name,
+            "live config",
+        )?;
+        let source = LiveConfigSource::new(store(schema::Tables::new(prefix))?, config)?;
+        Ok(Self { source })
+    }
+
+    /// 把一个 namespace 绑定到 `T`（第一层字段是 key），见 [模块文档](self)。
+    /// `defaults` 是表里没有的 key 用的值，第一次绑定时补进表里
+    pub async fn bind<T>(&self, namespace: &str, defaults: T) -> hygiea_core::Result<LiveConfig<T>>
+    where
+        T: serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static,
+    {
+        self.source.bind(namespace, defaults).await
+    }
+
+    /// 把多个 namespace 绑定到 `T`（第一层字段是 namespace，第二层是 key），见 [模块文档](self)
+    pub async fn bind_all<T>(&self, defaults: T) -> hygiea_core::Result<LiveConfig<T>>
+    where
+        T: serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static,
+    {
+        self.source.bind_all(defaults).await
+    }
+
+    /// 组件关闭时调用：后台任务退出、小池关掉，之后绑定报 [`RepoErr::LiveConfigClosed`](crate::RepoErr::LiveConfigClosed)
+    pub(crate) async fn close(&self) {
+        self.source.close().await;
+    }
+}

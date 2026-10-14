@@ -1,9 +1,9 @@
-//! hygiea 的数据库组件：连接池，放进 Resources 给其他组件和业务用。
+//! hygiea 的数据库组件：连接池、动态配置、分布式锁，放进 Resources 给其他组件和业务用。
 //!
 //! 用 feature 选框架、数据库和功能，三个维度分开开、只增加功能，同时打开的组合才会编译
 //! （组合条件集中在 `build.rs` 的 cfg 别名里）：
 //!
-//! | feature | 组件 | 连接池（资源类型） |
+//! | feature | 组件 | 业务池（资源类型） |
 //! |---|---|---|
 //! | `sqlx` + `postgres` | [`SqlxPgComponent`] | [`SqlxPgPool`] |
 //! | `sqlx` + `sqlite` | [`SqlxSqliteComponent`] | [`SqlxSqlitePool`] |
@@ -16,12 +16,14 @@
 //! （sqlx、SeaORM 的连接池共用）。加别的框架、数据库照 research/db-drivers 分支的写法。
 //! MySQL 要 8.0 以上：锁用 `GET_LOCK`，动态配置只靠轮询（没有推送），见 [`lock`]、[`live_config`] 模块文档。
 //!
-//! 连接池的配置分段：`[db.connect]` 连哪个库（[`PgConnectConfig`] / [`SqliteConnectConfig`] / `MySqlConnectConfig`），`[db.pool]` 池的参数
-//! （[`PoolConfig`]，各数据库、框架共用），SeaORM 另有 `[db.log]`。PG 连接的 `application_name` 用 `[registry] app_name`
+//! 组件提供什么由配置的 `uses` 决定（[`DbUses`]，按位加：1 业务池、2 动态配置、4 锁，不写是 1），
+//! 6 种组件都是同一个泛型组件 [`DbComponent`] 的别名。配置分段：`[db.connect]` 连哪个库（[`PgConnectConfig`] / [`SqliteConnectConfig`] / `MySqlConnectConfig`），`[db.pool]` 池的参数
+//! （[`PoolConfig`]，各数据库、框架共用），SeaORM 另有 `[db.log]`，这两段只给业务池用，`uses` 带 1 时才能写。PG 连接的 `application_name` 用 `[registry] app_name`
 //! （建连接池时从 `RegistryConfig` 拿到），不能在 `connect.params` 里自己写。
 //!
-//! 开了 `live-config` 后，各连接池多了 `live_config` / `live_config_all`：数据库配置表，改了表程序自动拿到新值，
-//! 配置在 `[db.live_config]`（默认不开），见 [`live_config`] 模块文档。
+//! 开了 `live-config`、`uses` 带 2 时组件按组件名放一个 `DbLiveConfig`：数据库配置表，改了表程序自动拿到新值，
+//! 配置在 `[db.live_config]`，见 [`live_config`] 模块文档。开了 `lock`、`uses` 带 4 时（PG、MySQL）组件匿名放一个
+//! `DbLock`，整个应用只能有一个，配置在 `[db.lock]`，见 [`lock`] 模块文档。
 //!
 //! 和框架无关、开 `sqlx` 或 `seaorm` 就有的：
 //! - UTC 时间列类型 [`HyUtcDateTime`]，两个框架同时开也是同一个类型
@@ -79,15 +81,33 @@
 //!   要用同一个事务就把 `txn` 往下传。行锁（`lock_exclusive()` 等）要在事务里、用 `txn` 执行才有用
 //! - 排查：设 `RUST_LIB_BACKTRACE=1` 后错误的 `{:?}` 末尾带调用栈
 //!
-//! ## 连接池和 Resources
+//! ## 组件和 Resources
 //!
-//! 连接池按组件名放进 Resources，同一个组件可以用不同名字注册多次（主库、从库）。
+//! 业务池、`DbLiveConfig` 按组件名放进 Resources，`DbLock` 匿名放。同一个组件可以用不同名字注册多次（主库、从库、
+//! 只给锁用的协调库、只给动态配置用的公共配置库），推荐都放在应用配置的 `[db.<名字>]` 下，注册时名字和字段名写成一样：
+//!
+//! ```ignore
+//! struct AppConfig { registry: RegistryConfig, db: Dbs }
+//! struct Dbs { main: SeaOrmPgConfig, coord: SqlxMySqlConfig }    // [db.main]、[db.coord]
+//!
+//! Registry::new()
+//!     .add_named::<SeaOrmPgComponent>("main", c.db.main)          // uses = 3：业务池 + 动态配置
+//!     .add_named::<SqlxMySqlComponent>("coord", c.db.coord);      // uses = 4：只给锁用
+//!
+//! let pool = resources.require_named::<SeaOrmPgPool>("main")?;
+//! let sync = resources.require_named::<DbLiveConfig>("main")?.bind("markji_sync", MarkjiSync::default()).await?;
+//! let lock = resources.require::<DbLock>()?;                      // 里面是哪种数据库调用方不用管
+//! ```
+//!
 //! 依赖它的组件声明 `ResourceId::named::<SqlxPgPool>("primary")`，Registry 会把连接池排在前面启动。
+//! 不经过 Registry（测试、脚本）用 [`DbResources::from_config`] 直接建，用完 `close`。
 //!
 //! ```toml
 //! hygiea-db = { version = "..", features = ["sqlx", "postgres"] }
 //! ```
 
+#[cfg(any(sqlx_pg, sqlx_sqlite, sqlx_mysql))]
+mod component;
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]
 mod config;
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]
@@ -113,6 +133,8 @@ pub use self::sqlx::pool::mysql::*;
 pub use self::sqlx::pool::postgres::*;
 #[cfg(all(feature = "sqlx", feature = "sqlite"))]
 pub use self::sqlx::pool::sqlite::*;
+#[cfg(any(sqlx_pg, sqlx_sqlite, sqlx_mysql))]
+pub use component::{DbComponent, DbConfig, DbResources, DbUses};
 #[cfg(all(any(feature = "sqlx", feature = "seaorm"), feature = "mysql"))]
 pub use config::MySqlConnectConfig;
 #[cfg(any(live_config_mysql, lock_mysql))]
@@ -138,7 +160,9 @@ pub use live_config::PgLiveConfigConfig;
 #[cfg(live_config_sqlite)]
 pub use live_config::SqliteLiveConfigConfig;
 #[cfg(live_config_any)]
-pub use live_config::{LiveConfig, LiveConfigConfig, LiveRef, LiveView};
+pub use live_config::{DbLiveConfig, LiveConfig, LiveConfigConfig, LiveRef, LiveView};
+#[cfg(lock_any)]
+pub use lock::DbLock;
 #[cfg(lock_mysql)]
 pub use lock::MySqlLockConfig;
 #[cfg(lock_pg)]

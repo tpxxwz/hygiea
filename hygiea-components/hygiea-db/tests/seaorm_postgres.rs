@@ -34,10 +34,14 @@ struct Cache {
 /// 连接池本身：连接、search_path、经 Registry 启动和停止、HyUtcDateTime、事务、`db!`、分页
 #[container]
 mod pool {
-    use hygiea_core::app::{ConfigResource, Registry, Resources};
+    use hygiea_core::app::{Registry, Resources};
     use hygiea_core::datetime::{HygieaDateTimeExt, UtcDateTime};
     use hygiea_db::HyUtcDateTime;
-    use hygiea_db::{PgConnectConfig, SeaOrmPgComponent, SeaOrmPgConfig, SeaOrmPgPool};
+    use hygiea_db::{
+        DbResources, PgConnectConfig, SeaOrmPgComponent, SeaOrmPgConfig, SeaOrmPgPool,
+    };
+
+    use super::common::open_pool;
     use hygiea_test::container::{ContainerSpec, RunningContainer};
     use sea_orm::{ActiveModelTrait, ConnectionTrait, DbBackend, EntityTrait, Set, Statement};
 
@@ -84,13 +88,16 @@ mod pool {
 
     /// 用默认配置连上去建好 [`SCHEMA`]，search_path 指向不存在的 schema 时 current_schema() 是 NULL
     async fn create_schema(server: &RunningContainer) {
-        let pool = SeaOrmPgPool::from_config(&seaorm_config(server), &Default::default())
+        let db = DbResources::from_config(&seaorm_config(server), &Default::default())
             .await
             .unwrap();
-        pool.execute_unprepared("CREATE SCHEMA hygiea_test")
+        db.pool
+            .as_ref()
+            .unwrap()
+            .execute_unprepared("CREATE SCHEMA hygiea_test")
             .await
             .unwrap();
-        pool.close().await.unwrap();
+        db.close().await.unwrap();
     }
 
     /// 启动 registry，把 `Resources` 交给 `check`，拿回它的结果。
@@ -121,9 +128,7 @@ mod pool {
     #[tokio::test]
     async fn seaorm_connect_success() {
         let server = start().await;
-        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server), &Default::default())
-            .await
-            .unwrap();
+        let pool = open_pool(&seaorm_config(&server), &Default::default()).await;
 
         let row = pool.query_one_raw(sql("SELECT 1")).await.unwrap().unwrap();
         assert_eq!(row.try_get_by_index::<i32>(0).unwrap(), 1);
@@ -136,9 +141,7 @@ mod pool {
 
         let mut config = seaorm_config(&server);
         config.connect.schema_search_path = SCHEMA.to_string();
-        let pool = SeaOrmPgPool::from_config(&config, &Default::default())
-            .await
-            .unwrap();
+        let pool = open_pool(&config, &Default::default()).await;
 
         let row = pool
             .query_one_raw(sql("SELECT current_schema()"))
@@ -156,14 +159,15 @@ mod pool {
     #[tokio::test]
     async fn seaorm_stop_closes_connection() {
         let server = start().await;
-        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server), &Default::default())
+        let db = DbResources::from_config(&seaorm_config(&server), &Default::default())
             .await
             .unwrap();
+        let pool = db.pool.clone().unwrap();
 
         pool.query_one_raw(sql("SELECT 1")).await.unwrap();
 
         // close 关的是共享的底层连接池，pool 本身还能用来发查询
-        pool.close().await.unwrap();
+        db.close().await.unwrap();
 
         // 关闭后再发查询应该失败
         let result = pool.query_one_raw(sql("SELECT 1")).await;
@@ -221,9 +225,7 @@ mod pool {
     #[tokio::test]
     async fn seaorm_hy_utc_datetime_round_trip() {
         let server = start().await;
-        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server), &Default::default())
-            .await
-            .unwrap();
+        let pool = open_pool(&seaorm_config(&server), &Default::default()).await;
         pool.execute_unprepared(CREATE_RECORD).await.unwrap();
 
         let at = HyUtcDateTime(utc("2026-10-05T12:57:24.719Z"));
@@ -266,9 +268,7 @@ mod pool {
         use hygiea_db::RepoErr;
 
         let server = start().await;
-        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server), &Default::default())
-            .await
-            .unwrap();
+        let pool = open_pool(&seaorm_config(&server), &Default::default()).await;
         pool.execute_unprepared("CREATE TABLE item (id INT PRIMARY KEY)")
             .await
             .unwrap();
@@ -331,9 +331,7 @@ mod pool {
         use sea_orm::{QueryOrder, QuerySelect};
 
         let server = start().await;
-        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server), &Default::default())
-            .await
-            .unwrap();
+        let pool = open_pool(&seaorm_config(&server), &Default::default()).await;
         pool.execute_unprepared(CREATE_RECORD).await.unwrap();
         let at = HyUtcDateTime(utc("2026-10-05T12:57:24.719Z"));
         let models = [1, 2, 3].map(|id| record::Model {
@@ -371,9 +369,7 @@ mod pool {
         use sea_orm::{IntoActiveModel, TryInsertResult, sea_query::OnConflict};
 
         let server = start().await;
-        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server), &Default::default())
-            .await
-            .unwrap();
+        let pool = open_pool(&seaorm_config(&server), &Default::default()).await;
         pool.execute_unprepared(CREATE_RECORD).await.unwrap();
         let at = HyUtcDateTime(utc("2026-10-05T12:57:24.719Z"));
         let later = HyUtcDateTime(utc("2026-10-06T00:00:00Z"));
@@ -444,9 +440,7 @@ mod pool {
         use sea_orm::{ActiveModelTrait, IntoActiveModel, ModelTrait, PaginatorTrait, QuerySelect};
 
         let server = start().await;
-        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server), &Default::default())
-            .await
-            .unwrap();
+        let pool = open_pool(&seaorm_config(&server), &Default::default()).await;
         let db = &*pool;
         let op = |e: &hygiea_core::HyErr| format!("{e}");
 
@@ -580,9 +574,7 @@ mod pool {
         use sea_orm::{ColumnTrait, IntoActiveModel, QueryFilter, QueryOrder};
 
         let server = start().await;
-        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server), &Default::default())
-            .await
-            .unwrap();
+        let pool = open_pool(&seaorm_config(&server), &Default::default()).await;
         pool.execute_unprepared(CREATE_RECORD).await.unwrap();
         let at = HyUtcDateTime(utc("2026-10-05T12:57:24.719Z"));
         let models = (1..=7).map(|id| {
@@ -639,9 +631,7 @@ mod pool {
         use hygiea_db::RepoErr;
 
         let server = start().await;
-        let pool = SeaOrmPgPool::from_config(&seaorm_config(&server), &Default::default())
-            .await
-            .unwrap();
+        let pool = open_pool(&seaorm_config(&server), &Default::default()).await;
         pool.execute_unprepared(CREATE_RECORD).await.unwrap();
         async fn show(txn: &impl ConnectionTrait, name: &str) -> String {
             txn.query_one_raw(sql(&format!("SHOW {name}")))
@@ -687,11 +677,14 @@ mod pool {
 /// 分布式锁：两个 SeaORM 连接池模拟两个实例
 #[container]
 mod lock {
-    use hygiea_core::app::{ConfigResource, RegistryConfig};
-    use hygiea_db::{PgConnectConfig, SeaOrmPgConfig, SeaOrmPgPool};
+    use hygiea_core::app::RegistryConfig;
+    use hygiea_db::{PgConnectConfig, SeaOrmPgConfig};
     use hygiea_test::container::{ContainerSpec, RunningContainer};
 
+    use super::common::{LockInst, uses};
     use super::*;
+
+    type Inst = LockInst<SeaOrmPgConfig>;
 
     const PASSWORD: &str = "hygiea-test";
 
@@ -723,28 +716,28 @@ mod lock {
         }
     }
 
-    async fn pool(server: &RunningContainer) -> SeaOrmPgPool {
+    /// 一个实例：业务池加锁（`uses = 5`），锁用 SeaORM 底下的 sqlx 池
+    async fn pool(server: &RunningContainer) -> Inst {
         let config = SeaOrmPgConfig {
+            uses: uses(5),
             connect: connect(server),
             ..Default::default()
         };
-        SeaOrmPgPool::from_config(&config, &app("hy"))
-            .await
-            .unwrap()
+        Inst::open(&config, &app("hy")).await
     }
 
     #[tokio::test]
     async fn i64_is_exclusive() {
         let server = start().await;
         let (a, b) = (pool(&server).await, pool(&server).await);
-        common::i64_is_exclusive(&a, &b).await;
+        common::i64_is_exclusive(&*a, &*b).await;
     }
 
     #[tokio::test]
     async fn blocking_waits_and_times_out() {
         let server = start().await;
         let (a, b) = (pool(&server).await, pool(&server).await);
-        common::blocking_waits_and_times_out(&a, &b).await;
+        common::blocking_waits_and_times_out(&*a, &*b).await;
     }
 
     /// 字符串 key 走锁表
@@ -752,19 +745,22 @@ mod lock {
     async fn string_key_is_exclusive() {
         let server = start().await;
         let (a, b) = (pool(&server).await, pool(&server).await);
-        common::string_key_is_exclusive(&a, &b, || lock_key!(TestLockKey::Job, 1)).await;
+        common::string_key_is_exclusive(&*a, &*b, || lock_key!(TestLockKey::Job, 1)).await;
     }
 }
 
 /// 动态配置：SeaORM 连接池交出连接参数，另开小池
 #[container]
 mod live_config {
-    use hygiea_core::app::{ConfigResource, RegistryConfig};
-    use hygiea_db::{LiveConfigConfig, PgConnectConfig, SeaOrmPgConfig, SeaOrmPgPool};
+    use hygiea_core::app::RegistryConfig;
+    use hygiea_db::{LiveConfigConfig, PgConnectConfig, SeaOrmPgConfig};
     use hygiea_test::container::{ContainerSpec, RunningContainer};
     use sea_orm::ConnectionTrait;
 
+    use super::common::{LiveInst, uses};
     use super::*;
+
+    type Source = LiveInst<SeaOrmPgConfig>;
 
     const PASSWORD: &str = "hygiea-test";
     const PORT: u16 = 5432;
@@ -788,6 +784,7 @@ mod live_config {
     /// 轮询间隔很长：测试里的变化只能靠通知收到
     fn config(server: &RunningContainer, search_path: &str) -> SeaOrmPgConfig {
         SeaOrmPgConfig {
+            uses: uses(3),
             connect: PgConnectConfig {
                 host: server.host().to_string(),
                 port: server.port(PORT),
@@ -795,11 +792,10 @@ mod live_config {
                 schema_search_path: search_path.to_string(),
                 ..Default::default()
             },
-            live_config: LiveConfigConfig {
-                enabled: true,
+            live_config: Some(LiveConfigConfig {
                 poll_interval_secs: Some(3600),
                 ..Default::default()
-            },
+            }),
             ..Default::default()
         }
     }
@@ -808,12 +804,11 @@ mod live_config {
     #[tokio::test]
     async fn update_is_pushed_by_notify() {
         let server = start().await;
-        let pool = SeaOrmPgPool::from_config(&config(&server, ""), &app())
-            .await
-            .unwrap();
-        let cache = pool.live_config("cache", Cache::default()).await.unwrap();
+        let pool = Source::open(&config(&server, ""), &app()).await;
+        let cache = pool.bind("cache", Cache::default()).await.unwrap();
         assert_eq!(cache.get().ttl_secs, 0);
-        pool.execute_unprepared("UPDATE hy_config SET value = '8' WHERE namespace = 'cache'")
+        pool.pool()
+            .execute_unprepared("UPDATE hy_config SET value = '8' WHERE namespace = 'cache'")
             .await
             .unwrap();
         eventually(5, || async { cache.get().ttl_secs == 8 }).await;
@@ -824,15 +819,16 @@ mod live_config {
     #[tokio::test]
     async fn follows_search_path() {
         let server = start().await;
-        let admin = SeaOrmPgPool::from_config(&config(&server, ""), &app())
+        let admin = Source::open(&config(&server, ""), &app()).await;
+        admin
+            .pool()
+            .execute_unprepared("CREATE SCHEMA app")
             .await
             .unwrap();
-        admin.execute_unprepared("CREATE SCHEMA app").await.unwrap();
-        let pool = SeaOrmPgPool::from_config(&config(&server, "app"), &app())
-            .await
-            .unwrap();
-        let cache = pool.live_config("cache", Cache::default()).await.unwrap();
+        let pool = Source::open(&config(&server, "app"), &app()).await;
+        let cache = pool.bind("cache", Cache::default()).await.unwrap();
         let created = admin
+            .pool()
             .query_one_raw(sea_orm::Statement::from_string(
                 sea_orm::DbBackend::Postgres,
                 "SELECT to_regclass('app.hy_config') IS NOT NULL",
@@ -844,6 +840,7 @@ mod live_config {
             .unwrap();
         assert!(created);
         admin
+            .pool()
             .execute_unprepared("UPDATE app.hy_config SET value = '8' WHERE namespace = 'cache'")
             .await
             .unwrap();

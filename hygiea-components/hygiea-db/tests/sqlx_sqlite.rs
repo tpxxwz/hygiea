@@ -52,9 +52,10 @@ struct All {
 
 /// 连接池本身：内存库、本地文件都能连上、执行，经 Registry 启动和停止
 mod pool {
-    use hygiea_core::app::{Component, ConfigResource, Name, Registry, Resources};
+    use hygiea_core::app::{Component, Name, Registry, Resources};
     use hygiea_db::{
-        PoolConfig, SqliteConnectConfig, SqlxSqliteComponent, SqlxSqliteConfig, SqlxSqlitePool,
+        DbResources, PoolConfig, SqliteConnectConfig, SqlxSqliteComponent, SqlxSqliteConfig,
+        SqlxSqlitePool,
     };
 
     fn memory_config() -> SqlxSqliteConfig {
@@ -176,15 +177,16 @@ mod pool {
                     database: database.clone(),
                     ..Default::default()
                 },
-                pool: PoolConfig {
+                pool: Some(PoolConfig {
                     max_connections: Some(1),
                     ..Default::default()
-                },
+                }),
                 ..Default::default()
             };
-            let pool = SqlxSqlitePool::from_config(&config, &Default::default())
+            let db = DbResources::from_config(&config, &Default::default())
                 .await
                 .unwrap();
+            let pool = db.pool.clone().unwrap();
             hygiea_db::sqlx::transaction(&*pool, "create and insert", async |tx| {
                 sqlx::query("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT NOT NULL)")
                     .execute(&mut **tx)
@@ -203,21 +205,24 @@ mod pool {
                 .await
                 .unwrap();
             assert_eq!(v, "a", "{database}");
-            pool.close().await.unwrap();
+            db.close().await.unwrap();
         }
     }
 }
 
 /// 动态配置（feature `live-config`）：小池另开一条连接，内存库连到的是另一个空库，所以用本地临时文件
 mod live_config {
-    use hygiea_core::app::{ConfigResource, RegistryConfig};
+    use hygiea_core::app::RegistryConfig;
     use hygiea_db::{
-        PoolConfig, RepoErr, SqliteConnectConfig, SqliteConnectOverride, SqliteLiveConfigConfig,
-        SqlxSqliteConfig, SqlxSqlitePool,
+        DbResources, PoolConfig, RepoErr, SqliteConnectConfig, SqliteConnectOverride,
+        SqliteLiveConfigConfig, SqlxSqliteConfig, SqlxSqlitePool,
     };
     use tempfile::TempDir;
 
+    use super::common::{LiveInst, open_pool, uses};
     use super::*;
+
+    type Inst = LiveInst<SqlxSqliteConfig>;
 
     /// 应用名 `hy`：表是 hy_config、hy_config_revision、hy_config_history
     fn app() -> RegistryConfig {
@@ -227,17 +232,12 @@ mod live_config {
         }
     }
 
-    fn enabled() -> SqliteLiveConfigConfig {
-        SqliteLiveConfigConfig {
-            enabled: true,
-            ..Default::default()
-        }
-    }
-
-    /// 一个临时库。连接池本身模拟别的程序改表，动态配置走它自己的那条连接
+    /// 一个临时库。业务池模拟别的程序改表，动态配置走它自己的那条连接
     struct Env {
         _dir: TempDir,
+        /// `uses = 3`：业务池加动态配置
         config: SqlxSqliteConfig,
+        source: Inst,
         pool: SqlxSqlitePool,
     }
 
@@ -245,32 +245,33 @@ mod live_config {
         async fn new() -> Self {
             let dir = tempfile::tempdir().unwrap();
             let config = SqlxSqliteConfig {
+                uses: uses(3),
                 connect: SqliteConnectConfig {
                     database: dir.path().join("dyn.db").display().to_string(),
                     ..Default::default()
                 },
-                live_config: enabled(),
+                live_config: Some(SqliteLiveConfigConfig::default()),
                 ..Default::default()
             };
-            let pool = SqlxSqlitePool::from_config(&config, &app()).await.unwrap();
+            let source = Inst::open(&config, &app()).await;
+            let pool = source.pool().clone();
             Self {
                 _dir: dir,
                 config,
+                source,
                 pool,
             }
         }
 
-        /// 同一个库再建一个连接池，相当于重启程序
-        async fn restart(&self) -> SqlxSqlitePool {
-            SqlxSqlitePool::from_config(&self.config, &app())
-                .await
-                .unwrap()
+        /// 同一个库再建一次，相当于重启程序
+        async fn restart(&self) -> Inst {
+            Inst::open(&self.config, &app()).await
         }
 
         /// 先绑一个空的 namespace：第一次 bind 才建表，测试要在 bind 前往表里写数据
-        async fn start(&self) -> SqlxSqlitePool {
-            let source = self.pool.clone();
-            source.live_config("_start", Empty {}).await.unwrap();
+        async fn start(&self) -> Inst {
+            let source = self.source.clone();
+            source.bind("_start", Empty {}).await.unwrap();
             source
         }
 
@@ -293,7 +294,7 @@ mod live_config {
     async fn bind_seeds_defaults() {
         let env = Env::new().await;
         let source = env.start().await;
-        let sync = source.live_config("sync", Job::default()).await.unwrap();
+        let sync = source.bind("sync", Job::default()).await.unwrap();
 
         assert_eq!(*sync.get(), Job::default());
         assert_eq!(env.value("sync", "levels").await.as_deref(), Some("[1,2]"));
@@ -318,7 +319,7 @@ mod live_config {
         )
         .await;
 
-        let sync = source.live_config("sync", Job::default()).await.unwrap();
+        let sync = source.bind("sync", Job::default()).await.unwrap();
         assert!(sync.get().enabled);
         assert_eq!(env.value("sync", "enabled").await.as_deref(), Some("true"));
     }
@@ -328,7 +329,7 @@ mod live_config {
     async fn update_is_picked_up_by_polling() {
         let env = Env::new().await;
         let source = env.start().await;
-        let mut sync = source.live_config("sync", Job::default()).await.unwrap();
+        let mut sync = source.bind("sync", Job::default()).await.unwrap();
 
         env.exec("UPDATE hy_config SET value = '[3]' WHERE namespace = 'sync' AND key = 'levels'")
             .await;
@@ -355,7 +356,7 @@ mod live_config {
     async fn same_value_update_is_not_a_change() {
         let env = Env::new().await;
         let source = env.start().await;
-        source.live_config("sync", Job::default()).await.unwrap();
+        source.bind("sync", Job::default()).await.unwrap();
 
         env.exec("UPDATE hy_config SET value = value WHERE namespace = 'sync'")
             .await;
@@ -374,7 +375,7 @@ mod live_config {
         let source = env.start().await;
         env.exec("INSERT INTO hy_config (namespace, key, value) VALUES ('sync', 'start_time', '\"02:00\"')")
             .await;
-        let sync = source.live_config("sync", Job::default()).await.unwrap();
+        let sync = source.bind("sync", Job::default()).await.unwrap();
         assert_eq!(sync.get().start_time, "02:00");
 
         env.exec("DELETE FROM hy_config WHERE namespace = 'sync' AND key = 'start_time'")
@@ -394,16 +395,20 @@ mod live_config {
     async fn history_keeps_latest_rows() {
         let env = Env::new().await;
         let source = env.start().await;
-        let _sync = source.live_config("sync", Job::default()).await.unwrap();
+        let _sync = source.bind("sync", Job::default()).await.unwrap();
         env.exec("UPDATE hy_config SET value = '[3]' WHERE namespace = 'sync' AND key = 'levels'")
             .await;
         assert_eq!(history_count(&env.pool).await, 4);
 
         let mut config = env.config.clone();
-        config.live_config.history_keep_rows = Some(2);
-        config.live_config.history_trim_interval_mins = Some(60);
-        let restarted = SqlxSqlitePool::from_config(&config, &app()).await.unwrap();
-        let _sync = restarted.live_config("sync", Job::default()).await.unwrap();
+        config.live_config.as_mut().unwrap().history_keep_rows = Some(2);
+        config
+            .live_config
+            .as_mut()
+            .unwrap()
+            .history_trim_interval_mins = Some(60);
+        let restarted = Inst::open(&config, &app()).await;
+        let _sync = restarted.bind("sync", Job::default()).await.unwrap();
         eventually(5, || async { history_count(&env.pool).await == 2 }).await;
         // 留下的是最新的：最后一条是刚才的 U
         let op: String =
@@ -423,12 +428,17 @@ mod live_config {
         let open = |rows: Option<u64>, mins: Option<u64>| {
             let database = database.clone();
             async move {
-                let mut config = SqlxSqliteConfig::default();
+                let mut config = SqlxSqliteConfig {
+                    uses: uses(3),
+                    live_config: Some(SqliteLiveConfigConfig {
+                        history_keep_rows: rows,
+                        history_trim_interval_mins: mins,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                };
                 config.connect.database = database;
-                config.live_config.enabled = true;
-                config.live_config.history_keep_rows = rows;
-                config.live_config.history_trim_interval_mins = mins;
-                SqlxSqlitePool::from_config(&config, &app()).await
+                DbResources::from_config(&config, &app()).await
             }
         };
         use hygiea_core::BaseErr::NotPositive;
@@ -446,7 +456,7 @@ mod live_config {
     async fn bad_value_keeps_old() {
         let env = Env::new().await;
         let source = env.start().await;
-        let sync = source.live_config("sync", Job::default()).await.unwrap();
+        let sync = source.bind("sync", Job::default()).await.unwrap();
 
         env.exec(
             "UPDATE hy_config SET value = '\"abc\"' WHERE namespace = 'sync' AND key = 'enabled'",
@@ -471,10 +481,7 @@ mod live_config {
         env.exec("INSERT INTO hy_config (namespace, key, value) VALUES ('sync', 'enabled', '1.5')")
             .await;
 
-        let e = source
-            .live_config("sync", Job::default())
-            .await
-            .unwrap_err();
+        let e = source.bind("sync", Job::default()).await.unwrap_err();
         assert!(e.is(RepoErr::LiveConfigDecodeFailed), "{e:#}");
     }
 
@@ -483,17 +490,14 @@ mod live_config {
     async fn defaults_must_be_object() {
         let env = Env::new().await;
         let source = env.start().await;
-        let e = source.live_config("list", vec![1, 2]).await.unwrap_err();
+        let e = source.bind("list", vec![1, 2]).await.unwrap_err();
         assert!(e.is(RepoErr::LiveConfigDefaultsInvalid), "{e:#}");
 
         #[derive(Debug, Serialize, Deserialize)]
         struct Root {
             flag: bool,
         }
-        let e = source
-            .live_config_all(Root { flag: true })
-            .await
-            .unwrap_err();
+        let e = source.bind_all(Root { flag: true }).await.unwrap_err();
         assert!(e.is(RepoErr::LiveConfigDefaultsInvalid), "{e:#}");
     }
 
@@ -502,7 +506,7 @@ mod live_config {
     async fn bind_all_namespaces() {
         let env = Env::new().await;
         let source = env.start().await;
-        let all = source.live_config_all(All::default()).await.unwrap();
+        let all = source.bind_all(All::default()).await.unwrap();
         assert_eq!(env.value("cache", "ttl_secs").await.as_deref(), Some("60"));
 
         env.exec(
@@ -518,7 +522,7 @@ mod live_config {
     async fn view_follows_latest() {
         let env = Env::new().await;
         let source = env.start().await;
-        let all = source.live_config_all(All::default()).await.unwrap();
+        let all = source.bind_all(All::default()).await.unwrap();
         let cache = all.view(|c| &c.cache);
         let before = cache.get();
         assert_eq!(before.ttl_secs, 60);
@@ -547,17 +551,14 @@ mod live_config {
 
         let env = Env::new().await;
         let source = env.start().await;
-        source
-            .live_config("cache", V1 { ttl_secs: 60 })
-            .await
-            .unwrap();
+        source.bind("cache", V1 { ttl_secs: 60 }).await.unwrap();
         env.exec(
             "UPDATE hy_config SET value = '90' WHERE namespace = 'cache' AND key = 'ttl_secs'",
         )
         .await;
 
         let v2 = source
-            .live_config(
+            .bind(
                 "cache",
                 V2 {
                     ttl_secs: 60,
@@ -575,7 +576,7 @@ mod live_config {
     async fn rename_is_delete_and_insert() {
         let env = Env::new().await;
         let source = env.start().await;
-        source.live_config("cache", Cache::default()).await.unwrap();
+        source.bind("cache", Cache::default()).await.unwrap();
 
         env.exec("UPDATE hy_config SET key = 'ttl' WHERE namespace = 'cache' AND key = 'ttl_secs'")
             .await;
@@ -598,24 +599,20 @@ mod live_config {
     #[tokio::test]
     async fn closed_source() {
         let started = Env::new().await;
-        started
-            .pool
-            .live_config("sync", Job::default())
-            .await
-            .unwrap();
-        started.pool.close().await.unwrap();
+        started.source.bind("sync", Job::default()).await.unwrap();
+        started.source.close().await.unwrap();
         let e = started
-            .pool
-            .live_config("sync", Job::default())
+            .source
+            .bind("sync", Job::default())
             .await
             .unwrap_err();
         assert!(e.is(RepoErr::LiveConfigClosed), "{e:#}");
 
         let never_started = Env::new().await;
-        never_started.pool.close().await.unwrap();
+        never_started.source.close().await.unwrap();
         let e = never_started
-            .pool
-            .live_config("sync", Job::default())
+            .source
+            .bind("sync", Job::default())
             .await
             .unwrap_err();
         assert!(e.is(RepoErr::LiveConfigClosed), "{e:#}");
@@ -628,8 +625,8 @@ mod live_config {
         env.exec("CREATE TABLE hy_config (id INTEGER PRIMARY KEY, name TEXT)")
             .await;
         let e = env
-            .pool
-            .live_config("cache", Cache::default())
+            .source
+            .bind("cache", Cache::default())
             .await
             .unwrap_err();
         assert!(e.is(RepoErr::LiveConfigSchemaMismatch), "{e:#}");
@@ -658,7 +655,7 @@ mod live_config {
         let e = env
             .restart()
             .await
-            .live_config("cache", Cache::default())
+            .bind("cache", Cache::default())
             .await
             .unwrap_err();
         assert!(e.is(RepoErr::LiveConfigSchemaMismatch), "{e:#}");
@@ -672,8 +669,8 @@ mod live_config {
         env.exec("CREATE TRIGGER hy_config_insert AFTER INSERT ON other BEGIN SELECT 1; END")
             .await;
         let e = env
-            .pool
-            .live_config("cache", Cache::default())
+            .source
+            .bind("cache", Cache::default())
             .await
             .unwrap_err();
         assert!(e.is(RepoErr::LiveConfigSchemaMismatch), "{e:#}");
@@ -690,7 +687,7 @@ mod live_config {
     async fn missing_trigger_refuses() {
         let env = Env::new().await;
         let source = env.start().await;
-        source.live_config("cache", Cache::default()).await.unwrap();
+        source.bind("cache", Cache::default()).await.unwrap();
         env.exec("UPDATE hy_config SET value = '99' WHERE namespace = 'cache'")
             .await;
         env.exec("DROP TRIGGER hy_config_delete").await;
@@ -698,7 +695,7 @@ mod live_config {
         let e = env
             .restart()
             .await
-            .live_config("cache", Cache::default())
+            .bind("cache", Cache::default())
             .await
             .unwrap_err();
         assert!(e.is(RepoErr::LiveConfigSchemaMismatch), "{e:#}");
@@ -710,27 +707,28 @@ mod live_config {
     async fn live_config_does_not_use_main_pool() {
         let dir = tempfile::tempdir().unwrap();
         let config = SqlxSqliteConfig {
+            uses: uses(3),
             connect: SqliteConnectConfig {
                 database: dir.path().join("dedicated.db").display().to_string(),
                 ..Default::default()
             },
-            pool: PoolConfig {
+            pool: Some(PoolConfig {
                 max_connections: Some(1),
                 acquire_timeout_secs: Some(1),
                 ..Default::default()
-            },
-            live_config: enabled(),
+            }),
+            live_config: Some(SqliteLiveConfigConfig::default()),
         };
-        let pool = SqlxSqlitePool::from_config(&config, &app()).await.unwrap();
-        let _held = pool.acquire().await.unwrap();
+        let pool = Inst::open(&config, &app()).await;
+        let _held = pool.pool().acquire().await.unwrap();
 
-        let cache = pool.live_config("cache", Cache::default()).await.unwrap();
+        let cache = pool.bind("cache", Cache::default()).await.unwrap();
         assert_eq!(*cache.get(), Cache::default());
     }
 
-    /// 配置里没开：调用报 LiveConfigDisabled，也不建表
+    /// `uses` 不带 2：没有动态配置，也不建表；写了 `[live_config]` 段启动报错
     #[tokio::test]
-    async fn disabled_by_default() {
+    async fn not_in_uses() {
         let dir = tempfile::tempdir().unwrap();
         let config = SqlxSqliteConfig {
             connect: SqliteConnectConfig {
@@ -739,20 +737,23 @@ mod live_config {
             },
             ..Default::default()
         };
-        let pool = SqlxSqlitePool::from_config(&config, &app()).await.unwrap();
-        let e = pool
-            .live_config("cache", Cache::default())
-            .await
-            .unwrap_err();
-        assert!(e.is(RepoErr::LiveConfigDisabled), "{e:#}");
-        let e = pool.live_config_all(All::default()).await.unwrap_err();
-        assert!(e.is(RepoErr::LiveConfigDisabled), "{e:#}");
+        let db = DbResources::from_config(&config, &app()).await.unwrap();
+        assert!(db.live_config.is_none());
         let tables: i64 =
             sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE name LIKE 'hy_config%'")
-                .fetch_one(&*pool)
+                .fetch_one(&**db.pool.as_ref().unwrap())
                 .await
                 .unwrap();
         assert_eq!(tables, 0);
+
+        let written = SqlxSqliteConfig {
+            live_config: Some(SqliteLiveConfigConfig::default()),
+            ..config
+        };
+        let e = DbResources::from_config(&written, &app())
+            .await
+            .unwrap_err();
+        assert!(e.is(hygiea_core::app::AppErr::InvalidConfig), "{e:#}");
     }
 
     /// 不 bind 就不建表
@@ -773,13 +774,13 @@ mod live_config {
         let env = Env::new().await;
         let other = env._dir.path().join("config.db").display().to_string();
         let mut config = env.config.clone();
-        config.live_config.table_prefix = Some(String::new());
-        config.live_config.connect = SqliteConnectOverride {
+        config.live_config.as_mut().unwrap().table_prefix = Some(String::new());
+        config.live_config.as_mut().unwrap().connect = SqliteConnectOverride {
             database: Some(other.clone()),
             ..Default::default()
         };
-        let pool = SqlxSqlitePool::from_config(&config, &app()).await.unwrap();
-        let cache = pool.live_config("cache", Cache::default()).await.unwrap();
+        let pool = Inst::open(&config, &app()).await;
+        let cache = pool.bind("cache", Cache::default()).await.unwrap();
 
         let count = |pool: SqlxSqlitePool| async move {
             sqlx::query_scalar::<_, i64>(
@@ -789,8 +790,8 @@ mod live_config {
             .await
             .unwrap()
         };
-        assert_eq!(count(pool.clone()).await, 0, "主库里没有");
-        let config_db = SqlxSqlitePool::from_config(
+        assert_eq!(count(pool.pool().clone()).await, 0, "主库里没有");
+        let config_db = open_pool(
             &SqlxSqliteConfig {
                 connect: SqliteConnectConfig {
                     database: other,
@@ -800,8 +801,7 @@ mod live_config {
             },
             &app(),
         )
-        .await
-        .unwrap();
+        .await;
         assert_eq!(count(config_db.clone()).await, 3);
         sqlx::query("UPDATE config SET value = '5' WHERE namespace = 'cache'")
             .execute(&*config_db)

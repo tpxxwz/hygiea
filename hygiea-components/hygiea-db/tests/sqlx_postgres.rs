@@ -35,10 +35,14 @@ enum TestLockKey {
 /// 连接池本身：连接、search_path、经 Registry 启动和停止、HyUtcDateTime、事务、分页
 #[container]
 mod pool {
-    use hygiea_core::app::{ConfigResource, Registry, Resources};
+    use hygiea_core::app::{Registry, Resources};
     use hygiea_core::datetime::{HygieaDateTimeExt, UtcDateTime};
     use hygiea_db::HyUtcDateTime;
-    use hygiea_db::{PgConnectConfig, SqlxPgComponent, SqlxPgConfig, SqlxPgPool};
+    use hygiea_db::{
+        DbResources, PgConnectConfig, PoolConfig, SqlxPgComponent, SqlxPgConfig, SqlxPgPool,
+    };
+
+    use super::common::open_pool;
     use hygiea_test::container::{ContainerSpec, RunningContainer};
 
     const USER: &str = "postgres";
@@ -84,14 +88,14 @@ mod pool {
 
     /// 用默认配置连上去建好 [`SCHEMA`]，search_path 指向不存在的 schema 时 current_schema() 是 NULL
     async fn create_schema(server: &RunningContainer) {
-        let pool = SqlxPgPool::from_config(&sqlx_config(server), &Default::default())
+        let db = DbResources::from_config(&sqlx_config(server), &Default::default())
             .await
             .unwrap();
         sqlx::query("CREATE SCHEMA hygiea_test")
-            .execute(&*pool)
+            .execute(&**db.pool.as_ref().unwrap())
             .await
             .unwrap();
-        pool.close().await.unwrap();
+        db.close().await.unwrap();
     }
 
     /// 启动 registry，把 `Resources` 交给 `check`，拿回它的结果。
@@ -118,9 +122,7 @@ mod pool {
     #[tokio::test]
     async fn sqlx_connect_success() {
         let server = start().await;
-        let pool = SqlxPgPool::from_config(&sqlx_config(&server), &Default::default())
-            .await
-            .unwrap();
+        let pool = open_pool(&sqlx_config(&server), &Default::default()).await;
 
         let value: i32 = sqlx::query_scalar("SELECT 1")
             .fetch_one(&*pool)
@@ -136,9 +138,7 @@ mod pool {
 
         let mut config = sqlx_config(&server);
         config.connect.schema_search_path = SCHEMA.to_string();
-        let pool = SqlxPgPool::from_config(&config, &Default::default())
-            .await
-            .unwrap();
+        let pool = open_pool(&config, &Default::default()).await;
 
         let schema: Option<String> = sqlx::query_scalar("SELECT current_schema()")
             .fetch_one(&*pool)
@@ -151,14 +151,18 @@ mod pool {
     async fn sqlx_stop_closes_pool() {
         let server = start().await;
         let mut config = sqlx_config(&server);
-        config.pool.max_connections = Some(2);
-        let pool = SqlxPgPool::from_config(&config, &Default::default())
+        config.pool = Some(PoolConfig {
+            max_connections: Some(2),
+            ..Default::default()
+        });
+        let db = DbResources::from_config(&config, &Default::default())
             .await
             .unwrap();
+        let pool = db.pool.clone().unwrap();
 
         sqlx::query("SELECT 1").fetch_one(&*pool).await.unwrap();
 
-        pool.close().await.unwrap();
+        db.close().await.unwrap();
 
         // 关闭后再发查询应该失败
         let err = sqlx::query("SELECT 1").fetch_one(&*pool).await.unwrap_err();
@@ -182,6 +186,63 @@ mod pool {
         assert_eq!(value, 1);
     }
 
+    /// `uses = 7` 经 Registry 启动：业务池、动态配置按组件名，锁匿名，都能用。再加一个只给锁用（`uses = 4`）的组件时
+    /// 两个组件都提供锁，启动前就报 DuplicateProvider
+    #[cfg(feature = "live-config")]
+    #[tokio::test]
+    async fn uses_puts_resources_via_registry() {
+        use hygiea_core::app::AppErr;
+        use hygiea_core::lock::DistributedLock;
+        use hygiea_db::{DbLiveConfig, DbLock, DbUses};
+
+        #[derive(Default, serde::Serialize, serde::Deserialize)]
+        struct Cache {
+            ttl_secs: u64,
+        }
+
+        let server = start().await;
+        let all = SqlxPgConfig {
+            uses: DbUses::try_from(7).unwrap(),
+            ..sqlx_config(&server)
+        };
+        let registry = Registry::new().add_named::<SqlxPgComponent>("main", all.clone());
+        let (pool, live, lock) = with_resources(registry, |res| {
+            (
+                res.get_named::<SqlxPgPool>("main").unwrap(),
+                res.get_named::<DbLiveConfig>("main").unwrap(),
+                res.get::<DbLock>().unwrap(),
+            )
+        })
+        .await;
+        let value: i32 = sqlx::query_scalar("SELECT 1")
+            .fetch_one(&*pool)
+            .await
+            .unwrap();
+        assert_eq!(value, 1);
+        assert_eq!(
+            live.bind("cache", Cache::default())
+                .await
+                .unwrap()
+                .get()
+                .ttl_secs,
+            0
+        );
+        assert!(lock.try_lock_i64(1).await.unwrap().is_some());
+
+        let lock_only = SqlxPgConfig {
+            uses: DbUses::try_from(4).unwrap(),
+            ..sqlx_config(&server)
+        };
+        let e = Registry::new()
+            .add_named::<SqlxPgComponent>("main", all)
+            .add_named::<SqlxPgComponent>("coord", lock_only)
+            .run()
+            .await
+            .0
+            .unwrap_err();
+        assert!(e.is(AppErr::DuplicateProvider), "{e:#}");
+    }
+
     // ---- HyUtcDateTime ------------------------------------------------------
 
     /// 存 `HyUtcDateTime` 的表：一个必填列、一个可空列，都是 `timestamptz`
@@ -199,9 +260,7 @@ mod pool {
     #[tokio::test]
     async fn sqlx_hy_utc_datetime_round_trip() {
         let server = start().await;
-        let pool = SqlxPgPool::from_config(&sqlx_config(&server), &Default::default())
-            .await
-            .unwrap();
+        let pool = open_pool(&sqlx_config(&server), &Default::default()).await;
         sqlx::query(CREATE_RECORD).execute(&*pool).await.unwrap();
 
         let at = HyUtcDateTime(utc("2026-10-05T12:57:24.719Z"));
@@ -240,9 +299,7 @@ mod pool {
         use hygiea_db::RepoErr;
 
         let server = start().await;
-        let pool = SqlxPgPool::from_config(&sqlx_config(&server), &Default::default())
-            .await
-            .unwrap();
+        let pool = open_pool(&sqlx_config(&server), &Default::default()).await;
         sqlx::query("CREATE TABLE item (id INT PRIMARY KEY)")
             .execute(&*pool)
             .await
@@ -286,9 +343,7 @@ mod pool {
         use hygiea_db::{Page, PageRequest};
 
         let server = start().await;
-        let pool = SqlxPgPool::from_config(&sqlx_config(&server), &Default::default())
-            .await
-            .unwrap();
+        let pool = open_pool(&sqlx_config(&server), &Default::default()).await;
         sqlx::query(CREATE_RECORD).execute(&*pool).await.unwrap();
         sqlx::query(
             "INSERT INTO record (id, create_at) SELECT g, now() FROM generate_series(1, 5) AS g",
@@ -318,11 +373,14 @@ mod pool {
 /// 分布式锁（feature `lock`；开了 `lock-row` 测锁表，不开时测字符串 key 不支持）
 #[container]
 mod lock {
-    use hygiea_core::app::{ConfigResource, RegistryConfig};
-    use hygiea_db::{PgConnectConfig, SqlxPgConfig, SqlxPgPool};
+    use hygiea_core::app::RegistryConfig;
+    use hygiea_db::{PgConnectConfig, PoolConfig, SqlxPgConfig};
     use hygiea_test::container::{ContainerSpec, RunningContainer};
 
+    use super::common::{LockInst, uses};
     use super::*;
+
+    type Inst = LockInst<SqlxPgConfig>;
 
     const PASSWORD: &str = "hygiea-test";
 
@@ -354,17 +412,18 @@ mod lock {
         }
     }
 
-    /// 一个连接池模拟一个实例
-    async fn pool(server: &RunningContainer) -> SqlxPgPool {
+    /// 一个实例：业务池加锁（`uses = 5`），锁和业务池共用连接
+    async fn pool(server: &RunningContainer) -> Inst {
         let config = SqlxPgConfig {
+            uses: uses(5),
             connect: connect(server),
             ..Default::default()
         };
-        SqlxPgPool::from_config(&config, &app("hy")).await.unwrap()
+        Inst::open(&config, &app("hy")).await
     }
 
     #[cfg(feature = "lock-row")]
-    async fn table_exists(pool: &SqlxPgPool, table: &str) -> bool {
+    async fn table_exists(pool: &hygiea_db::SqlxPgPool, table: &str) -> bool {
         sqlx::query_scalar("SELECT to_regclass($1) IS NOT NULL")
             .bind(table)
             .fetch_one(&**pool)
@@ -425,7 +484,7 @@ mod lock {
             "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND classid = 999100001 \
              AND objid = 42 AND objsubid = 2",
         )
-        .fetch_one(&*b)
+        .fetch_one(&**b.pool())
         .await
         .unwrap();
         assert_eq!(held, 1, "pg_locks 里看到的是原生 (int, int) 形式");
@@ -490,11 +549,12 @@ mod lock {
              ALTER ROLE strict SET idle_in_transaction_session_timeout = '200ms'; \
              ALTER ROLE strict SET transaction_timeout = '300ms'",
         )
-        .execute(&*admin)
+        .execute(&**admin.pool())
         .await
         .unwrap();
         let strict = || async {
             let config = SqlxPgConfig {
+                uses: uses(5),
                 connect: PgConnectConfig {
                     username: "strict".to_string(),
                     password: "strict".to_string(),
@@ -502,11 +562,13 @@ mod lock {
                 },
                 ..Default::default()
             };
-            SqlxPgPool::from_config(&config, &app("hy")).await.unwrap()
+            Inst::open(&config, &app("hy")).await
         };
         let (a, b) = (strict().await, strict().await);
 
-        let slow = sqlx::query("SELECT pg_sleep(0.5)").execute(&*a).await;
+        let slow = sqlx::query("SELECT pg_sleep(0.5)")
+            .execute(&**a.pool())
+            .await;
         assert!(slow.is_err(), "普通查询仍受 statement_timeout 限制");
 
         let guard = a.try_lock_i64(1).await.unwrap().unwrap();
@@ -546,15 +608,16 @@ mod lock {
         let server = start().await;
         let a = pool(&server).await;
         let config = SqlxPgConfig {
+            uses: uses(5),
             connect: connect(&server),
-            pool: hygiea_db::PoolConfig {
+            pool: Some(PoolConfig {
                 max_connections: Some(1),
                 acquire_timeout_secs: Some(2),
                 ..Default::default()
-            },
+            }),
             ..Default::default()
         };
-        let b = SqlxPgPool::from_config(&config, &app("hy")).await.unwrap();
+        let b = Inst::open(&config, &app("hy")).await;
         let guard = a.try_lock_i64(1).await.unwrap().unwrap();
 
         let waiting = tokio::time::timeout(
@@ -574,11 +637,11 @@ mod lock {
     async fn string_key_uses_lock_table() {
         let server = start().await;
         let (a, b) = (pool(&server).await, pool(&server).await);
-        assert!(table_exists(&a, "hy_lock").await, "启动时建表");
+        assert!(table_exists(a.pool(), "hy_lock").await, "启动时建表");
         let persistence: String = sqlx::query_scalar(
             "SELECT relpersistence::text FROM pg_class WHERE oid = 'hy_lock'::regclass",
         )
-        .fetch_one(&*a)
+        .fetch_one(&**a.pool())
         .await
         .unwrap();
         assert_eq!(persistence, "u", "UNLOGGED");
@@ -616,13 +679,13 @@ mod lock {
         guard.release().await.unwrap();
 
         let waited = waiter.await.unwrap().unwrap().unwrap();
-        assert_eq!(count_rows(&a).await, 0, "持有中的行没提交，看不到");
+        assert_eq!(count_rows(a.pool()).await, 0, "持有中的行没提交，看不到");
         waited.release().await.unwrap();
-        assert_eq!(count_rows(&a).await, 0, "释放后行跟着回滚");
+        assert_eq!(count_rows(a.pool()).await, 0, "释放后行跟着回滚");
     }
 
     #[cfg(feature = "lock-row")]
-    async fn count_rows(pool: &SqlxPgPool) -> i64 {
+    async fn count_rows(pool: &hygiea_db::SqlxPgPool) -> i64 {
         sqlx::query_scalar("SELECT count(*) FROM hy_lock")
             .fetch_one(&**pool)
             .await
@@ -661,20 +724,19 @@ mod lock {
     async fn lazy_pool_creates_table_on_first_use() {
         let server = start().await;
         let config = SqlxPgConfig {
+            uses: uses(5),
             connect: connect(&server),
-            pool: hygiea_db::PoolConfig {
+            pool: Some(PoolConfig {
                 connect_lazy: true,
                 ..Default::default()
-            },
+            }),
             ..Default::default()
         };
-        let lazy = SqlxPgPool::from_config(&config, &app("lazy"))
-            .await
-            .unwrap();
-        assert!(!table_exists(&lazy, "lazy_lock").await);
+        let lazy = Inst::open(&config, &app("lazy")).await;
+        assert!(!table_exists(lazy.pool(), "lazy_lock").await);
         let guard = lazy.try_lock(lock_key!(TestLockKey::Job, 1)).await.unwrap();
         assert!(guard.is_some());
-        assert!(table_exists(&lazy, "lazy_lock").await);
+        assert!(table_exists(lazy.pool(), "lazy_lock").await);
     }
 
     /// 已有同名的表但列对不上：不动它，拒绝启动
@@ -684,14 +746,15 @@ mod lock {
         let server = start().await;
         let other = pool(&server).await;
         sqlx::raw_sql("CREATE TABLE bad_lock (key integer PRIMARY KEY)")
-            .execute(&*other)
+            .execute(&**other.pool())
             .await
             .unwrap();
         let config = SqlxPgConfig {
+            uses: uses(5),
             connect: connect(&server),
             ..Default::default()
         };
-        let e = SqlxPgPool::from_config(&config, &app("bad"))
+        let e = hygiea_db::DbResources::from_config(&config, &app("bad"))
             .await
             .unwrap_err();
         assert!(e.is(hygiea_db::RepoErr::LockTableSchemaMismatch), "{e:#}");
@@ -704,14 +767,15 @@ mod lock {
         let server = start().await;
         let other = pool(&server).await;
         sqlx::raw_sql("CREATE TABLE logged_lock (key text PRIMARY KEY)")
-            .execute(&*other)
+            .execute(&**other.pool())
             .await
             .unwrap();
         let config = SqlxPgConfig {
+            uses: uses(5),
             connect: connect(&server),
             ..Default::default()
         };
-        let e = SqlxPgPool::from_config(&config, &app("logged"))
+        let e = hygiea_db::DbResources::from_config(&config, &app("logged"))
             .await
             .unwrap_err();
         assert!(e.is(hygiea_db::RepoErr::LockTableSchemaMismatch), "{e:#}");
@@ -724,25 +788,26 @@ mod lock {
     async fn own_pool_keeps_locks_off_the_main_pool() {
         let server = start().await;
         let config = SqlxPgConfig {
+            uses: uses(5),
             connect: connect(&server),
-            pool: hygiea_db::PoolConfig {
+            pool: Some(PoolConfig {
                 max_connections: Some(1),
                 acquire_timeout_secs: Some(2),
                 ..Default::default()
-            },
-            lock: hygiea_db::PgLockConfig {
+            }),
+            lock: Some(hygiea_db::PgLockConfig {
                 max_connections: Some(2),
                 ..Default::default()
-            },
+            }),
             ..Default::default()
         };
-        let a = SqlxPgPool::from_config(&config, &app("hy")).await.unwrap();
+        let a = Inst::open(&config, &app("hy")).await;
         let first = a.try_lock_i64(1).await.unwrap().unwrap();
         let second = a.try_lock_i64(2).await.unwrap().unwrap();
         let held: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'hy-lock'",
         )
-        .fetch_one(&*a)
+        .fetch_one(&**a.pool())
         .await
         .unwrap();
         assert_eq!(held, 2, "两把锁各占锁池的一条连接，连接池的那条还能用");
@@ -755,12 +820,44 @@ mod lock {
             sqlx::query_scalar::<_, i64>(
                 "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'hy-lock'",
             )
-            .fetch_one(&*observer)
+            .fetch_one(&**observer.pool())
             .await
             .unwrap()
                 == 0
         })
         .await;
+    }
+
+    /// 只给锁用（`uses = 4`）：没有业务池，锁按默认的池参数单独建池（连接名 `hy-lock`），和别的实例照样互斥；
+    /// 关掉后锁的池跟着关
+    #[tokio::test]
+    async fn lock_only_has_own_pool() {
+        let server = start().await;
+        let config = SqlxPgConfig {
+            uses: uses(4),
+            connect: connect(&server),
+            ..Default::default()
+        };
+        let db = hygiea_db::DbResources::from_config(&config, &app("hy"))
+            .await
+            .unwrap();
+        assert!(db.pool.is_none());
+        let lock = db.lock.clone().unwrap();
+        let other = pool(&server).await;
+        let guard = lock.try_lock_i64(1).await.unwrap().unwrap();
+        assert!(other.try_lock_i64(1).await.unwrap().is_none());
+        let lock_conns = || async {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'hy-lock'",
+            )
+            .fetch_one(&**other.pool())
+            .await
+            .unwrap()
+        };
+        assert_eq!(lock_conns().await, 1);
+        guard.release().await.unwrap();
+        db.close().await.unwrap();
+        eventually(5, || async { lock_conns().await == 0 }).await;
     }
 
     /// 锁表的 table_prefix 写空的、connect 只换 schema：表是 `coord.lock`，两个实例照样互斥
@@ -770,26 +867,27 @@ mod lock {
         let server = start().await;
         let admin = pool(&server).await;
         sqlx::raw_sql("CREATE SCHEMA coord")
-            .execute(&*admin)
+            .execute(&**admin.pool())
             .await
             .unwrap();
         let config = SqlxPgConfig {
+            uses: uses(5),
             connect: connect(&server),
-            lock: hygiea_db::PgLockConfig {
+            lock: Some(hygiea_db::PgLockConfig {
                 table_prefix: Some(String::new()),
                 connect: hygiea_db::PgConnectOverride {
                     schema_search_path: Some("coord".to_string()),
                     ..Default::default()
                 },
                 ..Default::default()
-            },
+            }),
             ..Default::default()
         };
-        let a = SqlxPgPool::from_config(&config, &app("hy")).await.unwrap();
-        let b = SqlxPgPool::from_config(&config, &app("hy")).await.unwrap();
-        assert!(table_exists(&admin, "coord.lock").await);
+        let a = Inst::open(&config, &app("hy")).await;
+        let b = Inst::open(&config, &app("hy")).await;
+        assert!(table_exists(admin.pool(), "coord.lock").await);
         assert!(
-            !table_exists(&admin, "public.lock").await,
+            !table_exists(admin.pool(), "public.lock").await,
             "不在连接池的 schema 里"
         );
 
@@ -833,7 +931,7 @@ mod lock {
         guard.release().await.unwrap();
 
         let table: bool = sqlx::query_scalar("SELECT to_regclass('hy_lock') IS NOT NULL")
-            .fetch_one(&*a)
+            .fetch_one(&**a.pool())
             .await
             .unwrap();
         assert!(!table, "没开 lock-row 不建锁表");
@@ -844,14 +942,18 @@ mod lock {
 #[cfg(feature = "live-config")]
 #[container]
 mod live_config {
-    use hygiea_core::app::{ConfigResource, RegistryConfig};
+    use hygiea_core::app::RegistryConfig;
     use hygiea_db::{
-        PgConnectConfig, PgConnectOverride, PgLiveConfigConfig, RepoErr, SqlxPgConfig, SqlxPgPool,
+        DbResources, PgConnectConfig, PgConnectOverride, PgLiveConfigConfig, RepoErr, SqlxPgConfig,
+        SqlxPgPool,
     };
     use hygiea_test::container::{ContainerSpec, RunningContainer};
     use serde::{Deserialize, Serialize};
 
+    use super::common::{LiveInst, uses};
     use super::*;
+
+    type Inst = LiveInst<SqlxPgConfig>;
 
     #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
     struct Job {
@@ -894,9 +996,10 @@ mod live_config {
 
     const PORT: u16 = 5432;
 
-    /// 连接池本身模拟别的程序改表，动态配置走它自己的那条连接
+    /// 业务池模拟别的程序改表，动态配置走它自己的那条连接
     struct Env {
         server: RunningContainer,
+        source: Inst,
         pool: SqlxPgPool,
     }
 
@@ -908,16 +1011,19 @@ mod live_config {
                 .wait_log_times("database system is ready to accept connections", 2)
                 .start()
                 .await;
-            let pool = SqlxPgPool::from_config(&sqlx_config(&server), &app())
-                .await
-                .unwrap();
-            Self { server, pool }
+            let source = Inst::open(&sqlx_config(&server), &app()).await;
+            let pool = source.pool().clone();
+            Self {
+                server,
+                source,
+                pool,
+            }
         }
 
         /// 先绑一个空的 namespace：第一次 bind 才建表，测试要在 bind 前往表里写数据
-        async fn start(&self) -> SqlxPgPool {
-            let source = self.pool.clone();
-            source.live_config("_start", Empty {}).await.unwrap();
+        async fn start(&self) -> Inst {
+            let source = self.source.clone();
+            source.bind("_start", Empty {}).await.unwrap();
             source
         }
 
@@ -940,7 +1046,6 @@ mod live_config {
     /// 轮询间隔很长：测试里的变化只能靠通知收到
     fn live_config() -> PgLiveConfigConfig {
         PgLiveConfigConfig {
-            enabled: true,
             poll_interval_secs: Some(3600),
             ..Default::default()
         }
@@ -948,8 +1053,9 @@ mod live_config {
 
     fn sqlx_config(server: &RunningContainer) -> SqlxPgConfig {
         SqlxPgConfig {
+            uses: uses(3),
             connect: connect(server),
-            live_config: live_config(),
+            live_config: Some(live_config()),
             ..Default::default()
         }
     }
@@ -968,7 +1074,7 @@ mod live_config {
     async fn history_is_trimmed() {
         let env = Env::new().await;
         let source = env.start().await;
-        let _sync = source.live_config("sync", Job::default()).await.unwrap();
+        let _sync = source.bind("sync", Job::default()).await.unwrap();
         env.exec("UPDATE hy_config SET value = '[3]' WHERE namespace = 'sync' AND key = 'levels'")
             .await;
         // sync 3 条 I + 1 条 U
@@ -981,10 +1087,14 @@ mod live_config {
         assert_eq!(count().await, 4);
 
         let mut config = sqlx_config(&env.server);
-        config.live_config.history_keep_rows = Some(2);
-        config.live_config.history_trim_interval_mins = Some(60);
-        let restarted = SqlxPgPool::from_config(&config, &app()).await.unwrap();
-        let _sync = restarted.live_config("sync", Job::default()).await.unwrap();
+        config.live_config.as_mut().unwrap().history_keep_rows = Some(2);
+        config
+            .live_config
+            .as_mut()
+            .unwrap()
+            .history_trim_interval_mins = Some(60);
+        let restarted = Inst::open(&config, &app()).await;
+        let _sync = restarted.bind("sync", Job::default()).await.unwrap();
         eventually(5, || async { count().await == 2 }).await;
         let op: String =
             sqlx::query_scalar("SELECT op FROM hy_config_history ORDER BY id DESC LIMIT 1")
@@ -999,7 +1109,7 @@ mod live_config {
     async fn update_is_pushed_by_notify() {
         let env = Env::new().await;
         let source = env.start().await;
-        let mut sync = source.live_config("sync", Job::default()).await.unwrap();
+        let mut sync = source.bind("sync", Job::default()).await.unwrap();
         assert_eq!(*sync.get(), Job::default());
 
         env.exec(
@@ -1027,7 +1137,7 @@ mod live_config {
     async fn bind_all_seeds_every_key() {
         let env = Env::new().await;
         let source = env.start().await;
-        let all = source.live_config_all(All::default()).await.unwrap();
+        let all = source.bind_all(All::default()).await.unwrap();
         assert_eq!(*all.get(), All::default());
 
         let rows: Vec<(String, String, String)> = sqlx::query_as(
@@ -1064,7 +1174,7 @@ mod live_config {
     async fn transaction_with_many_changes() {
         let env = Env::new().await;
         let source = env.start().await;
-        let all = source.live_config_all(All::default()).await.unwrap();
+        let all = source.bind_all(All::default()).await.unwrap();
 
         env.exec(
             "BEGIN; \
@@ -1087,7 +1197,7 @@ mod live_config {
     async fn rolled_back_change_is_ignored() {
         let env = Env::new().await;
         let source = env.start().await;
-        let mut sync = source.live_config("sync", Job::default()).await.unwrap();
+        let mut sync = source.bind("sync", Job::default()).await.unwrap();
 
         env.exec(
             "BEGIN; UPDATE hy_config SET value = 'true' WHERE namespace = 'sync' AND key = 'enabled'; ROLLBACK;",
@@ -1107,13 +1217,9 @@ mod live_config {
         let env = Env::new().await;
         let mut handles = Vec::new();
         for _ in 0..4 {
-            let pool = SqlxPgPool::from_config(&sqlx_config(&env.server), &app())
-                .await
-                .unwrap();
+            let pool = Inst::open(&sqlx_config(&env.server), &app()).await;
             handles.push(tokio::spawn(async move {
-                pool.live_config("cache", Cache::default())
-                    .await
-                    .map(|_| ())
+                pool.bind("cache", Cache::default()).await.map(|_| ())
             }));
         }
         for handle in handles {
@@ -1126,28 +1232,18 @@ mod live_config {
     async fn schema_check_on_restart() {
         let env = Env::new().await;
         let source = env.start().await;
-        source.live_config("cache", Cache::default()).await.unwrap();
+        source.bind("cache", Cache::default()).await.unwrap();
         env.exec("UPDATE hy_config SET value = '42' WHERE namespace = 'cache'")
             .await;
 
-        let restarted = SqlxPgPool::from_config(&sqlx_config(&env.server), &app())
-            .await
-            .unwrap();
-        let cache = restarted
-            .live_config("cache", Cache::default())
-            .await
-            .unwrap();
+        let restarted = Inst::open(&sqlx_config(&env.server), &app()).await;
+        let cache = restarted.bind("cache", Cache::default()).await.unwrap();
         assert_eq!(cache.get().ttl_secs, 42, "表里改过的值不能被默认值覆盖");
         restarted.close().await.unwrap();
 
         env.exec("ALTER TABLE hy_config ADD COLUMN note text").await;
-        let restarted = SqlxPgPool::from_config(&sqlx_config(&env.server), &app())
-            .await
-            .unwrap();
-        let e = restarted
-            .live_config("cache", Cache::default())
-            .await
-            .unwrap_err();
+        let restarted = Inst::open(&sqlx_config(&env.server), &app()).await;
+        let e = restarted.bind("cache", Cache::default()).await.unwrap_err();
         assert!(e.is(RepoErr::LiveConfigSchemaMismatch), "{e:#}");
     }
 
@@ -1161,8 +1257,8 @@ mod live_config {
         )
         .await;
         let e = env
-            .pool
-            .live_config("cache", Cache::default())
+            .source
+            .bind("cache", Cache::default())
             .await
             .unwrap_err();
         assert!(e.is(RepoErr::LiveConfigSchemaMismatch), "{e:#}");
@@ -1191,7 +1287,7 @@ mod live_config {
 
         let mut config = sqlx_config(&env.server);
         config.connect.params = "application_name=replica".to_string();
-        let e = SqlxPgPool::from_config(&config, &app()).await.unwrap_err();
+        let e = DbResources::from_config(&config, &app()).await.unwrap_err();
         assert!(e.is(hygiea_core::app::AppErr::InvalidConfig), "{e:#}");
     }
 
@@ -1203,10 +1299,8 @@ mod live_config {
             app_name: "cfg".to_string(),
             ..Default::default()
         };
-        let pool = SqlxPgPool::from_config(&sqlx_config(&env.server), &cfg)
-            .await
-            .unwrap();
-        let cache = pool.live_config("cache", Cache::default()).await.unwrap();
+        let pool = Inst::open(&sqlx_config(&env.server), &cfg).await;
+        let cache = pool.bind("cache", Cache::default()).await.unwrap();
 
         env.exec("UPDATE cfg_config SET value = '7' WHERE namespace = 'cache'")
             .await;
@@ -1223,9 +1317,9 @@ mod live_config {
             ("", "config"),
         ] {
             let mut config = sqlx_config(&env.server);
-            config.live_config.table_prefix = Some(prefix.to_string());
-            let pool = SqlxPgPool::from_config(&config, &app()).await.unwrap();
-            let cache = pool.live_config("cache", Cache::default()).await.unwrap();
+            config.live_config.as_mut().unwrap().table_prefix = Some(prefix.to_string());
+            let pool = Inst::open(&config, &app()).await;
+            let cache = pool.bind("cache", Cache::default()).await.unwrap();
             let ttl = cache.get().ttl_secs + 1;
             env.exec(&format!(
                 "UPDATE {table} SET value = '{ttl}' WHERE namespace = 'cache'"
@@ -1247,14 +1341,14 @@ mod live_config {
         )
         .await;
         let mut config = sqlx_config(&env.server);
-        config.live_config.connect = PgConnectOverride {
+        config.live_config.as_mut().unwrap().connect = PgConnectOverride {
             username: Some("cfg_user".to_string()),
             password: Some("cfg-pass".to_string()),
             schema_search_path: Some("cfg".to_string()),
             ..Default::default()
         };
-        let pool = SqlxPgPool::from_config(&config, &app()).await.unwrap();
-        let cache = pool.live_config("cache", Cache::default()).await.unwrap();
+        let pool = Inst::open(&config, &app()).await;
+        let cache = pool.bind("cache", Cache::default()).await.unwrap();
 
         let (in_cfg, in_public): (bool, bool) = sqlx::query_as(
             "SELECT to_regclass('cfg.hy_config') IS NOT NULL, to_regclass('public.hy_config') IS NOT NULL",
@@ -1276,6 +1370,25 @@ mod live_config {
         eventually(5, || async { cache.get().ttl_secs == 9 }).await;
     }
 
+    /// 只给动态配置用（`uses = 2`）：没有业务池，照样建表、靠通知收到修改
+    #[tokio::test]
+    async fn live_config_only_without_pool() {
+        let env = Env::new().await;
+        let config = SqlxPgConfig {
+            uses: uses(2),
+            connect: connect(&env.server),
+            live_config: Some(live_config()),
+            ..Default::default()
+        };
+        let source = Inst::open(&config, &app()).await;
+        assert!(source.0.pool.is_none());
+        let cache = source.bind("cache", Cache::default()).await.unwrap();
+        env.exec("UPDATE hy_config SET value = '5' WHERE namespace = 'cache'")
+            .await;
+        eventually(5, || async { cache.get().ttl_secs == 5 }).await;
+        source.close().await.unwrap();
+    }
+
     /// 两个 schema 里同名的表：channel 带 schema 名（`<schema>.config`），各收各的
     #[tokio::test]
     async fn channel_is_per_schema() {
@@ -1283,11 +1396,16 @@ mod live_config {
         env.exec("CREATE SCHEMA a; CREATE SCHEMA b;").await;
         let bind = |schema: &'static str| {
             let mut config = sqlx_config(&env.server);
-            config.live_config.table_prefix = Some(String::new());
-            config.live_config.connect.schema_search_path = Some(schema.to_string());
+            config.live_config.as_mut().unwrap().table_prefix = Some(String::new());
+            config
+                .live_config
+                .as_mut()
+                .unwrap()
+                .connect
+                .schema_search_path = Some(schema.to_string());
             async move {
-                let pool = SqlxPgPool::from_config(&config, &app()).await.unwrap();
-                pool.live_config("cache", Cache::default()).await.unwrap()
+                let pool = Inst::open(&config, &app()).await;
+                pool.bind("cache", Cache::default()).await.unwrap()
             }
         };
         let (a, b) = (bind("a").await, bind("b").await);
@@ -1317,23 +1435,21 @@ mod live_config {
         env.exec("CREATE SCHEMA s1").await;
         let config = |schema: &str| {
             let mut config = sqlx_config(&env.server);
-            config.live_config.connect.schema_search_path = Some(schema.to_string());
+            config
+                .live_config
+                .as_mut()
+                .unwrap()
+                .connect
+                .schema_search_path = Some(schema.to_string());
             config
         };
-        let pool = SqlxPgPool::from_config(&config("s1"), &app())
-            .await
-            .unwrap();
-        pool.live_config("cache", Cache::default()).await.unwrap();
+        let pool = Inst::open(&config("s1"), &app()).await;
+        pool.bind("cache", Cache::default()).await.unwrap();
         pool.close().await.unwrap();
 
         env.exec("ALTER SCHEMA s1 RENAME TO s2").await;
-        let pool = SqlxPgPool::from_config(&config("s2"), &app())
-            .await
-            .unwrap();
-        let e = pool
-            .live_config("cache", Cache::default())
-            .await
-            .unwrap_err();
+        let pool = Inst::open(&config("s2"), &app()).await;
+        let e = pool.bind("cache", Cache::default()).await.unwrap_err();
         assert!(e.is(RepoErr::LiveConfigSchemaMismatch), "{e:#}");
     }
 
@@ -1342,7 +1458,7 @@ mod live_config {
     async fn reconnects_after_connection_killed() {
         let env = Env::new().await;
         let source = env.start().await;
-        let cache = source.live_config("cache", Cache::default()).await.unwrap();
+        let cache = source.bind("cache", Cache::default()).await.unwrap();
 
         let killed: Vec<bool> = sqlx::query_scalar(
             "SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
@@ -1384,19 +1500,22 @@ mod live_config {
         )
         .await;
         let config = SqlxPgConfig {
+            uses: uses(3),
             connect: PgConnectConfig {
                 username: "strict".to_string(),
                 password: "strict".to_string(),
                 ..connect(&env.server)
             },
-            live_config: live_config(),
+            live_config: Some(live_config()),
             ..Default::default()
         };
-        let strict = SqlxPgPool::from_config(&config, &app()).await.unwrap();
-        let mut cache = strict.live_config("cache", Cache::default()).await.unwrap();
+        let strict = Inst::open(&config, &app()).await;
+        let mut cache = strict.bind("cache", Cache::default()).await.unwrap();
         let pid = listener_pid(&env, "strict").await;
 
-        let slow = sqlx::query("SELECT pg_sleep(0.5)").execute(&*strict).await;
+        let slow = sqlx::query("SELECT pg_sleep(0.5)")
+            .execute(&**strict.pool())
+            .await;
         assert!(slow.is_err(), "连接池仍受 statement_timeout 限制");
 
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -1417,15 +1536,12 @@ mod live_config {
     async fn statement_error_keeps_listener() {
         let env = Env::new().await;
         let source = env.start().await;
-        let mut cache = source.live_config("cache", Cache::default()).await.unwrap();
+        let mut cache = source.bind("cache", Cache::default()).await.unwrap();
 
         let (logs, _guard) = test_support::logs::capture();
         env.exec("ALTER TABLE hy_config RENAME TO hy_config_moved")
             .await;
-        let e = source
-            .live_config("sync", Job::default())
-            .await
-            .unwrap_err();
+        let e = source.bind("sync", Job::default()).await.unwrap_err();
         assert!(e.is(RepoErr::InsertFailed), "{e:#}");
         env.exec("ALTER TABLE hy_config_moved RENAME TO hy_config")
             .await;
