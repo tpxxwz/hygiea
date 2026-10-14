@@ -44,6 +44,20 @@ impl LockKeyI64 {
     pub fn from_pair(key1: LockKeyI32, key2: LockKeyI32) -> Self {
         Self(((key1.0 as i64) << 32) | (key2.0 as u32 as i64))
     }
+
+    /// 字符串 key 哈希成 `i64` key，交给 `*_i64` 的锁：不需要后端支持字符串 key（比如 PG 不建锁表）。
+    ///
+    /// 有损的降级，由调用方显式选：不同 key 可能撞到同一个值（多锁，不会少锁）；和直接传数字的 `try_lock_i64`
+    /// 共用一个空间；和同一个字符串 key 走 `try_lock` 的那把锁是两样东西，互不互斥。
+    /// 算法固定是 [`string::xxh3_64`](crate::string::xxh3_64)，跨进程、跨机器、跨版本结果一致。
+    /// 要哈希就都用它，不要自己换别的哈希（尤其是 `DefaultHasher`，每个进程种子不同，锁会失效）。
+    ///
+    /// ```ignore
+    /// db.try_lock_i64(LockKeyI64::xxh3_64(&lock_key!(OrderLockKey::Export, user_name))?).await?;
+    /// ```
+    pub fn xxh3_64(key: &LockKey) -> crate::Result<Self> {
+        Ok(Self(crate::string::xxh3_64(key.as_str()?)))
+    }
 }
 
 /// 锁的类型，`try_lock_i32` 的 `key1`，只能由 `#[derive(hy_lock_type)]` 生成：值是项目前缀 3 位 + 模块前缀 + `code`，
@@ -100,18 +114,6 @@ impl LockKey {
             Ok(key) => Ok(key),
             Err(cause) => Err(crate::err!(super::LockErr::InvalidKey, cause)),
         }
-    }
-
-    /// 把字符串 key 哈希成 i64，交给 `*_i64` 的锁：PG 上是 advisory lock，不用锁表，换性能。
-    ///
-    /// 这是有损的降级，要使用方自己选：不同 key 可能撞到同一个值（多锁，不会少锁），也和直接传数字的
-    /// `try_lock_i64` 共用同一个空间。算法见 [`xxh3_64`](crate::string::xxh3_64)（xxh3-64），跨进程、跨机器、跨版本结果一致。
-    ///
-    /// ```ignore
-    /// db.try_lock_i64(lock_key!(OrderLockKey::Export, user_name).hashed_i64()?).await?;
-    /// ```
-    pub fn hashed_i64(&self) -> crate::Result<LockKeyI64> {
-        Ok(LockKeyI64::from(crate::string::xxh3_64(self.as_str()?)))
     }
 }
 
@@ -248,26 +250,16 @@ mod tests {
 
     /// 就是 string::xxh3_64（算法固定的测试在那边）；渲染失败的 key 报错
     #[test]
-    fn hashed_i64_is_stable() {
+    fn xxh3_64_from_string_key() {
         let key = |s: &str| LockKey(Ok(s.to_string()));
-        let hashed = key("001020002:settle:2026-10-13")
-            .hashed_i64()
+        let hashed = LockKeyI64::xxh3_64(&key("001020002:settle:2026-10-13"))
             .unwrap()
             .get();
         assert_eq!(
             hashed,
             crate::string::xxh3_64("001020002:settle:2026-10-13")
         );
-        assert_ne!(
-            hashed,
-            key("001020002:settle:2026-10-14")
-                .hashed_i64()
-                .unwrap()
-                .get()
-        );
-        let invalid = LockKey(Err("missing id".to_string()))
-            .hashed_i64()
-            .unwrap_err();
+        let invalid = LockKeyI64::xxh3_64(&LockKey(Err("missing id".to_string()))).unwrap_err();
         assert!(invalid.is(crate::lock::LockErr::InvalidKey));
     }
 

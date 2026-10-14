@@ -14,7 +14,7 @@ err_code_project_prefix = "999"
 
 # 三个维度分开选，各自独立、只增加功能（Cargo 的 feature 要能叠加），同时打开的组合才会编译：
 # - 框架：sqlx / seaorm
-# - 数据库：postgres / sqlite（mysql 预留）
+# - 数据库：postgres / sqlite / mysql
 # - 功能：live-config / lock / lock-row，不绑定驱动，实现按"功能 + 框架 + 数据库"的组合编译
 # 比如 ["sqlx", "postgres"] 得到 SqlxPgComponent，再加 "lock" 它就实现了分布式锁。
 # 组合条件集中在 build.rs 的 cfg 别名里。默认什么都不开
@@ -27,17 +27,17 @@ seaorm = ["dep:sea-orm", "dep:sqlx", "dep:log"]
 # 以后加别的框架（toasty、tokio-postgres、diesel-async ..）照 research/db-drivers 分支的写法
 # ---- 数据库 ----
 postgres = ["sqlx?/postgres"]
-sqlite = ["sqlx?/sqlite"]
-# 预留，还没有实现（research/db-drivers 分支有 sqlx 的 MySQL 连接池、锁、动态配置）
-mysql = []
+sqlite = ["sqlx?/sqlite", "sea-orm?/sqlx-sqlite"]
+# MySQL 8.0+（sqlx、SeaORM 的连接池；锁用 GET_LOCK，动态配置只靠轮询）
+mysql = ["sqlx?/mysql", "sea-orm?/sqlx-mysql"]
 # ---- 功能 ----
 # 连接池的数据库配置表（动态配置），见 live_config 模块文档；日志里的值按 #[redact] 打码，带上 core 的 redact。
-# 实现：sqlx / seaorm + postgres，sqlx + sqlite
+# 实现：sqlx / seaorm + postgres / mysql / sqlite
 live-config = ["dep:serde_json", "tokio/time", "hygiea-core/redact"]
-# 连接池实现分布式锁（hygiea-core 的 DistributedLock），见 lock 模块文档。实现：sqlx / seaorm + postgres
+# 连接池实现分布式锁（hygiea-core 的 DistributedLock），见 lock 模块文档。实现：sqlx / seaorm + postgres / mysql
 lock = ["hygiea-core/lock"]
-# PG 的字符串 key 用锁表实现（{app_name}_lock），精确；不开时哈希成 i64 走 advisory lock（可能碰撞）。
-# 开不开它同一个 key 锁的是两样东西，所有实例要一致
+# PG 的字符串 key 用锁表实现（{app_name}_lock，启动时建表），精确；不开时字符串 key 返回 LockErr::Unsupported，
+# 要哈希的由调用方自己 LockKeyI64::xxh3_64(&key) 后调 try_lock_i64。MySQL 的字符串 key 用 GET_LOCK，和它无关
 lock-row = ["lock"]
 
 [dependencies]
@@ -61,6 +61,8 @@ tempfile = { workspace = true }
 hygiea-test = { workspace = true, features = ["container"] }
 # db! 的编译期检查（tests/db_macro_ui.rs）
 trybuild = { workspace = true }
+# 捕获日志（tests/sqlx_postgres.rs 的 live config 测试）
+test-support = { workspace = true }
 
 [package.metadata.docs.rs]
 all-features = true

@@ -12,11 +12,9 @@ use hygiea_core::app::{AppErr, RegistryConfig};
 use hygiea_core::lock::{LockErr, LockGuard, LockKey};
 use hygiea_core::{Result, ResultExt, err};
 
-#[cfg(not(sqlx_lock_row))]
-use super::super::hashed_name;
 #[cfg(sqlx_lock_row)]
 use super::super::table::LockTable;
-use super::super::{LockConfig, i64_name, pair_name};
+use super::super::{PgLockConfig, i64_name, pair_name};
 #[cfg(sqlx_lock_row)]
 use crate::RepoErr;
 use crate::config::{PG_POOL_SIZE, PgConnectConfig, PoolConfig};
@@ -31,7 +29,7 @@ use crate::sql::table_prefix;
 #[cfg(sqlx_lock_row)]
 use crate::sqlx::internal::postgres::columns;
 
-/// 连接池上锁的实现，`SqlxPgPool`、`SeaOrmPgPool` 各持有一个，对外的方法见 [`impl_pg_lock`]
+/// 连接池上锁的实现，`SqlxPgPool`、`SeaOrmPgPool` 各持有一个，对外的方法见 [`impl_lock`]
 #[derive(Clone, Debug)]
 pub(crate) struct PgLock {
     /// 连接池本身的 sqlx 池，或者按 `[db.lock]` 单独建的池
@@ -53,7 +51,7 @@ impl PgLock {
         main: &PgPool,
         connect: &PgConnectConfig,
         pool: &PoolConfig,
-        config: &LockConfig,
+        config: &PgLockConfig,
         registry_config: &RegistryConfig,
     ) -> Result<Self> {
         #[cfg(sqlx_lock_row)]
@@ -193,22 +191,20 @@ impl PgLock {
         Ok(guard(tx, name, got).await)
     }
 
-    /// 没开 `lock-row`：字符串 key 哈希成 i64 走 advisory lock，不同 key 可能撞到同一把锁
+    /// 没开 `lock-row`：字符串 key 不支持，返回 [`LockErr::Unsupported`]，不发任何 SQL。
+    /// 要用字符串的，调用方自己 `LockKeyI64::xxh3_64(&key)?` 后调 `try_lock_i64`（有损，见模块文档）
     #[cfg(not(sqlx_lock_row))]
-    pub(crate) async fn try_key(&self, key: &LockKey) -> Result<Option<LockGuard>> {
-        let hashed = key.hashed_i64()?.get();
-        self.try_advisory(hashed, hashed_name(hashed, key)?).await
+    pub(crate) async fn try_key(&self, _key: &LockKey) -> Result<Option<LockGuard>> {
+        Err(string_key_unsupported("try_lock"))
     }
 
     #[cfg(not(sqlx_lock_row))]
     pub(crate) async fn lock_key(
         &self,
-        key: &LockKey,
-        timeout: Duration,
+        _key: &LockKey,
+        _timeout: Duration,
     ) -> Result<Option<LockGuard>> {
-        let hashed = key.hashed_i64()?.get();
-        self.lock_advisory(hashed, hashed_name(hashed, key)?, timeout)
-            .await
+        Err(string_key_unsupported("lock"))
     }
 
     /// 开锁的事务，`lock_timeout_ms` 见 [`begin_sql`]
@@ -226,7 +222,7 @@ impl PgLock {
 async fn own_pool(
     connect: &PgConnectConfig,
     pool: &PoolConfig,
-    config: &LockConfig,
+    config: &PgLockConfig,
     registry_config: &RegistryConfig,
 ) -> Result<PgPool> {
     let connect = config.connect.merge(connect);
@@ -262,6 +258,17 @@ async fn own_pool(
 
 fn acquire_err(name: &str) -> hygiea_core::HyErr {
     err!(LockErr::AcquireFailed, name)
+}
+
+#[cfg(not(sqlx_lock_row))]
+fn string_key_unsupported(method: &str) -> hygiea_core::HyErr {
+    err!(
+        LockErr::Unsupported,
+        format!(
+            "postgres: {method} with string key (needs feature lock-row, \
+             or use try_lock_i64(LockKeyI64::xxh3_64(&key)?))"
+        )
+    )
 }
 
 /// 锁的事务。不用 sqlx 的 `Transaction`：`begin_with` 中途报错时拿不回连接，它会带着失败的事务回到池里。

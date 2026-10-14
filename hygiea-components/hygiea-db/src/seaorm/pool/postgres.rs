@@ -1,7 +1,5 @@
 //! PostgreSQL 连接组件（SeaORM），feature `seaorm` + `postgres`
 
-use std::time::Duration;
-
 use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 use serde::Deserialize;
 
@@ -10,13 +8,14 @@ use hygiea_core::app::{
 };
 use hygiea_core::{Result, ResultExt, err};
 
+use super::{SeaOrmLogConfig, connect_options};
 use crate::config::{PG_POOL_SIZE, PgConnectConfig, PoolConfig};
 #[cfg(feature = "live-config")]
 use crate::live_config::{
     LiveConfigSource, PgLiveConfigConfig, Store, impl_live_config, live_config_source_for,
 };
 #[cfg(feature = "lock")]
-use crate::lock::{LockConfig, PgLock, impl_pg_lock};
+use crate::lock::{PgLock, PgLockConfig, impl_lock};
 
 // ---- config -----------------------------------------------------------------
 
@@ -30,68 +29,21 @@ pub struct SeaOrmPgConfig {
     #[cfg(feature = "live-config")]
     pub live_config: PgLiveConfigConfig,
     #[cfg(feature = "lock")]
-    pub lock: LockConfig,
-}
-
-/// SeaORM 打的 SQL 日志。级别是 trace / debug / info / warn / error / off
-#[derive(Clone, Debug, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct SeaOrmLogConfig {
-    /// 每条 SQL 都打
-    pub enabled: bool,
-    pub level: String,
-    /// 慢 SQL 单独打的级别，`off` 不打
-    pub slow_statements_level: String,
-    pub slow_statements_threshold_secs: u64,
-}
-
-impl Default for SeaOrmLogConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            level: "info".to_string(),
-            slow_statements_level: "off".to_string(),
-            slow_statements_threshold_secs: 1,
-        }
-    }
+    pub lock: PgLockConfig,
 }
 
 impl SeaOrmPgConfig {
     fn connect_options(&self, registry_config: &RegistryConfig) -> Result<ConnectOptions> {
-        let (connect, pool, log) = (&self.connect, &self.pool, &self.log);
-        let mut opt = ConnectOptions::new(connect.url(registry_config)?);
-        if !connect.schema_search_path.is_empty() {
-            opt.set_schema_search_path(&connect.schema_search_path);
+        let mut opt = connect_options(
+            self.connect.url(registry_config)?,
+            &self.pool,
+            &self.log,
+            PG_POOL_SIZE,
+        );
+        if !self.connect.schema_search_path.is_empty() {
+            opt.set_schema_search_path(&self.connect.schema_search_path);
         }
-        opt.max_connections(pool.max_connections(PG_POOL_SIZE))
-            .min_connections(pool.min_connections(PG_POOL_SIZE))
-            .acquire_timeout(Duration::from_secs(pool.acquire_timeout_secs()))
-            .idle_timeout(Duration::from_secs(pool.idle_timeout_secs()))
-            .max_lifetime(Duration::from_secs(pool.max_lifetime_secs()))
-            .test_before_acquire(pool.test_before_acquire)
-            .connect_lazy(pool.connect_lazy)
-            .sqlx_logging(log.enabled)
-            .sqlx_logging_level(parse_log_level(&log.level))
-            .sqlx_slow_statements_logging_settings(
-                parse_log_level(&log.slow_statements_level),
-                Duration::from_secs(log.slow_statements_threshold_secs),
-            );
         Ok(opt)
-    }
-}
-
-fn parse_log_level(s: &str) -> log::LevelFilter {
-    match s.to_lowercase().as_str() {
-        "trace" => log::LevelFilter::Trace,
-        "debug" => log::LevelFilter::Debug,
-        "info" => log::LevelFilter::Info,
-        "warn" => log::LevelFilter::Warn,
-        "error" => log::LevelFilter::Error,
-        "off" => log::LevelFilter::Off,
-        other => panic!(
-            "Invalid log level '{}'. Expected: trace, debug, info, warn, error, off",
-            other
-        ),
     }
 }
 
@@ -181,7 +133,7 @@ impl ConfigResource for SeaOrmPgPool {
 impl_live_config!(SeaOrmPgPool);
 
 #[cfg(feature = "lock")]
-impl_pg_lock!(SeaOrmPgPool);
+impl_lock!(SeaOrmPgPool);
 
 impl std::ops::Deref for SeaOrmPgPool {
     type Target = DatabaseConnection;
@@ -197,6 +149,8 @@ pub type SeaOrmPgComponent = ImmediateResourceComponent<SeaOrmPgPool>;
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     /// 配置模板 `config/seaorm-pg.toml` 就是代码里的默认值（结构体没有实现 PartialEq，比 Debug 输出）

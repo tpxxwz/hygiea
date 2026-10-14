@@ -1,7 +1,7 @@
 //! 动态配置在 PostgreSQL 上的 sqlx 实现：小池上建 listener，推送 + 轮询。SQL 在 `sql/postgres/live_config.*`
 
 use serde_json::{Map, Value};
-use sqlx::postgres::{PgConnectOptions, PgListener, PgPool};
+use sqlx::postgres::{PgConnectOptions, PgDatabaseError, PgListener, PgPool, PgSeverity};
 use sqlx::{AssertSqlSafe, Connection, PgConnection};
 
 use hygiea_core::{Result, ResultExt, err};
@@ -12,13 +12,13 @@ use super::super::worker::{Row, Signal};
 use super::fixed;
 use crate::sql::Columns;
 use crate::sql::postgres::live_config::{
-    CURRENT_SCHEMA, FUNCTION_SOURCE, OBJECTS, parse_payload, seed_param,
+    CURRENT_SCHEMA, FUNCTION_SOURCE, OBJECTS, SESSION_SETTINGS, parse_payload, seed_param,
 };
 use crate::sql::postgres::{DDL_LOCK, begin_sql};
 use crate::{PoolConfig, RepoErr};
 
 /// listener 占着小池里唯一那条连接：监听、加载、轮询都走它，断了 sqlx 自动重连、重新 LISTEN。
-/// `listener` 是 `None`：还没建，或者报错后丢掉了，[`open`](Self::open) 在同一个小池上重建
+/// `listener` 是 `None`：还没建，或者连接坏了丢掉了（见 [`connection_broken`]），[`open`](Self::open) 在同一个小池上重建
 pub(super) struct PgConn {
     pool: PgPool,
     listener: Option<Box<PgListener>>,
@@ -28,7 +28,8 @@ pub(super) struct PgConn {
 
 impl PgConn {
     /// `options` 是主池的连接参数。主池有 `application_name`（应用名）时，小池用 `<应用名>-live-config`，
-    /// 带到小池的每条连接上（包括 sqlx 断线重连时新开的），在 `pg_stat_activity` 里认得出来
+    /// 带到小池的每条连接上（包括 sqlx 断线重连时新开的），在 `pg_stat_activity` 里认得出来。
+    /// 每条连接建好时关掉 DBA 设的几个超时，见 [`SESSION_SETTINGS`]
     pub(super) fn new(options: PgConnectOptions, main: &PoolConfig) -> Self {
         let options = match options
             .get_application_name()
@@ -37,8 +38,16 @@ impl PgConn {
             Some(name) => options.application_name(&name),
             None => options,
         };
+        let pool = fixed(main)
+            .after_connect(|conn, _| {
+                Box::pin(async move {
+                    sqlx::raw_sql(SESSION_SETTINGS).execute(conn).await?;
+                    Ok(())
+                })
+            })
+            .connect_lazy_with(options);
         Self {
-            pool: fixed(main).connect_lazy_with(options),
+            pool,
             listener: None,
             channel: None,
         }
@@ -89,9 +98,15 @@ impl PgConn {
         Ok(())
     }
 
-    /// 丢掉 listener，下次 [`open`](Self::open) 重建：sqlx 只对部分 IO 错误自己重连，别的错误会一直留着坏连接
-    pub(super) fn reset(&mut self) -> bool {
-        self.listener.take().is_some()
+    /// 查询、收通知报错时调用：连接坏了才丢掉 listener，下次 [`open`](Self::open) 重建（sqlx 只对部分 IO 错误自己重连，
+    /// 别的错误会一直留着坏连接）。语句级的错误（超时、约束冲突等）连接还能用，不重建
+    fn checked<T>(&mut self, result: sqlx::Result<T>) -> sqlx::Result<T> {
+        if let Err(e) = &result
+            && connection_broken(e)
+        {
+            self.listener = None;
+        }
+        result
     }
 
     /// 小池最多 1 条连接、被 listener 占着，查询都走它（走 `&pool` 拿不到连接，等到 acquire 超时）。
@@ -101,16 +116,18 @@ impl PgConn {
     }
 
     pub(super) async fn load(&mut self, sql: &str, namespace: &str) -> sqlx::Result<Vec<Row>> {
-        sqlx::query_as(AssertSqlSafe(sql))
+        let result = sqlx::query_as(AssertSqlSafe(sql))
             .bind(namespace)
             .fetch_all(self.listener()?)
-            .await
+            .await;
+        self.checked(result)
     }
 
     pub(super) async fn revisions(&mut self, sql: &str) -> sqlx::Result<Vec<(String, i64)>> {
-        sqlx::query_as(AssertSqlSafe(sql))
+        let result = sqlx::query_as(AssertSqlSafe(sql))
             .fetch_all(self.listener()?)
-            .await
+            .await;
+        self.checked(result)
     }
 
     /// 一条语句补完：参数是 `{namespace: {key: value}}`，在库里展开
@@ -119,31 +136,31 @@ impl PgConn {
         sql: &str,
         defaults: &[(String, Map<String, Value>)],
     ) -> sqlx::Result<()> {
-        sqlx::query(AssertSqlSafe(sql))
+        let result = sqlx::query(AssertSqlSafe(sql))
             .bind(seed_param(defaults))
             .execute(self.listener()?)
-            .await
-            .map(|_| ())
+            .await;
+        self.checked(result).map(|_| ())
     }
 
     pub(super) async fn trim_history(&mut self, sql: &str, keep_rows: i64) -> sqlx::Result<u64> {
-        sqlx::query(AssertSqlSafe(sql))
+        let result = sqlx::query(AssertSqlSafe(sql))
             .bind(keep_rows)
             .execute(self.listener()?)
-            .await
-            .map(|r| r.rows_affected())
+            .await;
+        self.checked(result).map(|r| r.rows_affected())
     }
 
     /// 等下一个通知；还没建好 listener 时一直等。
     /// 可以取消：sqlx 收消息时读完整条才动缓冲区（`PgStream::recv_unchecked`）
     pub(super) async fn recv(&mut self) -> Result<Signal> {
-        let Some(listener) = self.listener.as_mut() else {
-            return std::future::pending().await;
-        };
         loop {
-            let received = listener
-                .try_recv()
-                .await
+            let Some(listener) = self.listener.as_mut() else {
+                return std::future::pending().await;
+            };
+            let received = listener.try_recv().await;
+            let received = self
+                .checked(received)
                 .wrap_err(|| err!(RepoErr::ExecFailed, "live config receive"))?;
             let Some(notification) = received else {
                 return Ok(Signal::Reconnected);
@@ -168,6 +185,16 @@ impl PgConn {
         self.listener.take();
         self.pool.close().await;
     }
+}
+
+/// 连接还能不能用：PG 报的 ERROR 级错误（语句超时、约束冲突等）只结束这条语句，连接照常可用；
+/// FATAL / PANIC（被管理员或超时断开）、IO、协议错误等都当作连接坏了
+fn connection_broken(e: &sqlx::Error) -> bool {
+    let Some(db) = e.as_database_error() else {
+        return true;
+    };
+    db.try_downcast_ref::<PgDatabaseError>()
+        .is_none_or(|db| matches!(db.severity(), PgSeverity::Fatal | PgSeverity::Panic))
 }
 
 // ---- 检查、建表 -------------------------------------------------------------------

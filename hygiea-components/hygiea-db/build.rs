@@ -12,7 +12,8 @@ fn main() {
     };
     // 驱动能连哪个数据库：sqlx、SeaORM（底下是 sqlx）都算 sqlx
     let sqlx_pg = (on("sqlx") || on("seaorm")) && on("postgres");
-    let sqlx_sqlite = on("sqlx") && on("sqlite");
+    let sqlx_sqlite = (on("sqlx") || on("seaorm")) && on("sqlite");
+    let sqlx_mysql = (on("sqlx") || on("seaorm")) && on("mysql");
     let live_config = on("live-config");
     let lock = on("lock");
     let lock_row = on("lock-row");
@@ -20,17 +21,27 @@ fn main() {
     let aliases = [
         ("sqlx_pg", sqlx_pg),
         ("sqlx_sqlite", sqlx_sqlite),
+        ("sqlx_mysql", sqlx_mysql),
         // 按驱动的功能实现
-        ("sqlx_live_config", live_config && (sqlx_pg || sqlx_sqlite)),
+        (
+            "sqlx_live_config",
+            live_config && (sqlx_pg || sqlx_sqlite || sqlx_mysql),
+        ),
         ("sqlx_lock_pg", lock && sqlx_pg),
+        ("sqlx_lock_mysql", lock && sqlx_mysql),
         ("sqlx_lock_row", lock_row && sqlx_pg),
         // 按数据库：任意驱动有实现
         ("live_config_pg", live_config && sqlx_pg),
         ("live_config_sqlite", live_config && sqlx_sqlite),
-        ("live_config_any", live_config && (sqlx_pg || sqlx_sqlite)),
+        ("live_config_mysql", live_config && sqlx_mysql),
+        (
+            "live_config_any",
+            live_config && (sqlx_pg || sqlx_sqlite || sqlx_mysql),
+        ),
         ("lock_pg", lock && sqlx_pg),
+        ("lock_mysql", lock && sqlx_mysql),
         ("lock_row_pg", lock_row && sqlx_pg),
-        ("lock_any", lock && sqlx_pg),
+        ("lock_any", lock && (sqlx_pg || sqlx_mysql)),
     ];
     for (name, enabled) in aliases {
         println!("cargo::rustc-check-cfg=cfg({name})");

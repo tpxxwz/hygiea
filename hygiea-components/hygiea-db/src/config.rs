@@ -1,15 +1,18 @@
 //! 连接池配置的公共部分：连哪个库（每种数据库一个）和池怎么管（所有数据库、框架共用）。
 //! 各连接池的配置由它们拼起来，配置文件里是 `[db.connect]`、`[db.pool]` 两段
 
-#[cfg(all(feature = "sqlx", any(feature = "postgres", feature = "sqlite")))]
+#[cfg(any(
+    all(feature = "sqlx", any(feature = "postgres", feature = "mysql")),
+    sqlx_sqlite
+))]
 use std::time::Duration;
 
 use serde::Deserialize;
 
-#[cfg(feature = "postgres")]
+#[cfg(any(feature = "postgres", feature = "mysql"))]
 use hygiea_core::app::RegistryConfig;
 
-#[cfg(any(feature = "postgres", sqlx_sqlite))]
+#[cfg(any(feature = "postgres", feature = "mysql", sqlx_sqlite))]
 use hygiea_core::Result;
 
 // ---- PostgreSQL -------------------------------------------------------------
@@ -185,10 +188,129 @@ fn percent_encode(value: &str) -> String {
         .collect()
 }
 
+// ---- MySQL ------------------------------------------------------------------
+
+/// 连哪个 MySQL 库，sqlx、SeaORM 的连接池共用
+#[cfg(feature = "mysql")]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MySqlConnectConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub database: String,
+    /// 连接 URL 的参数，不带开头的 `?`，比如 `ssl-mode=required`
+    pub params: String,
+}
+
+#[cfg(feature = "mysql")]
+impl Default for MySqlConnectConfig {
+    fn default() -> Self {
+        Self {
+            host: "localhost".to_string(),
+            port: 3306,
+            username: "root".to_string(),
+            password: String::new(),
+            database: "mysql".to_string(),
+            params: String::new(),
+        }
+    }
+}
+
+#[cfg(feature = "mysql")]
+impl MySqlConnectConfig {
+    /// 连接 URL。MySQL 没有 PG 那样的 `application_name`，`registry_config` 现在没用到，签名和 PG 的保持一样
+    pub fn url(&self, _registry_config: &RegistryConfig) -> Result<String> {
+        let params = self.params.trim_start_matches('?');
+        let query = if params.is_empty() {
+            String::new()
+        } else {
+            format!("?{params}")
+        };
+        Ok(format!(
+            "mysql://{}:{}@{}:{}/{}{}",
+            self.username, self.password, self.host, self.port, self.database, query
+        ))
+    }
+
+    /// 日志、错误里用的连接目标，不带密码
+    pub(crate) fn target(&self) -> String {
+        format!(
+            "mysql {}@{}:{}/{}",
+            self.username, self.host, self.port, self.database
+        )
+    }
+
+    /// sqlx 的连接参数（sqlx 的连接池、动态配置的小池、锁单独的池用；只开 SeaORM 时用不到）
+    #[cfg(any(feature = "sqlx", live_config_mysql, lock_mysql))]
+    pub(crate) fn sqlx_options(
+        &self,
+        registry_config: &RegistryConfig,
+    ) -> Result<sqlx::mysql::MySqlConnectOptions> {
+        use hygiea_core::app::AppErr;
+        use hygiea_core::{ResultExt, err};
+
+        self.url(registry_config)?
+            .parse()
+            .wrap_err(|| err!(AppErr::InvalidConfig, "invalid mysql connection url"))
+    }
+}
+
+/// 动态配置、锁单独连的库（`[db.live_config.connect]`、`[db.lock.connect]`）：每项都可以不写，不写的沿用连接池的
+/// `[db.connect]`，只写不一样的（比如换个用户、库）
+#[cfg(any(live_config_mysql, lock_mysql))]
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MySqlConnectOverride {
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub database: Option<String>,
+    pub params: Option<String>,
+}
+
+#[cfg(any(live_config_mysql, lock_mysql))]
+impl MySqlConnectOverride {
+    /// 一项都没写
+    #[cfg(lock_mysql)]
+    pub(crate) fn is_empty(&self) -> bool {
+        let Self {
+            host,
+            port,
+            username,
+            password,
+            database,
+            params,
+        } = self;
+        host.is_none()
+            && port.is_none()
+            && username.is_none()
+            && password.is_none()
+            && database.is_none()
+            && params.is_none()
+    }
+
+    /// 写了的项盖到 `main` 上
+    pub(crate) fn merge(&self, main: &MySqlConnectConfig) -> MySqlConnectConfig {
+        let pick =
+            |value: &Option<String>, main: &String| value.clone().unwrap_or_else(|| main.clone());
+        MySqlConnectConfig {
+            host: pick(&self.host, &main.host),
+            port: self.port.unwrap_or(main.port),
+            username: pick(&self.username, &main.username),
+            password: pick(&self.password, &main.password),
+            database: pick(&self.database, &main.database),
+            params: pick(&self.params, &main.params),
+        }
+    }
+}
+
 // ---- SQLite -----------------------------------------------------------------
 
-/// 连哪个 SQLite 库，以及打开时的设置
-#[cfg(all(feature = "sqlx", feature = "sqlite"))]
+/// 连哪个 SQLite 库，以及打开时的设置，sqlx、SeaORM 的连接池共用
+#[cfg(sqlx_sqlite)]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SqliteConnectConfig {
@@ -206,7 +328,7 @@ pub struct SqliteConnectConfig {
     pub statement_cache_capacity: Option<usize>,
 }
 
-#[cfg(all(feature = "sqlx", feature = "sqlite"))]
+#[cfg(sqlx_sqlite)]
 impl Default for SqliteConnectConfig {
     fn default() -> Self {
         Self {
@@ -224,7 +346,7 @@ impl Default for SqliteConnectConfig {
     }
 }
 
-#[cfg(all(feature = "sqlx", feature = "sqlite"))]
+#[cfg(sqlx_sqlite)]
 impl SqliteConnectConfig {
     pub fn url(&self) -> String {
         let base = if self.database == ":memory:" {
@@ -240,51 +362,100 @@ impl SqliteConnectConfig {
         }
     }
 
-    /// sqlx 的连接参数
+    /// sqlx 的连接参数：URL 加上 [`settings`](Self::settings)（sqlx 的连接池、动态配置的小池用；只开 SeaORM 时用不到）
+    #[cfg(any(feature = "sqlx", live_config_sqlite))]
     pub(crate) fn sqlx_options(&self) -> Result<sqlx::sqlite::SqliteConnectOptions> {
         use std::str::FromStr;
 
         use hygiea_core::app::AppErr;
         use hygiea_core::{ResultExt, err};
-        use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous};
 
-        fn parse<T>(value: &str, name: &str) -> Result<T>
+        let options = sqlx::sqlite::SqliteConnectOptions::from_str(&self.url()).wrap_err(|| {
+            err!(
+                AppErr::InvalidConfig,
+                format!("invalid SQLite database URL: {}", self.url())
+            )
+        })?;
+        Ok(self.settings()?.apply(options))
+    }
+
+    /// URL 以外的打开设置，先解析（写错的在这里报错），再用 [`SqliteSettings::apply`] 加到连接参数上。
+    /// SeaORM 只收 URL，要在它建连接参数时用回调加上，回调不能返回错误，所以分成两步
+    pub(crate) fn settings(&self) -> Result<SqliteSettings> {
+        use std::str::FromStr;
+
+        use hygiea_core::app::AppErr;
+        use hygiea_core::{ResultExt, err};
+
+        fn parse<T>(value: &Option<String>, name: &str) -> Result<Option<T>>
         where
             T: FromStr,
             T::Err: std::error::Error + Send + Sync + 'static,
         {
-            value.parse().wrap_err(|| {
-                err!(
-                    AppErr::InvalidConfig,
-                    format!("invalid SQLite {name}: {value}")
-                )
-            })
+            value
+                .as_deref()
+                .map(|value| {
+                    value.parse().wrap_err(|| {
+                        err!(
+                            AppErr::InvalidConfig,
+                            format!("invalid SQLite {name}: {value}")
+                        )
+                    })
+                })
+                .transpose()
         }
 
-        let mut options = SqliteConnectOptions::from_str(&self.url())
-            .wrap_err(|| {
-                err!(
-                    AppErr::InvalidConfig,
-                    format!("invalid SQLite database URL: {}", self.url())
-                )
-            })?
+        Ok(SqliteSettings {
+            create_if_missing: self.create_if_missing,
+            read_only: self.read_only,
+            foreign_keys: self.foreign_keys,
+            shared_cache: self.shared_cache,
+            journal_mode: parse(&self.journal_mode, "journal_mode")?,
+            synchronous: parse(&self.synchronous, "synchronous")?,
+            busy_timeout: self.busy_timeout_millis.map(Duration::from_millis),
+            statement_cache_capacity: self.statement_cache_capacity,
+        })
+    }
+}
+
+/// 解析好的 SQLite 打开设置，见 [`SqliteConnectConfig::settings`]
+#[cfg(sqlx_sqlite)]
+#[derive(Clone, Debug)]
+pub(crate) struct SqliteSettings {
+    create_if_missing: bool,
+    read_only: bool,
+    foreign_keys: bool,
+    shared_cache: bool,
+    journal_mode: Option<sqlx::sqlite::SqliteJournalMode>,
+    synchronous: Option<sqlx::sqlite::SqliteSynchronous>,
+    busy_timeout: Option<Duration>,
+    statement_cache_capacity: Option<usize>,
+}
+
+#[cfg(sqlx_sqlite)]
+impl SqliteSettings {
+    pub(crate) fn apply(
+        &self,
+        options: sqlx::sqlite::SqliteConnectOptions,
+    ) -> sqlx::sqlite::SqliteConnectOptions {
+        let mut options = options
             .create_if_missing(self.create_if_missing)
             .read_only(self.read_only)
             .foreign_keys(self.foreign_keys)
             .shared_cache(self.shared_cache);
-        if let Some(value) = &self.journal_mode {
-            options = options.journal_mode(parse::<SqliteJournalMode>(value, "journal_mode")?);
+        if let Some(value) = self.journal_mode {
+            options = options.journal_mode(value);
         }
-        if let Some(value) = &self.synchronous {
-            options = options.synchronous(parse::<SqliteSynchronous>(value, "synchronous")?);
+        if let Some(value) = self.synchronous {
+            options = options.synchronous(value);
         }
-        if let Some(value) = self.busy_timeout_millis {
-            options = options.busy_timeout(Duration::from_millis(value));
+        if let Some(value) = self.busy_timeout {
+            options = options.busy_timeout(value);
         }
         if let Some(value) = self.statement_cache_capacity {
             options = options.statement_cache_capacity(value);
         }
-        Ok(options)
+        options
     }
 }
 
@@ -338,7 +509,7 @@ impl SqliteConnectOverride {
 // ---- 连接池 -------------------------------------------------------------------
 
 /// 池怎么管，和数据库、框架无关。数字项不写时按连接池给默认值：
-/// 最大连接数 PG 10、SQLite 4，最小连接数 PG 0、SQLite 1；超时都是 acquire 30 秒、空闲 600 秒、最长存活 1800 秒
+/// 最大连接数 PG、MySQL 10，SQLite 4，最小连接数 PG、MySQL 0，SQLite 1；超时都是 acquire 30 秒、空闲 600 秒、最长存活 1800 秒
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -373,7 +544,7 @@ impl Default for PoolConfig {
 }
 
 /// 连接池按后端给的默认连接数
-#[cfg(any(sqlx_pg, sqlx_sqlite))]
+#[cfg(any(sqlx_pg, sqlx_sqlite, sqlx_mysql))]
 #[derive(Clone, Copy)]
 pub(crate) struct PoolSize {
     pub(crate) max: u32,
@@ -382,10 +553,12 @@ pub(crate) struct PoolSize {
 
 #[cfg(sqlx_pg)]
 pub(crate) const PG_POOL_SIZE: PoolSize = PoolSize { max: 10, min: 0 };
-#[cfg(all(feature = "sqlx", feature = "sqlite"))]
+#[cfg(sqlx_mysql)]
+pub(crate) const MYSQL_POOL_SIZE: PoolSize = PoolSize { max: 10, min: 0 };
+#[cfg(sqlx_sqlite)]
 pub(crate) const SQLITE_POOL_SIZE: PoolSize = PoolSize { max: 4, min: 1 };
 
-#[cfg(any(sqlx_pg, sqlx_sqlite))]
+#[cfg(any(sqlx_pg, sqlx_sqlite, sqlx_mysql))]
 impl PoolConfig {
     pub(crate) fn max_connections(&self, size: PoolSize) -> u32 {
         self.max_connections.unwrap_or(size.max)
@@ -421,8 +594,13 @@ impl PoolConfig {
 }
 
 /// 测试用：解析 `config/` 下的配置模板（段名是 `db`，写错或多写的配置项解析失败）。
-/// 模板里有 `[db.live_config]` 段，要开 `live-config`
-#[cfg(all(test, feature = "live-config"))]
+/// 条件和用它的测试（各连接池的 `template_is_code_defaults`）一致：模板里都有 `[db.live_config]` 段，要开 `live-config`；
+/// PG、MySQL 的模板还有 `[db.lock]` 段，要再开 `lock`
+#[cfg(all(
+    test,
+    feature = "live-config",
+    any(all(feature = "lock", any(sqlx_pg, sqlx_mysql)), sqlx_sqlite)
+))]
 pub(crate) fn parse_template<T: serde::de::DeserializeOwned>(template: &str) -> T {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -433,11 +611,47 @@ pub(crate) fn parse_template<T: serde::de::DeserializeOwned>(template: &str) -> 
     parsed.db
 }
 
-#[cfg(all(test, any(feature = "postgres", sqlx_sqlite)))]
+#[cfg(all(test, any(feature = "postgres", feature = "mysql", sqlx_sqlite)))]
 mod tests {
     use super::*;
 
-    #[cfg(all(feature = "sqlx", feature = "sqlite"))]
+    #[cfg(feature = "mysql")]
+    #[test]
+    fn mysql_url() {
+        let config = MySqlConnectConfig {
+            password: "pw".to_string(),
+            params: "?ssl-mode=required".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.url(&RegistryConfig::default()).unwrap(),
+            "mysql://root:pw@localhost:3306/mysql?ssl-mode=required"
+        );
+        assert_eq!(config.target(), "mysql root@localhost:3306/mysql");
+    }
+
+    /// 写了的项覆盖，没写的沿用连接池的
+    #[cfg(any(live_config_mysql, lock_mysql))]
+    #[test]
+    fn mysql_override_merges_per_field() {
+        let main = MySqlConnectConfig {
+            host: "mysql-main".to_string(),
+            username: "app".to_string(),
+            ..Default::default()
+        };
+        let merged = MySqlConnectOverride {
+            username: Some("app_lock".to_string()),
+            database: Some("coord".to_string()),
+            ..Default::default()
+        }
+        .merge(&main);
+        assert_eq!(merged.host, "mysql-main");
+        assert_eq!(merged.username, "app_lock");
+        assert_eq!(merged.database, "coord");
+        assert_eq!(merged.port, 3306);
+    }
+
+    #[cfg(sqlx_sqlite)]
     #[test]
     fn sqlite_url() {
         assert_eq!(SqliteConnectConfig::default().url(), "sqlite://hygiea.db");
@@ -454,14 +668,14 @@ mod tests {
         assert_eq!(file.url(), "sqlite:///var/lib/app/data.db");
     }
 
-    #[cfg(all(feature = "sqlx", feature = "sqlite"))]
+    #[cfg(sqlx_sqlite)]
     #[test]
     fn rejects_invalid_sqlite_mode() {
         let config = SqliteConnectConfig {
             journal_mode: Some("not-a-mode".to_string()),
             ..Default::default()
         };
-        assert!(config.sqlx_options().is_err());
+        assert!(config.settings().is_err());
     }
 
     /// 写了的项覆盖，没写的沿用连接池的
@@ -504,7 +718,7 @@ mod tests {
     }
 
     /// 只写了一项时，其他项按后端的默认值，不会拿到别的后端的
-    #[cfg(any(sqlx_pg, sqlx_sqlite))]
+    #[cfg(any(sqlx_pg, sqlx_sqlite, sqlx_mysql))]
     #[test]
     fn pool_defaults_follow_backend() {
         let config = PoolConfig {

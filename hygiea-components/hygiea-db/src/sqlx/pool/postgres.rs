@@ -14,7 +14,7 @@ use crate::live_config::{
     LiveConfigSource, PgLiveConfigConfig, Store, impl_live_config, live_config_source_for,
 };
 #[cfg(feature = "lock")]
-use crate::lock::{LockConfig, PgLock, impl_pg_lock};
+use crate::lock::{PgLock, PgLockConfig, impl_lock};
 
 // ---- config -----------------------------------------------------------------
 
@@ -27,7 +27,7 @@ pub struct SqlxPgConfig {
     #[cfg(feature = "live-config")]
     pub live_config: PgLiveConfigConfig,
     #[cfg(feature = "lock")]
-    pub lock: LockConfig,
+    pub lock: PgLockConfig,
 }
 
 // ---- pool -------------------------------------------------------------------
@@ -115,7 +115,7 @@ impl ConfigResource for SqlxPgPool {
 impl_live_config!(SqlxPgPool);
 
 #[cfg(feature = "lock")]
-impl_pg_lock!(SqlxPgPool);
+impl_lock!(SqlxPgPool);
 
 impl std::ops::Deref for SqlxPgPool {
     type Target = PgPool;

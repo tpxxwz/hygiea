@@ -3,7 +3,7 @@
 //! ```sh
 //! cargo test -p hygiea-db --features sqlx,postgres,lock-row,live-config --test sqlx_postgres -- --ignored ::container::
 //! ```
-//! `lock-row` 改变字符串 key 的实现，和它互斥的另一条路径（字符串 key 哈希成 i64 走 advisory lock）不开 `lock-row` 跑：
+//! 不开 `lock-row` 时字符串 key 返回 `LockErr::Unsupported`，这条路径不开 `lock-row` 跑：
 //! ```sh
 //! cargo test -p hygiea-db --features sqlx,postgres,lock --test sqlx_postgres -- --ignored ::container::
 //! ```
@@ -315,7 +315,7 @@ mod pool {
     }
 }
 
-/// 分布式锁（feature `lock`；`lock-row` 和不开时字符串 key 各有一组测试）
+/// 分布式锁（feature `lock`；开了 `lock-row` 测锁表，不开时测字符串 key 不支持）
 #[container]
 mod lock {
     use hygiea_core::app::{ConfigResource, RegistryConfig};
@@ -510,10 +510,13 @@ mod lock {
         assert!(slow.is_err(), "普通查询仍受 statement_timeout 限制");
 
         let guard = a.try_lock_i64(1).await.unwrap().unwrap();
+        #[cfg(feature = "lock-row")]
         let key = lock_key!(TestLockKey::Job, 1);
+        #[cfg(feature = "lock-row")]
         let row = a.try_lock(key.clone()).await.unwrap().unwrap();
         tokio::time::sleep(Duration::from_millis(600)).await;
         assert!(b.try_lock_i64(1).await.unwrap().is_none(), "持锁没被断开");
+        #[cfg(feature = "lock-row")]
         assert!(b.try_lock(key.clone()).await.unwrap().is_none());
 
         let start = tokio::time::Instant::now();
@@ -524,6 +527,7 @@ mod lock {
                 .is_none()
         );
         assert!(start.elapsed() >= Duration::from_millis(500));
+        #[cfg(feature = "lock-row")]
         assert!(
             b.lock(key, Duration::from_millis(500))
                 .await
@@ -532,6 +536,7 @@ mod lock {
         );
 
         guard.release().await.unwrap();
+        #[cfg(feature = "lock-row")]
         row.release().await.unwrap();
     }
 
@@ -725,7 +730,7 @@ mod lock {
                 acquire_timeout_secs: Some(2),
                 ..Default::default()
             },
-            lock: hygiea_db::LockConfig {
+            lock: hygiea_db::PgLockConfig {
                 max_connections: Some(2),
                 ..Default::default()
             },
@@ -770,7 +775,7 @@ mod lock {
             .unwrap();
         let config = SqlxPgConfig {
             connect: connect(&server),
-            lock: hygiea_db::LockConfig {
+            lock: hygiea_db::PgLockConfig {
                 table_prefix: Some(String::new()),
                 connect: hygiea_db::PgConnectOverride {
                     schema_search_path: Some("coord".to_string()),
@@ -783,7 +788,10 @@ mod lock {
         let a = SqlxPgPool::from_config(&config, &app("hy")).await.unwrap();
         let b = SqlxPgPool::from_config(&config, &app("hy")).await.unwrap();
         assert!(table_exists(&admin, "coord.lock").await);
-        assert!(!table_exists(&admin, "public.lock").await, "不在连接池的 schema 里");
+        assert!(
+            !table_exists(&admin, "public.lock").await,
+            "不在连接池的 schema 里"
+        );
 
         let guard = a
             .try_lock(lock_key!(TestLockKey::Job, 1))
@@ -799,51 +807,30 @@ mod lock {
         guard.release().await.unwrap();
     }
 
-    /// 没开 lock-row：字符串 key 哈希成 i64 走 advisory lock，不建表；
-    /// 和直接传同一个数字的 try_lock_i64 是同一把锁；阻塞版超时、等到释放
+    /// 没开 lock-row：字符串 key 返回 Unsupported，不建表；调用方显式哈希后走 try_lock_i64
     #[cfg(not(feature = "lock-row"))]
     #[tokio::test]
-    async fn string_key_falls_back_to_hashed_advisory() {
-        let server = start().await;
-        let (a, b) = (pool(&server).await, pool(&server).await);
-        let hashed = lock_key!(TestLockKey::Job, 1).hashed_i64().unwrap().get();
+    async fn string_key_unsupported_without_lock_row() {
+        use hygiea_core::lock::{LockErr, LockKeyI64};
 
-        let guard = a
+        let server = start().await;
+        let a = pool(&server).await;
+
+        let e = a
             .try_lock(lock_key!(TestLockKey::Job, 1))
             .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            guard.key(),
-            format!("advisory {hashed} (hashed 999100002:job:1)")
-        );
-        assert!(
-            b.try_lock(lock_key!(TestLockKey::Job, 1))
-                .await
-                .unwrap()
-                .is_none()
-        );
-        assert!(b.try_lock_i64(hashed).await.unwrap().is_none());
-        assert!(
-            b.try_lock(lock_key!(TestLockKey::Job, 2))
-                .await
-                .unwrap()
-                .is_some()
-        );
-        assert!(
-            b.lock(lock_key!(TestLockKey::Job, 1), Duration::from_millis(200))
-                .await
-                .unwrap()
-                .is_none()
-        );
+            .unwrap_err();
+        assert!(e.is(LockErr::Unsupported), "{e:#}");
+        let e = a
+            .lock(lock_key!(TestLockKey::Job, 1), Duration::from_millis(200))
+            .await
+            .unwrap_err();
+        assert!(e.is(LockErr::Unsupported), "{e:#}");
 
-        let waiter = tokio::spawn(async move {
-            b.lock(lock_key!(TestLockKey::Job, 1), Duration::from_secs(10))
-                .await
-        });
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        let hashed = LockKeyI64::xxh3_64(&lock_key!(TestLockKey::Job, 1)).unwrap();
+        let guard = a.try_lock_i64(hashed).await.unwrap().unwrap();
+        assert_eq!(guard.key(), format!("advisory {}", hashed.get()));
         guard.release().await.unwrap();
-        assert!(waiter.await.unwrap().unwrap().is_some());
 
         let table: bool = sqlx::query_scalar("SELECT to_regclass('hy_lock') IS NOT NULL")
             .fetch_one(&*a)
@@ -1368,5 +1355,90 @@ mod live_config {
         env.exec("UPDATE hy_config SET value = '9' WHERE namespace = 'cache'")
             .await;
         eventually(15, || async { cache.get().ttl_secs == 9 }).await;
+    }
+
+    /// 监听连接的 pid（`usename` 是数据库用户）
+    async fn listener_pid(env: &Env, user: &str) -> i32 {
+        sqlx::query_scalar(
+            "SELECT pid FROM pg_stat_activity \
+             WHERE application_name = 'hy-live-config' AND usename = $1",
+        )
+        .bind(user)
+        .fetch_one(&*env.pool)
+        .await
+        .unwrap()
+    }
+
+    /// DBA 在用户上设了很短的超时：监听连接空闲超过 idle_session_timeout 也不被断开（还是同一条连接），
+    /// 改表照样靠通知收到；同一个用户的连接池照旧受 statement_timeout 限制
+    #[tokio::test]
+    async fn dba_timeouts_do_not_cut_listener() {
+        let env = Env::new().await;
+        env.start().await;
+        env.exec(
+            "CREATE ROLE strict LOGIN SUPERUSER PASSWORD 'strict'; \
+             ALTER ROLE strict SET idle_session_timeout = '300ms'; \
+             ALTER ROLE strict SET statement_timeout = '100ms'; \
+             ALTER ROLE strict SET transaction_timeout = '100ms'; \
+             ALTER ROLE strict SET lock_timeout = '100ms'",
+        )
+        .await;
+        let config = SqlxPgConfig {
+            connect: PgConnectConfig {
+                username: "strict".to_string(),
+                password: "strict".to_string(),
+                ..connect(&env.server)
+            },
+            live_config: live_config(),
+            ..Default::default()
+        };
+        let strict = SqlxPgPool::from_config(&config, &app()).await.unwrap();
+        let mut cache = strict.live_config("cache", Cache::default()).await.unwrap();
+        let pid = listener_pid(&env, "strict").await;
+
+        let slow = sqlx::query("SELECT pg_sleep(0.5)").execute(&*strict).await;
+        assert!(slow.is_err(), "连接池仍受 statement_timeout 限制");
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(listener_pid(&env, "strict").await, pid, "监听连接没被断开");
+        env.exec("UPDATE hy_config SET value = '7' WHERE namespace = 'cache'")
+            .await;
+        tokio::time::timeout(Duration::from_secs(5), cache.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(cache.get().ttl_secs, 7);
+        assert_eq!(listener_pid(&env, "strict").await, pid);
+    }
+
+    /// 语句级的错误（这里是表被改名，补默认值失败）不重建 listener：小池只有一条连接，重建也拿回同一条，
+    /// pid 看不出来，所以看日志。表改回来后照样靠通知收到
+    #[tokio::test]
+    async fn statement_error_keeps_listener() {
+        let env = Env::new().await;
+        let source = env.start().await;
+        let mut cache = source.live_config("cache", Cache::default()).await.unwrap();
+
+        let (logs, _guard) = test_support::logs::capture();
+        env.exec("ALTER TABLE hy_config RENAME TO hy_config_moved")
+            .await;
+        let e = source
+            .live_config("sync", Job::default())
+            .await
+            .unwrap_err();
+        assert!(e.is(RepoErr::InsertFailed), "{e:#}");
+        env.exec("ALTER TABLE hy_config_moved RENAME TO hy_config")
+            .await;
+        let text = logs.text();
+        assert!(text.contains("live config: query failed"), "{text}");
+        assert!(!text.contains("rebuilding"), "{text}");
+
+        env.exec("UPDATE hy_config SET value = '8' WHERE namespace = 'cache'")
+            .await;
+        tokio::time::timeout(Duration::from_secs(5), cache.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(cache.get().ttl_secs, 8);
     }
 }

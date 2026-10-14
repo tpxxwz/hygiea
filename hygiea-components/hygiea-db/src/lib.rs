@@ -8,11 +8,15 @@
 //! | `sqlx` + `postgres` | [`SqlxPgComponent`] | [`SqlxPgPool`] |
 //! | `sqlx` + `sqlite` | [`SqlxSqliteComponent`] | [`SqlxSqlitePool`] |
 //! | `seaorm` + `postgres` | [`SeaOrmPgComponent`] | [`SeaOrmPgPool`] |
+//! | `sqlx` + `mysql` | `SqlxMySqlComponent` | `SqlxMySqlPool` |
+//! | `seaorm` + `mysql` | `SeaOrmMySqlComponent` | `SeaOrmMySqlPool` |
+//! | `seaorm` + `sqlite` | `SeaOrmSqliteComponent` | `SeaOrmSqlitePool` |
 //!
 //! 功能 `live-config`、`lock` / `lock-row` 的 feature 不绑定驱动，实现按驱动各写一份。现在只有 sqlx 的实现
 //! （sqlx、SeaORM 的连接池共用）。加别的框架、数据库照 research/db-drivers 分支的写法。
+//! MySQL 要 8.0 以上：锁用 `GET_LOCK`，动态配置只靠轮询（没有推送），见 [`lock`]、[`live_config`] 模块文档。
 //!
-//! 连接池的配置分段：`[db.connect]` 连哪个库（[`PgConnectConfig`] / [`SqliteConnectConfig`]），`[db.pool]` 池的参数
+//! 连接池的配置分段：`[db.connect]` 连哪个库（[`PgConnectConfig`] / [`SqliteConnectConfig`] / `MySqlConnectConfig`），`[db.pool]` 池的参数
 //! （[`PoolConfig`]，各数据库、框架共用），SeaORM 另有 `[db.log]`。PG 连接的 `application_name` 用 `[registry] app_name`
 //! （建连接池时从 `RegistryConfig` 拿到），不能在 `connect.params` 里自己写。
 //!
@@ -103,17 +107,23 @@ mod sql;
 #[cfg(any(feature = "sqlx", sqlx_live_config, sqlx_lock_pg))]
 pub mod sqlx;
 
+#[cfg(all(feature = "sqlx", feature = "mysql"))]
+pub use self::sqlx::pool::mysql::*;
 #[cfg(all(feature = "sqlx", feature = "postgres"))]
 pub use self::sqlx::pool::postgres::*;
 #[cfg(all(feature = "sqlx", feature = "sqlite"))]
 pub use self::sqlx::pool::sqlite::*;
+#[cfg(all(any(feature = "sqlx", feature = "seaorm"), feature = "mysql"))]
+pub use config::MySqlConnectConfig;
+#[cfg(any(live_config_mysql, lock_mysql))]
+pub use config::MySqlConnectOverride;
 #[cfg(all(any(feature = "sqlx", feature = "seaorm"), feature = "postgres"))]
 pub use config::PgConnectConfig;
 #[cfg(any(live_config_pg, lock_pg))]
 pub use config::PgConnectOverride;
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]
 pub use config::PoolConfig;
-#[cfg(all(feature = "sqlx", feature = "sqlite"))]
+#[cfg(sqlx_sqlite)]
 pub use config::SqliteConnectConfig;
 #[cfg(live_config_sqlite)]
 pub use config::SqliteConnectOverride;
@@ -121,15 +131,25 @@ pub use config::SqliteConnectOverride;
 pub use datetime::HyUtcDateTime;
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]
 pub use error::RepoErr;
+#[cfg(live_config_mysql)]
+pub use live_config::MySqlLiveConfigConfig;
 #[cfg(live_config_pg)]
 pub use live_config::PgLiveConfigConfig;
 #[cfg(live_config_sqlite)]
 pub use live_config::SqliteLiveConfigConfig;
 #[cfg(live_config_any)]
 pub use live_config::{LiveConfig, LiveConfigConfig, LiveRef, LiveView};
+#[cfg(lock_mysql)]
+pub use lock::MySqlLockConfig;
 #[cfg(lock_pg)]
-pub use lock::LockConfig;
+pub use lock::PgLockConfig;
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]
 pub use page::{Page, PageRequest};
+#[cfg(feature = "seaorm")]
+pub use seaorm::pool::SeaOrmLogConfig;
+#[cfg(all(feature = "seaorm", feature = "mysql"))]
+pub use seaorm::pool::mysql::*;
 #[cfg(all(feature = "seaorm", feature = "postgres"))]
 pub use seaorm::pool::postgres::*;
+#[cfg(all(feature = "seaorm", feature = "sqlite"))]
+pub use seaorm::pool::sqlite::*;

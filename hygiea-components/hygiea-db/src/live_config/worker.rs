@@ -311,7 +311,7 @@ impl Worker {
         }
     }
 
-    /// 查询失败说明连接多半坏了：丢掉，等重连
+    /// 查询失败打日志；连接坏了的话 store 已经丢掉了 listener，主循环下一轮重建
     fn check<T>(&mut self, result: Result<T>) -> Result<T> {
         if let Err(e) = &result {
             self.failed(e);
@@ -319,9 +319,10 @@ impl Worker {
         result
     }
 
-    /// 查询、收通知报错：PG 丢掉 listener，主循环下一轮在小池上重建；SQLite 打个日志等下一轮
+    /// 查询、收通知报错：连接坏了的（PG 的 listener 已经被 store 丢掉）主循环下一轮在小池上重建；
+    /// 语句级的错误（超时、约束冲突等）和 SQLite 打个日志等下一轮
     fn failed(&mut self, e: &HyErr) {
-        if self.store.reset() {
+        if !self.store.is_open() {
             tracing::warn!("live config: listener failed, rebuilding: {e:#}");
         } else {
             tracing::warn!("live config: query failed, retry on next poll: {e:#}");

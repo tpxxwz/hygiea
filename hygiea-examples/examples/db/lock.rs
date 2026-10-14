@@ -5,9 +5,9 @@
 //! 2. 锁类型 + id：`try_lock_i32`，PG 上是原生的 `pg_try_advisory_xact_lock(int, int)`
 //! 3. 任意 i64：`try_lock_i64`，不用注册
 //! 4. 字符串 key：`lock_key!` 生成。本示例开了 `db-lock-row`，PG 上是在锁表 `example_lock` 里插入不提交的行（启动时建表）；
-//!    没开 `db-lock-row` 时 `try_lock` 把 key 哈希成 i64 走 advisory lock，和第 6 步显式 `hashed_i64()` 一样
+//!    没开 `db-lock-row` 时 `try_lock` 返回 `LockErr::Unsupported`；不想建表的用第 6 步，自己显式 `LockKeyI64::xxh3_64`
 //! 5. 阻塞版：拿不到就等，最多等 timeout；guard 没 release 就 drop 时在后台释放
-//! 6. 哈希降级：`lock_key!(..).hashed_i64()?` 交给 `try_lock_i64`，不用锁表；有损（不同 key 可能撞到同一个数，
+//! 6. 哈希降级：`LockKeyI64::xxh3_64(&lock_key!(..))?` 交给 `try_lock_i64`，不用锁表；有损（不同 key 可能撞到同一个数，
 //!    多锁不会少锁），和锁表的那把锁不互斥
 //!
 //! 用 Docker 起一个临时的 postgres（hygiea-test 的容器），跑完自动删掉：
@@ -21,7 +21,7 @@ use std::time::Duration;
 use hygiea::Result;
 use hygiea::app::{ConfigResource, RegistryConfig};
 use hygiea::db::{PgConnectConfig, SqlxPgConfig, SqlxPgPool};
-use hygiea::lock::{DistributedLock, hy_lock_key, hy_lock_type, lock_key};
+use hygiea::lock::{DistributedLock, LockKeyI64, hy_lock_key, hy_lock_type, lock_key};
 use hygiea_test::container::{ContainerSpec, RunningContainer};
 
 // ---- 注册：锁类型、字符串 key 共用一套编号，同模块里 code 不能重复 ----
@@ -142,7 +142,7 @@ async fn main() -> Result<()> {
     println!("a 等锁 daily_settle 300ms：{}", timeout.is_some());
 
     // ---- 哈希降级：字符串 key 哈希成 i64，走 advisory lock ----
-    let key = lock_key!(OrderLockKey::Export, "bob").hashed_i64()?;
+    let key = LockKeyI64::xxh3_64(&lock_key!(OrderLockKey::Export, "bob"))?;
     let hashed = a.try_lock_i64(key).await?;
     println!(
         "
@@ -150,7 +150,7 @@ a 拿锁（哈希成 i64）：{:?}",
         hashed.as_ref().map(|g| g.key())
     );
     println!("b 拿同一个哈希：{}", b.try_lock_i64(key).await?.is_some());
-    // 和锁表里同一个 key 的那把锁是两样东西，互不互斥：所有实例要么都开 db-lock-row，要么都不开
+    // 和锁表里同一个 key 的那把锁是两样东西，互不互斥：同一个 key 不要两种方式混用
     println!(
         "b 用锁表拿 export:bob：{}（和哈希的那把不互斥）",
         b.try_lock(lock_key!(OrderLockKey::Export, "bob"))

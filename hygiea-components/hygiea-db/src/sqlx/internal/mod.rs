@@ -4,6 +4,8 @@
 //!
 //! 不对外：只开 SeaORM 时 `sqlx` 模块也会因为这里而编译，但里面没有公开的东西
 
+#[cfg(all(sqlx_live_config, sqlx_mysql))]
+pub(crate) mod mysql;
 #[cfg(all(sqlx_pg, any(sqlx_live_config, sqlx_lock_row)))]
 pub(crate) mod postgres;
 #[cfg(all(sqlx_live_config, sqlx_sqlite))]

@@ -1,6 +1,6 @@
-//! 动态配置的 sqlx 实现，一种数据库一个文件（`postgres.rs`、`sqlite.rs`），这里的 [`SqlxStore`] 只做分发和转错误；
-//! worker 和上层的 `mod.rs` 不碰 sqlx。SQL 在 `sql/<数据库>/live_config.*`。`SqlxPgPool`、`SqlxSqlitePool`、
-//! `SeaOrmPgPool` 共用（SeaORM 交出它底下的连接参数）
+//! 动态配置的 sqlx 实现，一种数据库一个文件（`postgres.rs`、`sqlite.rs`、`mysql.rs`），这里的 [`SqlxStore`] 只做分发和转错误；
+//! worker 和上层的 `mod.rs` 不碰 sqlx。SQL 在 `sql/<数据库>/live_config.*`。sqlx、SeaORM 的连接池共用
+//! （SeaORM 交出它底下的连接参数）
 //!
 //! [`Store`] 持有一个独立小池：连接参数和主池一样（库、search_path、SQLite 的打开方式），池参数固定——
 //! 最多 1 条、不空闲回收、不到期替换、拿之前先检查，只有 acquire 超时跟主池走。不占主池的名额，
@@ -10,7 +10,7 @@
 //!
 //! # 接别的框架（非 sqlx）
 //!
-//! 1. 把 [`Store`] 上这几个方法提成 trait：`backend`、`table`、`is_open`、`open`、`reset`、`load`、`revisions`、
+//! 1. 把 [`Store`] 上这几个方法提成 trait：`backend`、`table`、`is_open`、`open`、`load`、`revisions`、
 //!    `seed`、`recv`、`close`。参数、返回值里已经没有 sqlx 的类型，现在这个 `Store` 变成 sqlx 的实现
 //! 2. worker 改成持有 `Box<dyn ..>`：原生 `async fn` 写在 trait 里不能 `dyn`，用 `async_trait`（hygiea-core 重新导出了），
 //!    或者 worker 写成泛型 `Worker<S>`
@@ -22,7 +22,7 @@
 //!
 //! - `recv` 要能被取消：worker 在 `select!` 里等它，定时器到了会把它丢掉。sqlx 收消息读完整条才动缓冲区，
 //!   换别的库要确认同样能取消
-//! - PG 的 listener 报错后一定要 `reset` 丢掉：sqlx 只对部分 IO 错误自己重连，别的错误（比如 connection reset）
+//! - PG 的连接坏了（`postgres.rs` 的 `connection_broken`）一定要丢掉 listener：sqlx 只对部分 IO 错误自己重连，别的错误（比如 connection reset）
 //!   会一直留着坏连接，每次调都报同样的错
 //! - 小池最多 1 条连接，listener 一直占着它：PG 的查询都要走 listener（`&mut **listener`），不能走 `&pool`，
 //!   否则拿不到连接，等到 acquire 超时
@@ -30,6 +30,8 @@
 use std::time::Duration;
 
 use serde_json::{Map, Value};
+#[cfg(sqlx_mysql)]
+use sqlx::mysql::MySqlConnectOptions;
 use sqlx::pool::PoolOptions;
 #[cfg(sqlx_pg)]
 use sqlx::postgres::PgConnectOptions;
@@ -43,6 +45,8 @@ use super::schema::{Sql, Tables};
 use super::worker::{Loaded, Signal};
 use crate::{PoolConfig, RepoErr};
 
+#[cfg(sqlx_mysql)]
+mod mysql;
 #[cfg(sqlx_pg)]
 mod postgres;
 #[cfg(sqlx_sqlite)]
@@ -61,6 +65,8 @@ enum Conn {
     Postgres(postgres::PgConn),
     #[cfg(sqlx_sqlite)]
     Sqlite(sqlite::SqliteConn),
+    #[cfg(sqlx_mysql)]
+    MySql(mysql::MySqlConn),
 }
 
 impl SqlxStore {
@@ -85,12 +91,20 @@ impl SqlxStore {
         Self::new(tables, Backend::Sqlite, conn)
     }
 
+    #[cfg(sqlx_mysql)]
+    pub(crate) fn mysql(options: MySqlConnectOptions, main: &PoolConfig, tables: Tables) -> Self {
+        let conn = Conn::MySql(mysql::MySqlConn::new(options, main));
+        Self::new(tables, Backend::MySql, conn)
+    }
+
     pub(crate) fn backend(&self) -> Backend {
         match self.conn {
             #[cfg(sqlx_pg)]
             Conn::Postgres(_) => Backend::Postgres,
             #[cfg(sqlx_sqlite)]
             Conn::Sqlite(_) => Backend::Sqlite,
+            #[cfg(sqlx_mysql)]
+            Conn::MySql(_) => Backend::MySql,
         }
     }
 
@@ -109,13 +123,15 @@ impl SqlxStore {
         self.tables.config()
     }
 
-    /// 能不能用：PG 要建好 listener，SQLite 一直能用
+    /// 能不能用：PG 要建好 listener，SQLite、MySQL 一直能用
     pub(crate) fn is_open(&self) -> bool {
         match &self.conn {
             #[cfg(sqlx_pg)]
             Conn::Postgres(conn) => conn.is_open(),
             #[cfg(sqlx_sqlite)]
             Conn::Sqlite(_) => true,
+            #[cfg(sqlx_mysql)]
+            Conn::MySql(_) => true,
         }
     }
 
@@ -126,16 +142,8 @@ impl SqlxStore {
             Conn::Postgres(conn) => conn.open(&self.tables, ensure_tables).await,
             #[cfg(sqlx_sqlite)]
             Conn::Sqlite(conn) => conn.open(&self.tables, ensure_tables).await,
-        }
-    }
-
-    /// 查询、收通知报错后调用。PG 丢掉 listener，下次 [`SqlxStore::open`] 重建；SQLite 什么都不用做，返回 false
-    pub(crate) fn reset(&mut self) -> bool {
-        match &mut self.conn {
-            #[cfg(sqlx_pg)]
-            Conn::Postgres(conn) => conn.reset(),
-            #[cfg(sqlx_sqlite)]
-            Conn::Sqlite(_) => false,
+            #[cfg(sqlx_mysql)]
+            Conn::MySql(conn) => conn.open(&self.tables, ensure_tables).await,
         }
     }
 
@@ -147,6 +155,8 @@ impl SqlxStore {
             Conn::Postgres(conn) => conn.load(sql, namespace).await,
             #[cfg(sqlx_sqlite)]
             Conn::Sqlite(conn) => conn.load(sql, namespace).await,
+            #[cfg(sqlx_mysql)]
+            Conn::MySql(conn) => conn.load(sql, namespace).await,
         };
         let rows = rows.wrap_err(|| {
             err!(
@@ -165,6 +175,8 @@ impl SqlxStore {
             Conn::Postgres(conn) => conn.revisions(sql).await,
             #[cfg(sqlx_sqlite)]
             Conn::Sqlite(conn) => conn.revisions(sql).await,
+            #[cfg(sqlx_mysql)]
+            Conn::MySql(conn) => conn.revisions(sql).await,
         };
         rows.wrap_err(|| err!(RepoErr::QueryFailed, "live config revisions"))
     }
@@ -180,6 +192,8 @@ impl SqlxStore {
             Conn::Postgres(conn) => conn.seed(sql, defaults).await,
             #[cfg(sqlx_sqlite)]
             Conn::Sqlite(conn) => conn.seed(sql, defaults).await,
+            #[cfg(sqlx_mysql)]
+            Conn::MySql(conn) => conn.seed(sql, defaults).await,
         };
         done.wrap_err(|| err!(RepoErr::InsertFailed, "live config seed defaults"))
     }
@@ -194,11 +208,13 @@ impl SqlxStore {
             Conn::Postgres(conn) => conn.trim_history(sql, keep_rows).await,
             #[cfg(sqlx_sqlite)]
             Conn::Sqlite(conn) => conn.trim_history(sql, keep_rows).await,
+            #[cfg(sqlx_mysql)]
+            Conn::MySql(conn) => conn.trim_history(sql, keep_rows).await,
         };
         done.wrap_err(|| err!(RepoErr::DeleteFailed, "live config trim history"))
     }
 
-    /// 等下一个变更信号。只有 PG 有推送；SQLite 一直等不到，只靠轮询
+    /// 等下一个变更信号。只有 PG 有推送；SQLite、MySQL 一直等不到，只靠轮询
     pub(crate) async fn recv(&mut self) -> Result<Signal> {
         match &mut self.conn {
             #[cfg(sqlx_pg)]
@@ -215,6 +231,8 @@ impl SqlxStore {
             Conn::Postgres(conn) => conn.close().await,
             #[cfg(sqlx_sqlite)]
             Conn::Sqlite(conn) => conn.close().await,
+            #[cfg(sqlx_mysql)]
+            Conn::MySql(conn) => conn.close().await,
         }
     }
 }

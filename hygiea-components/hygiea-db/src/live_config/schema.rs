@@ -4,14 +4,15 @@
 //! 检查表、函数、触发器时，只看 `current_schema()`（不带 schema 的 CREATE 落在这里）：
 //!
 //! - 一个都没有：建。在事务里建，PG 加 advisory lock（`hygiea_core::builtin` 的 `(LOCK_TYPE, Lock::LiveConfigDdl)`）、SQLite 用 `BEGIN IMMEDIATE`，
-//!   拿到锁后再查一遍（多个实例同时启动，前一个可能已经建好了）
+//!   拿到锁后再查一遍（多个实例同时启动，前一个可能已经建好了）。MySQL 的 DDL 会隐式提交、不能放在事务里，
+//!   用同一个编号的 `GET_LOCK` 串行化，逐条执行，建到一半失败的不会回滚
 //! - 都在、表的列和代码一致：直接用
 //! - 其他（只有一部分、列对不上）：不动库里的东西，拒绝启动。哪里不对和建表 DDL 打在日志里，手动处理
 //!
 //! # 改表、改触发器时要注意
 //!
 //! - 改 `sql/<数据库>/live_config.sql` 的表结构，要同时改同目录 `live_config.rs` 的 `COLUMNS`（列名、顺序、类型；PG 写 `udt_name`，
-//!   比如 `int8`、`bpchar`，SQLite 写建表时的类型），否则已经建好的库启动时就报对不上
+//!   比如 `int8`、`bpchar`，SQLite 写建表时的类型，MySQL 写 `DATA_TYPE`），否则已经建好的库启动时就报对不上
 //! - 已经建好的库不会自动升级：框架只在"一个都没有"时建，结构变了要手动执行 DDL（ALTER TABLE 原地改，
 //!   不要 DROP 重建，表里是线上配置）
 //! - 改函数、触发器（`live_config.sql` 后半段）同样不会自动替换已有的，要手动执行。改的时候别动这三样，
@@ -22,7 +23,7 @@
 //! - SQLite 测试里在不同连接上先 DROP 再 CREATE 同名对象会报"已存在"（别的连接缓存的 schema 是旧的），
 //!   DDL 放在同一条连接上执行
 
-#[cfg(live_config_sqlite)]
+#[cfg(any(live_config_sqlite, live_config_mysql))]
 use serde_json::{Map, Value};
 
 #[cfg(live_config_pg)]
@@ -32,6 +33,8 @@ use hygiea_core::{HyErr, Result, ResultExt, err};
 use super::Backend;
 use crate::RepoErr;
 use crate::sql::Columns;
+#[cfg(live_config_mysql)]
+use crate::sql::mysql::live_config as mysql;
 #[cfg(live_config_pg)]
 use crate::sql::postgres::live_config as pg;
 #[cfg(live_config_sqlite)]
@@ -88,7 +91,7 @@ impl Tables {
         [self.config(), self.revision(), self.history()]
     }
 
-    /// 期望的列：每张表按顺序的 (列名, 类型)。PG 的类型是 `udt_name`，SQLite 是建表时写的类型
+    /// 期望的列：每张表按顺序的 (列名, 类型)。PG 的类型是 `udt_name`，SQLite 是建表时写的类型，MySQL 是 `DATA_TYPE`
     pub(crate) fn expected_columns(
         &self,
         backend: Backend,
@@ -98,6 +101,8 @@ impl Tables {
             Backend::Postgres => pg::COLUMNS,
             #[cfg(live_config_sqlite)]
             Backend::Sqlite => sqlite::COLUMNS,
+            #[cfg(live_config_mysql)]
+            Backend::MySql => mysql::COLUMNS,
         };
         self.table_names()
             .into_iter()
@@ -119,6 +124,8 @@ impl Tables {
             Backend::Postgres => self.prefixed(&pg::TRIGGERS),
             #[cfg(live_config_sqlite)]
             Backend::Sqlite => self.prefixed(&sqlite::TRIGGERS),
+            #[cfg(live_config_mysql)]
+            Backend::MySql => self.prefixed(&mysql::TRIGGERS),
         }
     }
 
@@ -134,6 +141,12 @@ impl Tables {
     #[cfg(live_config_sqlite)]
     pub(crate) fn sqlite_ddl(&self) -> String {
         sqlite::DDL.replace("{p}", &self.prefix)
+    }
+
+    /// MySQL 建表、触发器的语句：`{p}` 换成前缀。要按 `sql::mysql::live_config::DDL_SEPARATOR` 拆开一条条执行
+    #[cfg(live_config_mysql)]
+    pub(crate) fn mysql_ddl(&self) -> String {
+        mysql::DDL.replace("{p}", &self.prefix)
     }
 
     fn prefixed(&self, names: &[&str]) -> Vec<String> {
@@ -171,12 +184,19 @@ impl Sql {
                 seed: sqlite::seed(&config),
                 trim_history: sqlite::trim_history(&history),
             },
+            #[cfg(live_config_mysql)]
+            Backend::MySql => Self {
+                load: mysql::load(&config, &revision),
+                revisions: mysql::revisions(&revision),
+                seed: mysql::seed(&config),
+                trim_history: mysql::trim_history(&history),
+            },
         }
     }
 }
 
-/// 补默认值时按行拼参数的库（SQLite）：(namespace, key, value 的 JSON 文本)
-#[cfg(live_config_sqlite)]
+/// 补默认值时按行拼参数的库（SQLite、MySQL）：(namespace, key, value 的 JSON 文本)
+#[cfg(any(live_config_sqlite, live_config_mysql))]
 pub(crate) fn seed_rows(defaults: &[(String, Map<String, Value>)]) -> Vec<(&str, &str, String)> {
     defaults
         .iter()
@@ -318,6 +338,17 @@ mod tests {
         assert_eq!(tables.channel("public").unwrap(), "public.config");
         assert!(tables.channel(&"s".repeat(56)).is_ok());
         assert!(tables.channel(&"s".repeat(57)).is_err());
+    }
+
+    #[cfg(live_config_mysql)]
+    #[test]
+    fn mysql_ddl() {
+        let tables = Tables::new("hy_".to_string());
+        assert_eq!(tables.triggers(Backend::MySql)[2], "hy_config_update");
+        let ddl = tables.mysql_ddl();
+        assert!(ddl.contains("CREATE TABLE hy_config_history"));
+        assert!(ddl.contains("CREATE TRIGGER hy_config_update AFTER UPDATE ON hy_config"));
+        assert!(!ddl.contains('{'));
     }
 
     #[cfg(live_config_sqlite)]

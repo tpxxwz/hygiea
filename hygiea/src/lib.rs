@@ -10,7 +10,7 @@
 pub use hygiea_core::*;
 
 // ========== 组件（各自一个 crate，core 不能依赖它们，所以由 facade 导出） ==========
-/// 数据库组件：框架 `db-sqlx` / `db-seaorm` 和数据库 `db-postgres` / `db-sqlite` 组合；
+/// 数据库组件：框架 `db-sqlx` / `db-seaorm` 和数据库 `db-postgres` / `db-sqlite` / `db-mysql` 组合；
 /// 功能 `db-live-config`、`db-lock`、`db-lock-row`
 #[cfg(any(feature = "db-sqlx", feature = "db-seaorm"))]
 pub use hygiea_db as db;

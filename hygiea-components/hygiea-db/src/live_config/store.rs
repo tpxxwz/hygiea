@@ -40,6 +40,15 @@ impl Store {
         Self::Sqlx(SqlxStore::postgres(options, main, tables))
     }
 
+    #[cfg(all(sqlx_live_config, sqlx_mysql))]
+    pub(crate) fn mysql(
+        options: sqlx::mysql::MySqlConnectOptions,
+        main: &PoolConfig,
+        tables: Tables,
+    ) -> Self {
+        Self::Sqlx(SqlxStore::mysql(options, main, tables))
+    }
+
     #[cfg(all(sqlx_live_config, sqlx_sqlite))]
     pub(crate) fn sqlite(
         options: sqlx::sqlite::SqliteConnectOptions,
@@ -70,11 +79,6 @@ impl Store {
     /// 连上；`ensure_tables` 时检查表和函数、触发器，没有就建（规则见 `schema.rs`）
     pub(crate) async fn open(&mut self, ensure_tables: bool) -> Result<()> {
         each!(self, s => s.open(ensure_tables).await)
-    }
-
-    /// 查询、收通知报错后调用，返回有没有丢掉什么（要重建）
-    pub(crate) fn reset(&mut self) -> bool {
-        each!(self, s => s.reset())
     }
 
     pub(crate) async fn load(&mut self, namespace: &str) -> Result<Loaded> {

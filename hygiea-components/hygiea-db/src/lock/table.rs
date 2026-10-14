@@ -1,4 +1,4 @@
-//! PG 的锁表 `{p}lock`（UNLOGGED，`{p}` 是表名前缀，见 [`LockConfig`](super::LockConfig)）的规则，和驱动无关：加锁是在事务里插入 key 那一行、不提交，
+//! PG 的锁表 `{p}lock`（UNLOGGED，`{p}` 是表名前缀，见 [`PgLockConfig`](super::PgLockConfig)）的规则，和驱动无关：加锁是在事务里插入 key 那一行、不提交，
 //! 靠主键冲突互斥，释放时回滚，没有已提交的行。
 //!
 //! 建表规则和动态配置一样，只看 `current_schema()`：没有就建（advisory lock `hygiea_core::builtin` 的 `(LOCK_TYPE, Lock::LockTableDdl)` 串行化，拿到锁后再查一遍）；

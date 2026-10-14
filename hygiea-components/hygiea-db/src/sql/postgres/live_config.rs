@@ -42,6 +42,18 @@ pub(crate) const OBJECTS: &str = "SELECT p.proname::text FROM pg_proc p JOIN pg_
          JOIN pg_namespace n ON n.oid = c.relnamespace \
          WHERE n.nspname = current_schema() AND t.tgname = ANY($2) AND NOT t.tgisinternal";
 
+/// 小池每条连接建好时执行一次（会话级，包括 sqlx 断线重连时新开的连接），不受库、用户上 DBA 设的超时影响：
+/// - `idle_session_timeout`：listener 大部分时间在事务外空闲等通知，非 0 时 PG 到点断开连接，反复断线重连
+/// - `statement_timeout`、`transaction_timeout`：不打断补默认值、清历史这类偶尔较慢的语句
+/// - `lock_timeout`：补默认值要等业务持有的版本号行锁，等到为止，不报错
+///
+/// 这条连接上没有显式事务（建表的事务自己用 `begin_sql`），`idle_in_transaction_session_timeout` 管不到它，不用设。
+/// 普通用户就能 SET；`SET` 的优先级高于 `ALTER ROLE` / `ALTER DATABASE` 设的默认值。只影响这个小池，主池照旧受 DBA 的超时保护
+pub(crate) const SESSION_SETTINGS: &str = "SET idle_session_timeout = 0; \
+     SET statement_timeout = 0; \
+     SET transaction_timeout = 0; \
+     SET lock_timeout = 0";
+
 /// NOTIFY 的 channel 名最长多少字节（NAMEDATALEN - 1）
 pub(crate) const CHANNEL_MAX_BYTES: usize = 63;
 
