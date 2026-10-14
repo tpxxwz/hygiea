@@ -110,9 +110,12 @@
 
 - 测试用 cargo-nextest 跑（每个测试单独一个进程，测试二进制之间也并行），没装的先 `brew install cargo-nextest`。
   配置在 `.config/nextest.toml`：默认不跑 trybuild（`_ui` 结尾的测试二进制）和 live 层。命令：
-  - 全量：`cargo nextest run --workspace --all-features --run-ignored all`（单元、mock、container 层；要 Docker）。
-    container 层的测试被 `#[container]` 标成了 `#[ignore]`，`cargo test` 和 nextest 默认都不跑，
-    nextest 加 `--run-ignored all` 连同普通测试一起跑（`cargo test` 对应的是 `-- --include-ignored`）
+  - 全量：`cargo nextest run --workspace --all-features --run-ignored all`（单元、mock、container 层；要 Docker）
+  - **container 层 agent 要跑**：它被 `#[container]` 标成了 `#[ignore]`，只是为了让使用方默认的 `cargo test` 不依赖 Docker，
+    不是不用跑。`cargo test` 和 nextest 默认都会跳过它，所以命令里一定要带上：全量带 `--run-ignored all`，
+    按范围跑时带 `--run-ignored only -E 'test(/::container::/)'`（`cargo test` 是 `-- --ignored ::container::`）。
+    漏了参数时 container 测试被悄悄跳过、结果照样显示通过：看一眼 Summary 里的 skipped，全量时应该只有 live 层那 1 个。
+    本机有 Docker，直接跑，不用问；没有 Docker 或容器起不来时明确说没跑，不能说测试通过
   - trybuild：改了宏时才跑，`cargo nextest run --workspace --all-features --ignore-default-filter -E 'binary(/_ui$/)'`
   - doc test：nextest 不跑，要跑用 `cargo test --workspace --all-features --doc`（可运行的只有 core 里的两个）
   - **live 层 agent 绝对不能跑**：它用真实凭证连真实的托管服务，会产生费用、改动真实数据。默认过滤已经排除了它，
@@ -123,8 +126,8 @@
 - 改代码过程中只 check / test 改到的 crate 和相关 feature，比如 `cargo nextest run -p hygiea-http-client --features reqwest --test reqwest_client`。crate 和 feature 很多，不要动不动 `--workspace`、`--all-features` 全量编译、全量测试，同一条命令不要重复跑。
 - 准备提交时，先分析这次改动需要新增或修改哪些测试，确认后再按范围测。
 - 改了 feature 或 `cfg`，用几种相关的 feature 组合 `cargo check`（不开、只开相关的）；`--all-features` 留到收尾时跑一次。
-- 改了有 container 层测试的代码，本机有 Docker 时顺带跑对应 crate 的 container 层（`--run-ignored only -E 'test(/::container::/)'`）；
-  没有 Docker 就说明没跑。live 层不要跑，需要用户的凭证，改了相关代码时告诉用户要手动跑哪条命令。
+- 改了有 container 层测试的代码，一定跑对应 crate 的 container 层（`--run-ignored only -E 'test(/::container::/)'`），
+  规则见上面加粗的两条：container 层要跑，live 层绝对不能跑。
 - 仓库目前没有 CI。以后加 CI 时：普通测试 `cargo nextest run --workspace --all-features`；有 Docker 的 runner 上加
   `--run-ignored all`；trybuild、doc test 另跑；live 层不放进 CI。
 - 改了宏的报错信息，重新生成 trybuild 快照并检查 diff：
