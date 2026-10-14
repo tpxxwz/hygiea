@@ -575,11 +575,18 @@ cargo build
 # 开启全部 feature 构建
 cargo build --all-features
 
-# 跑全部测试，包括 hygiea-macros/tests 里的编译失败测试（trybuild）
-cargo test --workspace --all-features
+# 测试用 cargo-nextest（每个测试一个进程、二进制之间并行），配置在 .config/nextest.toml
+brew install cargo-nextest
 
-# 改了宏的报错信息后，重新生成 trybuild 快照并检查 diff
+# 跑全部测试：单元、mock、container 层（要 Docker）；默认不跑 trybuild 和 live 层
+cargo nextest run --workspace --all-features --run-ignored all
+
+# 改了宏时跑 trybuild（编译期报错测试）；改了报错信息后重新生成快照并检查 diff
+cargo nextest run --workspace --all-features --ignore-default-filter -E 'binary(/_ui$/)'
 TRYBUILD=overwrite cargo test -p hygiea-macros --test hy_err_ui --test redact_ui
+
+# doc test（nextest 不跑）
+cargo test --workspace --all-features --doc
 
 # 查看文档
 cargo doc --open

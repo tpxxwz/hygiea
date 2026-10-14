@@ -1,0 +1,14 @@
+# cargo-nextest 的配置。每个测试单独一个进程，测试二进制之间也并行。安装：brew install cargo-nextest
+#
+# 平时全量跑（单元、mock、container 层；container 层要 Docker）：
+#   cargo nextest run --workspace --all-features --run-ignored all
+# container 层在 cargo test 下是 #[ignore] 的，nextest 要加 --run-ignored all 才跑（配置文件里写不了这一项）。
+# nextest 不跑 doc test，要跑用 cargo test --workspace --all-features --doc
+
+[profile.default]
+# 默认不跑的：
+# - trybuild 的编译期报错测试（测试二进制名以 _ui 结尾），改了宏时再跑：
+#   cargo nextest run --workspace --all-features --ignore-default-filter -E 'binary(/_ui$/)'
+# - live 层（连真实服务、要凭证），只由用户手动跑：
+#   cargo nextest run -p <crate> --features .. --run-ignored only --ignore-default-filter -E 'test(/::live::/)'
+default-filter = "not binary(/_ui$/) and not test(/::live::/)"

@@ -66,7 +66,8 @@
   | live | 连使用者自己控制的真实服务（R2、AWS 等），凭证从环境变量读 | 不跑 | **不跑**，只由用户手动跑 | 模块上标 `#[live(env = ["A", ..])]` |
 
   模块里照常用 `#[test]` / `#[tokio::test]` 标测试，宏给它们加 `#[ignore]`，并把模块内容挪进层名子模块（测试名 `<模块名>::container::<函数名>`）。
-  container 层：`cargo test -p <crate> --features .. -- --ignored ::container::`；live 层：`-- --ignored ::live::`。
+  container 层：`cargo nextest run -p <crate> --features .. --run-ignored only -E 'test(/::container::/)'`
+  （`cargo test` 的写法：`-- --ignored ::container::`）；live 层见 `.config/nextest.toml` 里的命令。
   有这两层的测试文件，文件头写明运行命令和需要的环境变量。
   组件用 `hygiea-test = { workspace = true }` 作为 dev-dependency 引入。`hygiea-test` 只依赖 core，
   core 自己的测试不能用它（会出现两份 core）。
@@ -106,13 +107,21 @@
 
 ## 怎么验证
 
-- 改代码过程中只 check / test 改到的 crate 和相关 feature，比如 `cargo test -p hygiea-http-client --features reqwest --test reqwest_client`。crate 和 feature 很多，不要动不动 `--workspace`、`--all-features` 全量编译、全量测试，同一条命令不要重复跑。
+- 测试用 cargo-nextest 跑（每个测试单独一个进程，测试二进制之间也并行），没装的先 `brew install cargo-nextest`。
+  配置在 `.config/nextest.toml`：默认不跑 trybuild（`_ui` 结尾的测试二进制）和 live 层。命令：
+  - 全量：`cargo nextest run --workspace --all-features --run-ignored all`（单元、mock、container 层；要 Docker）。
+    container 层在 `cargo test` 下是 `#[ignore]` 的，nextest 要加 `--run-ignored all` 才跑
+  - trybuild：改了宏时才跑，`cargo nextest run --workspace --all-features --ignore-default-filter -E 'binary(/_ui$/)'`
+  - doc test：nextest 不跑，要跑用 `cargo test --workspace --all-features --doc`（可运行的只有 core 里的两个）
+  - 跑得反常地慢（简单的测试也要几秒）时先看 `target/` 是不是太大：换 feature 组合编译会一直积累产物，
+    文件多了 macOS 读系统代理、rustc 找依赖都会变慢，`cargo clean` 后重编
+- 改代码过程中只 check / test 改到的 crate 和相关 feature，比如 `cargo nextest run -p hygiea-http-client --features reqwest --test reqwest_client`。crate 和 feature 很多，不要动不动 `--workspace`、`--all-features` 全量编译、全量测试，同一条命令不要重复跑。
 - 准备提交时，先分析这次改动需要新增或修改哪些测试，确认后再按范围测。
 - 改了 feature 或 `cfg`，用几种相关的 feature 组合 `cargo check`（不开、只开相关的）；`--all-features` 留到收尾时跑一次。
-- 改了有 container 层测试的代码，本机有 Docker 时顺带跑对应 crate 的 container 层（`-- --ignored ::container::`）；
+- 改了有 container 层测试的代码，本机有 Docker 时顺带跑对应 crate 的 container 层（`--run-ignored only -E 'test(/::container::/)'`）；
   没有 Docker 就说明没跑。live 层不要跑，需要用户的凭证，改了相关代码时告诉用户要手动跑哪条命令。
-- 仓库目前没有 CI。以后加 CI 时：普通测试 `cargo test --workspace --all-features`；有 Docker 的 runner 上再跑
-  `cargo test --workspace --all-features -- --ignored ::container::`；live 层不放进 CI。
+- 仓库目前没有 CI。以后加 CI 时：普通测试 `cargo nextest run --workspace --all-features`；有 Docker 的 runner 上加
+  `--run-ignored all`；trybuild、doc test 另跑；live 层不放进 CI。
 - 改了宏的报错信息，重新生成 trybuild 快照并检查 diff：
   `TRYBUILD=overwrite cargo test -p hygiea-macros --test hy_err_ui --test redact_ui`
   （`#[container]` / `#[live]` 的快照：`TRYBUILD=overwrite cargo test -p hygiea-test-macros --test test_tier_ui`）
