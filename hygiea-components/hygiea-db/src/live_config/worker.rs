@@ -10,7 +10,51 @@ use tokio::time::MissedTickBehavior;
 use hygiea_core::app::CancellationToken;
 use hygiea_core::{HyErr, Result};
 
-use super::store::{Loaded, Signal, Store};
+use super::Store;
+
+// ---- 后端交给 worker 的东西 ----------------------------------------------------
+
+/// 加载时的一行：版本号、key、值（JSON 文本）。所有 key 都被删了时 key 和值是 NULL
+pub(crate) type Row = (i64, Option<String>, Option<String>);
+
+/// 一个 namespace 在库里的样子：版本号和各 key 的值
+pub(crate) struct Loaded {
+    pub(crate) revision: i64,
+    pub(crate) values: Map<String, Value>,
+}
+
+/// 变更信号
+pub(crate) enum Signal {
+    /// PG 的通知：哪个 namespace 变到了哪个版本
+    #[cfg_attr(
+        not(any(all(sqlx_live_config, sqlx_pg), tokio_pg_live_config)),
+        allow(dead_code)
+    )]
+    Changed { namespace: String, revision: i64 },
+    /// 连接断了又自动连上，断线期间的通知丢了（sqlx 的 `PgListener` 自己重连时；tokio-postgres 的连接断了是报错，
+    /// 由 worker 重建）
+    #[cfg_attr(not(all(sqlx_live_config, sqlx_pg)), allow(dead_code))]
+    Reconnected,
+}
+
+impl Loaded {
+    /// 加载查询（[`Sql::load`](super::sql::Sql)）的结果。还没有 revision 的（表里从来没有过它的行）是版本 0、没有值
+    pub(crate) fn from_rows(rows: Vec<Row>) -> Self {
+        let mut loaded = Self {
+            revision: 0,
+            values: Map::new(),
+        };
+        for (revision, key, value) in rows {
+            loaded.revision = revision;
+            if let (Some(key), Some(value)) = (key, value) {
+                // 两个库都校验过是合法 JSON（PG 的 jsonb、SQLite 的 CHECK），解析不了按字符串处理
+                let value = serde_json::from_str(&value).unwrap_or(Value::String(value));
+                loaded.values.insert(key, value);
+            }
+        }
+        loaded
+    }
+}
 
 /// 重建 listener 失败后隔多久再试
 const RETRY_INTERVAL: Duration = Duration::from_secs(5);

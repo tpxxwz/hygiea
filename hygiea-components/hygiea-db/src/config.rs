@@ -1,14 +1,28 @@
 //! 连接池配置的公共部分：连哪个库（每种数据库一个）和池怎么管（所有数据库、框架共用）。
 //! 各连接池的配置由它们拼起来，配置文件里是 `[db.connect]`、`[db.pool]` 两段
 
-#[cfg(feature = "sqlx")]
+#[cfg(any(
+    all(
+        feature = "sqlx",
+        any(feature = "postgres", feature = "sqlite", feature = "mysql")
+    ),
+    tokio_pg
+))]
 use std::time::Duration;
 
 use serde::Deserialize;
 
-#[cfg(feature = "postgres")]
+#[cfg(any(
+    feature = "postgres",
+    all(any(feature = "sqlx", feature = "toasty"), feature = "mysql")
+))]
 use hygiea_core::app::RegistryConfig;
 
+#[cfg(any(
+    feature = "postgres",
+    all(any(feature = "sqlx", feature = "toasty"), feature = "mysql"),
+    sqlx_sqlite
+))]
 use hygiea_core::Result;
 
 // ---- PostgreSQL -------------------------------------------------------------
@@ -91,8 +105,27 @@ impl PgConnectConfig {
         )
     }
 
+    /// tokio-postgres 的连接参数，带上 search_path 和 `application_name`（见 [`url`](Self::url)）
+    #[cfg(tokio_pg)]
+    pub(crate) fn tokio_pg_config(
+        &self,
+        registry_config: &RegistryConfig,
+    ) -> Result<tokio_postgres::Config> {
+        use hygiea_core::app::AppErr;
+        use hygiea_core::{ResultExt, err};
+
+        let mut config: tokio_postgres::Config = self
+            .url(registry_config)?
+            .parse()
+            .wrap_err(|| err!(AppErr::InvalidConfig, "invalid postgres connection url"))?;
+        if !self.schema_search_path.is_empty() {
+            config.options(format!("-c search_path={}", self.schema_search_path));
+        }
+        Ok(config)
+    }
+
     /// sqlx 的连接参数，带上 search_path 和 `application_name`（见 [`url`](Self::url)）
-    #[cfg(any(feature = "sqlx", feature = "live-config"))]
+    #[cfg(any(feature = "sqlx", sqlx_live_config))]
     pub(crate) fn sqlx_options(
         &self,
         registry_config: &RegistryConfig,
@@ -124,6 +157,75 @@ fn percent_encode(value: &str) -> String {
             _ => format!("%{b:02X}"),
         })
         .collect()
+}
+
+// ---- MySQL ------------------------------------------------------------------
+
+/// 连哪个 MySQL 库
+#[cfg(all(any(feature = "sqlx", feature = "toasty"), feature = "mysql"))]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MySqlConnectConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub database: String,
+    /// 连接 URL 的参数，不带开头的 `?`
+    pub params: String,
+}
+
+#[cfg(all(any(feature = "sqlx", feature = "toasty"), feature = "mysql"))]
+impl Default for MySqlConnectConfig {
+    fn default() -> Self {
+        Self {
+            host: "localhost".to_string(),
+            port: 3306,
+            username: "root".to_string(),
+            password: String::new(),
+            database: "mysql".to_string(),
+            params: String::new(),
+        }
+    }
+}
+
+#[cfg(all(any(feature = "sqlx", feature = "toasty"), feature = "mysql"))]
+impl MySqlConnectConfig {
+    /// 连接 URL。`registry_config` 现在没用到，和 [`PgConnectConfig::url`] 保持一样的签名
+    pub fn url(&self, _registry_config: &RegistryConfig) -> Result<String> {
+        let params = self.params.trim_start_matches('?');
+        let query = if params.is_empty() {
+            String::new()
+        } else {
+            format!("?{params}")
+        };
+        Ok(format!(
+            "mysql://{}:{}@{}:{}/{}{}",
+            self.username, self.password, self.host, self.port, self.database, query
+        ))
+    }
+
+    /// sqlx 的连接参数
+    #[cfg(sqlx_mysql)]
+    pub(crate) fn sqlx_options(
+        &self,
+        registry_config: &RegistryConfig,
+    ) -> Result<sqlx::mysql::MySqlConnectOptions> {
+        use hygiea_core::app::AppErr;
+        use hygiea_core::{ResultExt, err};
+
+        self.url(registry_config)?
+            .parse()
+            .wrap_err(|| err!(AppErr::InvalidConfig, "invalid mysql connection url"))
+    }
+
+    /// 日志、错误里用的连接目标，不带密码
+    pub(crate) fn target(&self) -> String {
+        format!(
+            "mysql {}@{}:{}/{}",
+            self.username, self.host, self.port, self.database
+        )
+    }
 }
 
 // ---- SQLite -----------------------------------------------------------------
@@ -233,6 +335,7 @@ impl SqliteConnectConfig {
 
 /// 池怎么管，和数据库、框架无关。数字项不写时按连接池给默认值：
 /// 最大连接数 PG 10、SQLite 4，最小连接数 PG 0、SQLite 1；超时都是 acquire 30 秒、空闲 600 秒、最长存活 1800 秒
+#[cfg(any(feature = "sqlx", feature = "seaorm", feature = "tokio-postgres"))]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PoolConfig {
@@ -250,6 +353,7 @@ pub struct PoolConfig {
     pub connect_lazy: bool,
 }
 
+#[cfg(any(feature = "sqlx", feature = "seaorm", feature = "tokio-postgres"))]
 impl Default for PoolConfig {
     fn default() -> Self {
         Self {
@@ -265,22 +369,29 @@ impl Default for PoolConfig {
 }
 
 /// 连接池按后端给的默认连接数
+#[cfg(any(sqlx_pg, sqlx_sqlite, sqlx_mysql, tokio_pg))]
 #[derive(Clone, Copy)]
 pub(crate) struct PoolSize {
     pub(crate) max: u32,
+    /// deadpool（tokio-postgres）没有最小连接数，只有 sqlx 用
+    #[cfg_attr(not(any(sqlx_pg, sqlx_sqlite, sqlx_mysql)), allow(dead_code))]
     pub(crate) min: u32,
 }
 
-#[cfg(feature = "postgres")]
+#[cfg(any(sqlx_pg, tokio_pg))]
 pub(crate) const PG_POOL_SIZE: PoolSize = PoolSize { max: 10, min: 0 };
+#[cfg(sqlx_mysql)]
+pub(crate) const MYSQL_POOL_SIZE: PoolSize = PoolSize { max: 10, min: 0 };
 #[cfg(all(feature = "sqlx", feature = "sqlite"))]
 pub(crate) const SQLITE_POOL_SIZE: PoolSize = PoolSize { max: 4, min: 1 };
 
+#[cfg(any(sqlx_pg, sqlx_sqlite, sqlx_mysql, tokio_pg))]
 impl PoolConfig {
     pub(crate) fn max_connections(&self, size: PoolSize) -> u32 {
         self.max_connections.unwrap_or(size.max)
     }
 
+    #[cfg(any(sqlx_pg, sqlx_sqlite, sqlx_mysql))]
     pub(crate) fn min_connections(&self, size: PoolSize) -> u32 {
         self.min_connections.unwrap_or(size.min)
     }
@@ -289,12 +400,23 @@ impl PoolConfig {
         self.acquire_timeout_secs.unwrap_or(30)
     }
 
+    #[cfg(any(sqlx_pg, sqlx_sqlite, sqlx_mysql))]
     pub(crate) fn idle_timeout_secs(&self) -> u64 {
         self.idle_timeout_secs.unwrap_or(600)
     }
 
+    #[cfg(any(sqlx_pg, sqlx_sqlite, sqlx_mysql))]
     pub(crate) fn max_lifetime_secs(&self) -> u64 {
         self.max_lifetime_secs.unwrap_or(1800)
+    }
+
+    /// deadpool-postgres 的池参数：最大连接数、拿连接最多等多久。deadpool 没有最小连接数、空闲回收、最长存活，
+    /// 这几项不生效；`test_before_acquire` 对应回收时检查连接（`RecyclingMethod::Fast` 只看连接断没断）
+    #[cfg(tokio_pg)]
+    pub(crate) fn deadpool(&self, size: PoolSize) -> deadpool_postgres::PoolConfig {
+        let mut config = deadpool_postgres::PoolConfig::new(self.max_connections(size) as usize);
+        config.timeouts.wait = Some(Duration::from_secs(self.acquire_timeout_secs()));
+        config
     }
 
     /// sqlx 的池参数
@@ -310,9 +432,30 @@ impl PoolConfig {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(
+    test,
+    any(
+        feature = "postgres",
+        all(any(feature = "sqlx", feature = "toasty"), feature = "mysql"),
+        sqlx_sqlite
+    )
+))]
 mod tests {
     use super::*;
+
+    #[cfg(all(any(feature = "sqlx", feature = "toasty"), feature = "mysql"))]
+    #[test]
+    fn mysql_url() {
+        let config = MySqlConnectConfig {
+            password: "pw".to_string(),
+            params: "?ssl-mode=required".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.url(&RegistryConfig::default()).unwrap(),
+            "mysql://root:pw@localhost:3306/mysql?ssl-mode=required"
+        );
+    }
 
     #[cfg(feature = "postgres")]
     #[test]
@@ -387,6 +530,7 @@ mod tests {
     }
 
     /// 只写了一项时，其他项按后端的默认值，不会拿到别的后端的
+    #[cfg(any(sqlx_pg, sqlx_sqlite))]
     #[test]
     fn pool_defaults_follow_backend() {
         let config = PoolConfig {

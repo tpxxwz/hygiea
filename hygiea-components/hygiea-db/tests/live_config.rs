@@ -6,7 +6,13 @@
 //! cargo test -p hygiea-db --all-features --test live_config -- --ignored ::container::
 //! ```
 
-#![cfg(all(feature = "live-config", feature = "postgres", feature = "sqlite"))]
+#![cfg(all(
+    feature = "live-config",
+    feature = "sqlx",
+    feature = "seaorm",
+    feature = "postgres",
+    feature = "sqlite"
+))]
 
 use std::future::Future;
 use std::time::Duration;

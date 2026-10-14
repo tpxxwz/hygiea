@@ -1,4 +1,4 @@
-//! 三个数据库组件：构造后 `provides` 声明按组件名的连接池；SQLite 再经 Registry 用内存库真正启动。
+//! 各数据库组件：构造后 `provides` 声明按组件名的连接池；SQLite 再经 Registry 用内存库真正启动。
 //! PostgreSQL 的两个组件依赖外部服务，这里只测构造和 `provides`，经 Registry 启动的测试在 `tests/pg.rs`
 //!
 //! 运行：`cargo test -p hygiea-db --all-features --test component`
@@ -6,7 +6,11 @@
 #![cfg(any(
     all(feature = "sqlx", feature = "sqlite"),
     all(feature = "sqlx", feature = "postgres"),
-    all(feature = "seaorm", feature = "postgres")
+    all(feature = "seaorm", feature = "postgres"),
+    all(feature = "sqlx", feature = "mysql"),
+    all(feature = "tokio-postgres", feature = "postgres"),
+    all(feature = "toasty", feature = "postgres"),
+    all(feature = "toasty", feature = "mysql")
 ))]
 
 #[cfg(all(feature = "sqlx", feature = "sqlite"))]
@@ -167,5 +171,112 @@ mod seaorm_pg {
 
         let anonymous = SeaOrmPgComponent::build(Name::from(""), SeaOrmPgConfig::default());
         assert_eq!(anonymous.provides(), vec![ResourceId::of::<SeaOrmPgPool>()]);
+    }
+}
+
+#[cfg(all(feature = "toasty", feature = "postgres"))]
+mod toasty_pg {
+    use hygiea_core::app::{Component, Name, ResourceId};
+    use hygiea_db::{ToastyPgComponent, ToastyPgConfig, ToastyPgPool};
+
+    /// 按组件名提供连接池，匿名的名字是 `""`
+    #[test]
+    fn provides_named_pool() {
+        let named = ToastyPgComponent::build(Name::from("primary"), ToastyPgConfig::default());
+        assert_eq!(
+            named.provides(),
+            vec![ResourceId::named::<ToastyPgPool>("primary")]
+        );
+
+        let anonymous = ToastyPgComponent::build(Name::from(""), ToastyPgConfig::default());
+        assert_eq!(anonymous.provides(), vec![ResourceId::of::<ToastyPgPool>()]);
+    }
+
+    /// 开了 lock：实现了 DistributedLock（编译期检查）
+    #[cfg(feature = "lock")]
+    #[test]
+    fn implements_distributed_lock() {
+        fn assert_lock<L: hygiea_core::lock::DistributedLock>() {}
+        assert_lock::<ToastyPgPool>();
+    }
+}
+
+#[cfg(all(feature = "toasty", feature = "mysql"))]
+mod toasty_mysql {
+    use hygiea_core::app::{Component, Name, ResourceId};
+    use hygiea_db::{ToastyMySqlComponent, ToastyMySqlConfig, ToastyMySqlPool};
+
+    /// 按组件名提供连接池，匿名的名字是 `""`
+    #[test]
+    fn provides_named_pool() {
+        let named =
+            ToastyMySqlComponent::build(Name::from("primary"), ToastyMySqlConfig::default());
+        assert_eq!(
+            named.provides(),
+            vec![ResourceId::named::<ToastyMySqlPool>("primary")]
+        );
+
+        let anonymous = ToastyMySqlComponent::build(Name::from(""), ToastyMySqlConfig::default());
+        assert_eq!(
+            anonymous.provides(),
+            vec![ResourceId::of::<ToastyMySqlPool>()]
+        );
+    }
+}
+
+#[cfg(all(feature = "sqlx", feature = "mysql"))]
+mod sqlx_mysql {
+    use hygiea_core::app::{Component, Name, ResourceId};
+    use hygiea_db::{SqlxMySqlComponent, SqlxMySqlConfig, SqlxMySqlPool};
+
+    /// 按组件名提供连接池，匿名的名字是 `""`
+    #[test]
+    fn provides_named_pool() {
+        let named = SqlxMySqlComponent::build(Name::from("primary"), SqlxMySqlConfig::default());
+        assert_eq!(
+            named.provides(),
+            vec![ResourceId::named::<SqlxMySqlPool>("primary")]
+        );
+
+        let anonymous = SqlxMySqlComponent::build(Name::from(""), SqlxMySqlConfig::default());
+        assert_eq!(
+            anonymous.provides(),
+            vec![ResourceId::of::<SqlxMySqlPool>()]
+        );
+    }
+
+    /// 开了 lock：实现了 DistributedLock（编译期检查）
+    #[cfg(feature = "lock")]
+    #[test]
+    fn implements_distributed_lock() {
+        fn assert_lock<L: hygiea_core::lock::DistributedLock>() {}
+        assert_lock::<SqlxMySqlPool>();
+    }
+}
+
+#[cfg(all(feature = "tokio-postgres", feature = "postgres"))]
+mod tokio_pg {
+    use hygiea_core::app::{Component, Name, ResourceId};
+    use hygiea_db::{TokioPgComponent, TokioPgConfig, TokioPgPool};
+
+    /// 按组件名提供连接池，匿名的名字是 `""`
+    #[test]
+    fn provides_named_pool() {
+        let named = TokioPgComponent::build(Name::from("primary"), TokioPgConfig::default());
+        assert_eq!(
+            named.provides(),
+            vec![ResourceId::named::<TokioPgPool>("primary")]
+        );
+
+        let anonymous = TokioPgComponent::build(Name::from(""), TokioPgConfig::default());
+        assert_eq!(anonymous.provides(), vec![ResourceId::of::<TokioPgPool>()]);
+    }
+
+    /// 开了 lock：实现了 DistributedLock（编译期检查）
+    #[cfg(feature = "lock")]
+    #[test]
+    fn implements_distributed_lock() {
+        fn assert_lock<L: hygiea_core::lock::DistributedLock>() {}
+        assert_lock::<TokioPgPool>();
     }
 }

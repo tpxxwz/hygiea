@@ -255,6 +255,92 @@ mod postgres {
         );
     }
 
+    /// DBA 在用户上设了很短的四个超时：锁事务里 SET LOCAL 成 0，持锁比它们都久也不被断开，
+    /// 阻塞版等满自己的 timeout（不被 statement_timeout 提前打断）；同一个用户的普通查询照旧受限
+    #[tokio::test]
+    async fn dba_timeouts_do_not_cut_locks() {
+        let server = start().await;
+        // 先用 postgres 连一次：开了 lock-row 时由它建锁表
+        let admin = pool(&server).await;
+        sqlx::raw_sql(
+            "CREATE ROLE strict LOGIN SUPERUSER PASSWORD 'strict'; \
+             ALTER ROLE strict SET lock_timeout = '100ms'; \
+             ALTER ROLE strict SET statement_timeout = '100ms'; \
+             ALTER ROLE strict SET idle_in_transaction_session_timeout = '200ms'; \
+             ALTER ROLE strict SET transaction_timeout = '300ms'",
+        )
+        .execute(&*admin)
+        .await
+        .unwrap();
+        let strict = || async {
+            let config = SqlxPgConfig {
+                connect: PgConnectConfig {
+                    username: "strict".to_string(),
+                    password: "strict".to_string(),
+                    ..connect(&server)
+                },
+                ..Default::default()
+            };
+            SqlxPgPool::from_config(&config, &app("hy")).await.unwrap()
+        };
+        let (a, b) = (strict().await, strict().await);
+
+        let slow = sqlx::query("SELECT pg_sleep(0.5)").execute(&*a).await;
+        assert!(slow.is_err(), "普通查询仍受 statement_timeout 限制");
+
+        let guard = a.try_lock_i64(1).await.unwrap().unwrap();
+        let key = lock_key!(TestLockKey::Job, 1);
+        let row = a.try_lock(key.clone()).await.unwrap().unwrap();
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert!(b.try_lock_i64(1).await.unwrap().is_none(), "持锁没被断开");
+        assert!(b.try_lock(key.clone()).await.unwrap().is_none());
+
+        let start = tokio::time::Instant::now();
+        assert!(
+            b.lock_i64(1, Duration::from_millis(500))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(start.elapsed() >= Duration::from_millis(500));
+        assert!(
+            b.lock(key, Duration::from_millis(500))
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        guard.release().await.unwrap();
+        row.release().await.unwrap();
+    }
+
+    /// 等锁时被调用方取消（外层 timeout）：连接被关掉、不占着池，池里只有一条连接也能马上接着用
+    #[tokio::test]
+    async fn cancelled_wait_frees_pool_connection() {
+        let server = start().await;
+        let a = pool(&server).await;
+        let config = SqlxPgConfig {
+            connect: connect(&server),
+            pool: hygiea_db::PoolConfig {
+                max_connections: Some(1),
+                acquire_timeout_secs: Some(2),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let b = SqlxPgPool::from_config(&config, &app("hy")).await.unwrap();
+        let guard = a.try_lock_i64(1).await.unwrap().unwrap();
+
+        let waiting = tokio::time::timeout(
+            Duration::from_millis(200),
+            b.lock_i64(1, Duration::from_secs(30)),
+        )
+        .await;
+        assert!(waiting.is_err(), "还在等锁时被取消");
+        assert!(b.try_lock_i64(2).await.unwrap().is_some());
+        guard.release().await.unwrap();
+    }
+
     /// 字符串 key：启动时建了 UNLOGGED 的锁表，插入不提交的行、靠主键冲突互斥；阻塞版超时、等到释放；
     /// 行永远不提交，持有中、释放后表里都看不到
     #[cfg(feature = "lock-row")]

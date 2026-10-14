@@ -12,31 +12,47 @@ description = "Database components for hygiea: connection pools for PostgreSQL a
 [package.metadata.hygiea]
 err_code_project_prefix = "999"
 
-# 两个维度分开选：框架（sqlx / seaorm）和数据库（postgres / sqlite / mysql），
-# 同时打开的组合才会编译，比如 ["sqlx", "postgres"] 得到 SqlxPgComponent。默认什么都不开
+# 三个维度分开选，各自独立、只增加功能（Cargo 的 feature 要能叠加），同时打开的组合才会编译：
+# - 框架：sqlx / seaorm / toasty / tokio-postgres
+# - 数据库：postgres / sqlite / mysql
+# - 功能：live-config / lock / lock-row，不绑定驱动，实现按"功能 + 框架 + 数据库"的组合编译
+# 比如 ["sqlx", "postgres"] 得到 SqlxPgComponent，再加 "lock" 它就实现了分布式锁。
+# 组合条件集中在 build.rs 的 cfg 别名里。默认什么都不开
 [features]
 default = []
 # ---- 框架 ----
 sqlx = ["dep:sqlx"]
-seaorm = ["dep:sea-orm", "dep:log"]
+# SeaORM 底下就是 sqlx，锁、动态配置的内部实现直接用它，直接声明不增加实际依赖
+seaorm = ["dep:sea-orm", "dep:sqlx", "dep:log"]
+# toasty 的 PG 驱动基于 tokio-postgres（直接依赖它只为从错误里取 SQLSTATE），MySQL 驱动基于 sqlx-mysql。
+# PG 有锁和动态配置（只靠轮询，toasty 没有暴露 LISTEN），MySQL 只有连接池
+toasty = ["dep:toasty", "dep:tokio-postgres"]
+# 直接用 tokio-postgres（池是 deadpool-postgres），和 sqlx 平级：PG 的连接池组件、锁、动态配置（LISTEN 推送）。
+# 现在只支持不加密的连接（NoTls）
+tokio-postgres = ["dep:tokio-postgres", "dep:deadpool-postgres"]
+# ---- 数据库 ----
+postgres = ["sqlx?/postgres", "toasty?/postgresql"]
+sqlite = ["sqlx?/sqlite"]
+# toasty 的 MySQL 驱动基于 sqlx-mysql：同时开了 sqlx 时让 sqlx 也打开 mysql，sqlx-mysql 才能拿到和 sqlx-core 一致的 feature
+# （sqlx 的 macros 让 sqlx-core 要求驱动实现 describe，只经 toasty 打开的 sqlx-mysql 没实现，编译失败）
+mysql = ["sqlx?/mysql", "toasty?/mysql"]
 # ---- 功能 ----
-# 连接池的数据库配置表（动态配置）能力，见 live_config 模块文档；日志里的值按 #[redact] 打码，带上 core 的 redact
-live-config = ["dep:sqlx", "dep:serde_json", "tokio/time", "hygiea-core/redact"]
-# 连接池实现分布式锁（hygiea-core 的 DistributedLock），见 lock 模块文档
-lock = ["dep:sqlx", "hygiea-core/lock"]
+# 连接池的数据库配置表（动态配置），见 live_config 模块文档；日志里的值按 #[redact] 打码，带上 core 的 redact。
+# 实现：sqlx / seaorm + postgres，sqlx + sqlite
+live-config = ["dep:serde_json", "tokio/time", "hygiea-core/redact"]
+# 连接池实现分布式锁（hygiea-core 的 DistributedLock），见 lock 模块文档。实现：sqlx / seaorm + postgres
+lock = ["hygiea-core/lock"]
 # PG 的字符串 key 用锁表实现（{app_name}_lock），精确；不开时哈希成 i64 走 advisory lock（可能碰撞）。
 # 开不开它同一个 key 锁的是两样东西，所有实例要一致
 lock-row = ["lock"]
-# ---- 数据库 ----
-postgres = ["sqlx?/postgres"]
-sqlite = ["sqlx?/sqlite"]
-# 预留，还没有实现
-mysql = []
 
 [dependencies]
 hygiea-core = { workspace = true, features = ["app"] }
 sqlx = { workspace = true, features = ["time"], optional = true }
 sea-orm = { workspace = true, features = ["with-time"], optional = true }
+toasty = { workspace = true, optional = true }
+tokio-postgres = { workspace = true, optional = true }
+deadpool-postgres = { workspace = true, optional = true }
 log = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt", "sync", "macros"] }
 tracing = { workspace = true }

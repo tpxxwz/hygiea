@@ -1,13 +1,20 @@
 //! hygiea 的数据库组件：连接池，放进 Resources 给其他组件和业务用。
 //!
-//! 用 feature 选框架和数据库，两个维度分开开，同时打开的组合才会编译：
+//! 用 feature 选框架、数据库和功能，三个维度分开开、只增加功能，同时打开的组合才会编译
+//! （组合条件集中在 `build.rs` 的 cfg 别名里）：
 //!
 //! | feature | 组件 | 连接池（资源类型） |
 //! |---|---|---|
 //! | `sqlx` + `postgres` | [`SqlxPgComponent`] | [`SqlxPgPool`] |
 //! | `sqlx` + `sqlite` | [`SqlxSqliteComponent`] | [`SqlxSqlitePool`] |
 //! | `seaorm` + `postgres` | [`SeaOrmPgComponent`] | [`SeaOrmPgPool`] |
-//! | `mysql` | 预留，还没有实现 | |
+//! | `sqlx` + `mysql` | `SqlxMySqlComponent`（开 `lock` 有锁，没有动态配置） | `SqlxMySqlPool` |
+//! | `tokio-postgres` + `postgres` | `TokioPgComponent`（开 `lock` 有锁、开 `live-config` 有动态配置，和 sqlx 的 PG 一样） | `TokioPgPool` |
+//! | `toasty` + `postgres` | `ToastyPgComponent`（占位，只有连接池） | `ToastyPgPool` |
+//! | `toasty` + `mysql` | `ToastyMySqlComponent`（占位，只有连接池） | `ToastyMySqlPool` |
+//!
+//! 功能 `live-config`、`lock` / `lock-row` 的 feature 不绑定驱动，实现按驱动各写一份。现在只有 sqlx 的实现
+//! （`sqlx/internal/`，sqlx、SeaORM 的连接池共用），toasty 的占位还没有。
 //!
 //! 连接池的配置分段：`[db.connect]` 连哪个库（[`PgConnectConfig`] / [`SqliteConnectConfig`]），`[db.pool]` 池的参数
 //! （[`PoolConfig`]，各数据库、框架共用），SeaORM 另有 `[db.log]`。PG 连接的 `application_name` 用 `[registry] app_name`
@@ -81,43 +88,77 @@
 //! hygiea-db = { version = "..", features = ["sqlx", "postgres"] }
 //! ```
 
-#[cfg(any(feature = "sqlx", feature = "seaorm"))]
+#[cfg(any(
+    feature = "sqlx",
+    feature = "seaorm",
+    feature = "tokio-postgres",
+    all(feature = "toasty", any(feature = "postgres", feature = "mysql"))
+))]
 mod config;
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]
 mod datetime;
 #[cfg(any(
-    feature = "live-config",
-    all(feature = "lock-row", feature = "postgres")
+    feature = "sqlx",
+    feature = "seaorm",
+    feature = "toasty",
+    feature = "tokio-postgres"
 ))]
-mod ddl;
-#[cfg(any(feature = "sqlx", feature = "seaorm"))]
 mod error;
-#[cfg(all(feature = "live-config", any(feature = "postgres", feature = "sqlite")))]
+#[cfg(live_config_any)]
 pub mod live_config;
-#[cfg(all(feature = "lock", feature = "postgres"))]
+#[cfg(lock_any)]
 pub mod lock;
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]
 mod page;
 #[cfg(feature = "seaorm")]
 pub mod seaorm;
-#[cfg(feature = "sqlx")]
+#[cfg(any(live_config_any, lock_any))]
+mod sql;
+#[cfg(any(feature = "sqlx", sqlx_live_config, sqlx_lock_pg, sqlx_lock_mysql))]
 pub mod sqlx;
+#[cfg(feature = "toasty")]
+pub mod toasty;
+#[cfg(feature = "tokio-postgres")]
+pub mod tokio_postgres;
 
+#[cfg(all(feature = "sqlx", feature = "mysql"))]
+pub use self::sqlx::pool::mysql::*;
 #[cfg(all(feature = "sqlx", feature = "postgres"))]
 pub use self::sqlx::pool::postgres::*;
 #[cfg(all(feature = "sqlx", feature = "sqlite"))]
 pub use self::sqlx::pool::sqlite::*;
-#[cfg(all(any(feature = "sqlx", feature = "seaorm"), feature = "postgres"))]
+#[cfg(all(feature = "toasty", feature = "mysql"))]
+pub use self::toasty::pool::mysql::*;
+#[cfg(all(feature = "toasty", feature = "postgres"))]
+pub use self::toasty::pool::postgres::*;
+#[cfg(tokio_pg)]
+pub use self::tokio_postgres::pool::*;
+#[cfg(all(any(feature = "sqlx", feature = "toasty"), feature = "mysql"))]
+pub use config::MySqlConnectConfig;
+#[cfg(all(
+    any(
+        feature = "sqlx",
+        feature = "seaorm",
+        feature = "toasty",
+        feature = "tokio-postgres"
+    ),
+    feature = "postgres"
+))]
 pub use config::PgConnectConfig;
-#[cfg(any(feature = "sqlx", feature = "seaorm"))]
+#[cfg(any(feature = "sqlx", feature = "seaorm", feature = "tokio-postgres"))]
 pub use config::PoolConfig;
 #[cfg(all(feature = "sqlx", feature = "sqlite"))]
 pub use config::SqliteConnectConfig;
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]
 pub use datetime::HyUtcDateTime;
-#[cfg(any(feature = "sqlx", feature = "seaorm"))]
+#[cfg(any(
+    feature = "sqlx",
+    feature = "seaorm",
+    feature = "toasty",
+    feature = "tokio-postgres"
+))]
 pub use error::RepoErr;
-#[cfg(all(feature = "live-config", any(feature = "postgres", feature = "sqlite")))]
+#[cfg(live_config_any)]
 pub use live_config::{LiveConfig, LiveConfigOptions, LiveRef, LiveView};
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]
 pub use page::{Page, PageRequest};

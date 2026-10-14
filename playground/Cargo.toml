@@ -11,7 +11,7 @@ err_code_project_prefix = "999"
 
 [dev-dependencies]
 # db / redis 组件：tests/distributed_lock 暂存的锁实现要用
-hygiea = { path = "../hygiea", features = ["full", "db-sqlx-postgres", "db-sqlx-sqlite", "db-seaorm-postgres", "redis-fred"] }
+hygiea = { path = "../hygiea", features = ["full", "db-sqlx", "db-seaorm", "db-postgres", "db-sqlite", "redis-fred"] }
 fred = { version = "10.1.0", features = ["i-scripts"] }
 sqlx = { version = "0.9.0", features = ["runtime-tokio", "tls-rustls-ring-webpki", "macros", "postgres", "sqlite"] }
 sea-orm = { version = "2.0.3", features = ["sqlx-postgres", "runtime-tokio-rustls", "mock"] }

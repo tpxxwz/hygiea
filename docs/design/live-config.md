@@ -130,9 +130,13 @@ flowchart LR
 |---|---|---|
 | `mod.rs` | 对外：`LiveConfigOptions`、`LiveConfig<T>`、连接池上的两个方法（宏生成）；bind 入口；默认值 + 表里的值合并成 struct | 无关 |
 | `worker.rs` | 后台任务：处理 bind、收通知、轮询、比版本号、重新加载、出错重建 | 无关 |
-| `store.rs` | 独立小池和在上面做的事：建连接、加载、查版本号、补默认值、收通知 | sqlx |
-| `schema.rs` | 表名、期望的列、DDL，第一次 bind 时检查和建表 | sqlx |
-| `sql/*.sql` | PG、SQLite 的建表和触发器 | 各框架通用 |
+| `schema.rs` | 表名、第一次 bind 时的检查规则、各库语句的集合 `Sql` | 无关 |
+| `src/sql/<数据库>/live_config.rs` | 期望的列、函数和触发器名、加载 / 查版本号 / 补默认值 / 清历史的语句，通知 payload 的格式 | 无关 |
+| `store.rs` | `Store`：worker 和驱动之间的接口，按驱动分发 | 无关 |
+| `sqlx/mod.rs` | `SqlxStore`：按数据库分发、转错误，独立小池的固定参数 | sqlx |
+| `toasty/{mod,postgres}.rs` | toasty 的 PG：只靠轮询（toasty 没有暴露 LISTEN），用连接池自己的 `Db`，DDL 按 `-- @@` 拆开逐条执行 | toasty |
+| `sqlx/{postgres,sqlite,mysql}.rs` | 各数据库在小池上做的事：建连接、加载、查版本号、补默认值、收通知（只有 PG），以及第一次 bind 时检查和建表 | sqlx |
+| `src/sql/<数据库>/live_config.sql` | PG、SQLite、MySQL 的建表和触发器（MySQL 没有推送，和 SQLite 一样只靠轮询；DDL 会隐式提交，建表用 `GET_LOCK` 串行化、逐条执行） | 无关 |
 
 ---
 
@@ -169,7 +173,7 @@ sequenceDiagram
     St->>DB: 小池第一次连上（PG 建 PgListener）
     St->>DB: 查 current_schema 里三张表的列、函数、触发器
     alt 一个都没有
-        St->>DB: 加锁（PG advisory lock (builtin::LOCK_TYPE, Lock::LiveConfigDdl) / SQLite BEGIN IMMEDIATE）<br/>再查一遍，还是没有就执行 sql/*.sql
+        St->>DB: 加锁（PG advisory lock (builtin::LOCK_TYPE, Lock::LiveConfigDdl) / SQLite BEGIN IMMEDIATE）<br/>再查一遍，还是没有就执行 live_config.sql
     else 都在且列一致
         Note over St: 直接用
     else 只有一部分 / 列对不上

@@ -60,13 +60,10 @@
 
 | facade feature | crate | 提供 |
 |---|---|---|
-| `db-sqlx` | `hygiea-db`（`sqlx`） | `hygiea::db::HyUtcDateTime`；下面两个 sqlx 组合都包含它 |
-| `db-seaorm` | `hygiea-db`（`seaorm`） | `hygiea::db::HyUtcDateTime`（和 `db-sqlx` 是同一个类型）；`db-seaorm-postgres` 包含它 |
-| `db-sqlx-postgres` | `hygiea-db`（`sqlx` + `postgres`） | `hygiea::db::SqlxPgComponent` / `SqlxPgPool` |
-| `db-sqlx-sqlite` | `hygiea-db`（`sqlx` + `sqlite`） | `hygiea::db::SqlxSqliteComponent` / `SqlxSqlitePool` |
-| `db-seaorm-postgres` | `hygiea-db`（`seaorm` + `postgres`） | `hygiea::db::SeaOrmPgComponent` / `SeaOrmPgPool` |
-| `db-live-config` | `hygiea-db`（`live-config`），和上面的连接池组合一起开 | 连接池上的 `live_config` / `live_config_all`：数据库配置表，改了表程序自动拿到新值（`hygiea::db::LiveConfig` 等） |
-| `db-lock` | `hygiea-db`（`lock`），带上 `lock`，和 PostgreSQL 连接池组合一起开 | PG 连接池实现 `DistributedLock`：整数 key 用原生 advisory lock；字符串 key 哈希成 i64（可能碰撞） |
+| `db-sqlx` / `db-seaorm` / `db-toasty` | `hygiea-db`（`sqlx` / `seaorm` / `toasty`） | 选框架，和下面的数据库组合出连接池组件；开 `db-sqlx` 或 `db-seaorm` 就有 `hygiea::db::HyUtcDateTime` |
+| `db-postgres` / `db-sqlite` / `db-mysql` | `hygiea-db`（`postgres` / `sqlite` / `mysql`） | 选数据库，对开了的框架都生效 |
+| `db-live-config` | `hygiea-db`（`live-config`） | 连接池上的 `live_config` / `live_config_all`：数据库配置表，改了表程序自动拿到新值（`hygiea::db::LiveConfig` 等） |
+| `db-lock` | `hygiea-db`（`lock`），带上 `lock` | PG 连接池实现 `DistributedLock`：整数 key 用原生 advisory lock；字符串 key 哈希成 i64（可能碰撞） |
 | `db-lock-row` | `hygiea-db`（`lock-row`），带上 `db-lock` | PG 的字符串 key 改用 `{app_name}_lock` 表（UNLOGGED，插入不提交的行、靠主键冲突互斥），精确；开不开要所有实例一致，见设计说明 |
 | `redis-fred` | `hygiea-redis`（`fred`） | `hygiea::redis::RedisComponent` / `FredRedisPool` |
 | `http-axum` | `hygiea-http`（`axum`） | `hygiea::http::AxumComponent` |
@@ -74,6 +71,19 @@
 | `http-client-reqwest-debug-log` | `hygiea-http-client`（`debug-log`，带上 `reqwest`） | `ReqwestConfig::debug`：日志带原文和请求头、响应头，只在 dev-dependencies 里开 |
 | `grpc-tonic` | `hygiea-grpc`（`tonic`） | `hygiea::grpc::TonicComponent` |
 | `aws-s3` | `hygiea-aws`（`s3`） | `hygiea::aws::AwsS3Component` / `AwsConfig`；在 `Resources` 中提供 `AwsS3Client`（`Deref` 到 `aws_sdk_s3::Client`） |
+
+db 的三个维度各自独立、只增加功能，同时打开的组合才有东西，比如 `features = ["db-sqlx", "db-postgres", "db-lock"]`。支持的组合：
+
+| 框架 | 数据库 | 连接池组件 | `db-live-config` | `db-lock` / `db-lock-row` |
+|---|---|---|---|---|
+| `db-sqlx` | `db-postgres` | `SqlxPgComponent` / `SqlxPgPool` | 支持 | 支持 |
+| `db-sqlx` | `db-sqlite` | `SqlxSqliteComponent` / `SqlxSqlitePool` | 支持 | — |
+| `db-sqlx` | `db-mysql` | `SqlxMySqlComponent` / `SqlxMySqlPool` | 支持（只靠轮询，MySQL 没有推送） | `db-lock` 支持（`GET_LOCK`，只有 `try_lock` 是原生的）；`db-lock-row` 不支持 |
+| `db-seaorm` | `db-postgres` | `SeaOrmPgComponent` / `SeaOrmPgPool` | 支持 | 支持 |
+| `db-toasty` | `db-postgres` | `ToastyPgComponent` / `ToastyPgPool` | 支持（只靠轮询：toasty 没有暴露 LISTEN） | 支持（和 sqlx 同一份 SQL 和规则） |
+| `db-toasty` | `db-mysql` | `ToastyMySqlComponent` / `ToastyMySqlPool`（占位：只有连接池） | — | — |
+
+表里没有的组合（比如 `db-seaorm` + `db-sqlite`）开了也不编译出组件，不报错
 
 ## 快速开始
 
@@ -87,7 +97,7 @@
 hygiea = "0.1.1-alpha.5"
 
 # 应用框架，加上需要的组件
-hygiea = { version = "0.1.1-alpha.5", features = ["app", "db-sqlx-postgres", "http-axum"] }
+hygiea = { version = "0.1.1-alpha.5", features = ["app", "db-sqlx", "db-postgres", "http-axum"] }
 
 # 全部
 hygiea = { version = "0.1.1-alpha.5", features = ["full"] }
@@ -96,12 +106,12 @@ hygiea = { version = "0.1.1-alpha.5", features = ["full"] }
 或者用 `cargo add`：
 
 ```bash
-cargo add hygiea@0.1.1-alpha.5 --features app,db-sqlx-postgres,http-axum
+cargo add hygiea@0.1.1-alpha.5 --features app,db-sqlx,db-postgres,http-axum
 ```
 
 ### 应用框架
 
-用现成的 SQLite 和 HTTP 组件，配置从 `config/dev.toml` 自动加载。需要开 `app`、`db-sqlx-sqlite`、`http-axum`，另外要加 `axum`、`serde`（`derive`）、`tokio` 依赖。
+用现成的 SQLite 和 HTTP 组件，配置从 `config/dev.toml` 自动加载。需要开 `app`、`db-sqlx`、`db-sqlite`、`http-axum`，另外要加 `axum`、`serde`（`derive`）、`tokio` 依赖。
 
 `config/dev.toml`：
 
@@ -169,9 +179,12 @@ async fn main() -> Result<()> {
   | 配置 | 模板 |
   |---|---|
   | `RegistryConfig`（`[registry]`，框架和日志） | [hygiea-core/config/registry.toml](hygiea-core/config/registry.toml) |
-  | `SqlxPgConfig`（`db-sqlx-postgres`） | [hygiea-components/hygiea-db/config/sqlx-pg.toml](hygiea-components/hygiea-db/config/sqlx-pg.toml) |
-  | `SeaOrmPgConfig`（`db-seaorm-postgres`） | [hygiea-components/hygiea-db/config/seaorm-pg.toml](hygiea-components/hygiea-db/config/seaorm-pg.toml) |
-  | `SqlxSqliteConfig`（`db-sqlx-sqlite`） | [hygiea-components/hygiea-db/config/sqlx-sqlite.toml](hygiea-components/hygiea-db/config/sqlx-sqlite.toml) |
+  | `SqlxPgConfig`（`db-sqlx` + `db-postgres`） | [hygiea-components/hygiea-db/config/sqlx-pg.toml](hygiea-components/hygiea-db/config/sqlx-pg.toml) |
+  | `SeaOrmPgConfig`（`db-seaorm` + `db-postgres`） | [hygiea-components/hygiea-db/config/seaorm-pg.toml](hygiea-components/hygiea-db/config/seaorm-pg.toml) |
+  | `SqlxSqliteConfig`（`db-sqlx` + `db-sqlite`） | [hygiea-components/hygiea-db/config/sqlx-sqlite.toml](hygiea-components/hygiea-db/config/sqlx-sqlite.toml) |
+  | `SqlxMySqlConfig`（`db-sqlx` + `db-mysql`） | [hygiea-components/hygiea-db/config/sqlx-mysql.toml](hygiea-components/hygiea-db/config/sqlx-mysql.toml) |
+  | `ToastyPgConfig`（`db-toasty` + `db-postgres`） | [hygiea-components/hygiea-db/config/toasty-pg.toml](hygiea-components/hygiea-db/config/toasty-pg.toml) |
+  | `ToastyMySqlConfig`（`db-toasty` + `db-mysql`） | [hygiea-components/hygiea-db/config/toasty-mysql.toml](hygiea-components/hygiea-db/config/toasty-mysql.toml) |
   | `RedisConfig`（`redis-fred`） | [hygiea-components/hygiea-redis/config/redis.toml](hygiea-components/hygiea-redis/config/redis.toml) |
   | `AxumConfig`（`http-axum`） | [hygiea-components/hygiea-http/config/axum.toml](hygiea-components/hygiea-http/config/axum.toml) |
   | `ReqwestConfig`（`http-client-reqwest`） | [hygiea-components/hygiea-http-client/config/reqwest.toml](hygiea-components/hygiea-http-client/config/reqwest.toml) |

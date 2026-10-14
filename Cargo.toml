@@ -24,7 +24,7 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 authors = ["wjj"]
 repository = "https://github.com/tpxxwz/hygiea"
-rust-version = "1.94.1"
+rust-version = "1.95"
 
 [workspace.dependencies]
 # 内部依赖，版本由 release/release.sh（cargo set-version）发版时自动对齐，无需手动修改
@@ -83,6 +83,11 @@ log = "0.4"
 # Database
 sea-orm = { version = "2.0", features = ["sqlx-postgres", "runtime-tokio-rustls", "mock"] }
 sqlx = { version = "0.9", features = ["runtime-tokio", "tls-rustls-ring-webpki", "macros"] }
+# 驱动由 hygiea-db 的数据库 feature 打开（postgresql / mysql）
+toasty = { version = "0.11", default-features = false }
+# PG 驱动（hygiea-db 的 tokio-postgres 实现，toasty 的 PG 驱动底下也是它），版本跟 toasty-driver-postgresql 一致
+tokio-postgres = { version = "0.7", default-features = false, features = ["runtime"] }
+deadpool-postgres = { version = "0.14", default-features = false, features = ["rt_tokio_1"] }
 
 # HTTP
 axum = "0.8"

@@ -1,0 +1,29 @@
+# ToastyPgConfig（hygiea::db，feature db-toasty + db-postgres；live_config 段要再开 db-live-config）的配置模板
+#
+# 列出全部配置项：生效的值等于代码默认值。复制到自己项目的 config/<env>.toml，只需要写和默认值不同的项。
+# 段名 [db] 是应用配置结构体里这个字段的名字（`struct AppConfig { db: ToastyPgConfig, .. }`），按自己的改。
+# 通用规则见 hygiea 的 README「配置」。池参数用 toasty 的默认值
+#
+# 本文件由所在 crate 的 tests/config_template.rs 按 ToastyPgConfig 解析校验，改了配置结构体要同步改这里。
+
+[db.connect]
+scheme = "postgres"
+host = "localhost"
+port = 5432
+username = "postgres"
+password = "postgres"
+database = "postgres"
+# 追加到连接 url 上的参数，不带开头的 ?，比如 "sslmode=require"
+params = ""
+# toasty 不生效
+schema_search_path = ""
+
+[db.live_config]
+# 连接池的数据库配置表（动态配置，feature db-live-config）。默认不开，要用的连接池写 true。
+# toasty 没有暴露 LISTEN，只靠轮询；不另开小池，用这个连接池的连接。表名前缀是 [registry] app_name 加 _
+enabled = false
+# 对一遍版本号的间隔（秒）。不写：1
+# poll_interval_secs = 1
+# 变更历史表只留最新的多少行、隔多少分钟清一次。两项要么都写、要么都不写
+# history_keep_rows = 10000
+# history_trim_interval_mins = 60

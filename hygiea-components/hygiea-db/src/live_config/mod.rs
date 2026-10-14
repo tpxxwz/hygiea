@@ -1,7 +1,7 @@
 //! 数据库配置表（动态配置）：连接池的一种能力，feature `live-config`
 //!
 //! 配置存在应用自己的库里，改了表，运行中的程序自动拿到新值。开了 feature 后各连接池（[`SqlxPgPool`](crate::SqlxPgPool)、
-//! [`SqlxSqlitePool`](crate::SqlxSqlitePool)、[`SeaOrmPgPool`](crate::SeaOrmPgPool)）都有 `live_config` / `live_config_all`，
+//! [`SqlxSqlitePool`](crate::SqlxSqlitePool)、`SqlxMySqlPool`、[`SeaOrmPgPool`](crate::SeaOrmPgPool)）都有 `live_config` / `live_config_all`，
 //! 连的是同一个库（连接参数、search_path 和连接池一样），但走自己的独立小池（固定 1 条连接），不占连接池。
 //! 第一次绑定时才连库、建表，不用的话什么都不做。
 //!
@@ -40,9 +40,9 @@
 //!   轮询版本号。只接受更大的版本号，变了只重新读那个 namespace
 //! - 一个连接池一个后台任务、一个独立小池（1 条连接），不占主池；断线由 sqlx 重连，PG 的 listener 坏了在小池上重建
 //!
-//! 文件：`source.rs` 绑定入口和后台任务的启动，`handle.rs` 对外的句柄，`worker.rs` 后台任务，
-//! `store.rs` 连接和查询，`schema.rs` 表结构和建表。现在只有 sqlx 的实现（SeaORM 底层也是 sqlx），
-//! 和 sqlx 有关的只在 `store.rs`、`schema.rs`；接别的框架见 `store.rs` 的说明
+//! 文件：和驱动无关的是 `source.rs` 绑定入口和后台任务的启动，`handle.rs` 对外的句柄，`worker.rs` 后台任务，
+//! `schema.rs` 表结构和检查规则；SQL 在 `sql/<数据库>/live_config.rs`；执行在 `sqlx/`（一种数据库一个文件，`mod.rs` 的 `Store` 分发），
+//! 现在只有 sqlx 的实现（SeaORM 底层也是 sqlx）；接别的框架见 `sqlx/mod.rs` 的说明
 //!
 //! # 用的时候要注意
 //!
@@ -60,21 +60,30 @@
 mod handle;
 mod schema;
 mod source;
+// 执行：每个驱动一个目录，worker 经 store.rs 的 Store 分发过去
+#[cfg(sqlx_live_config)]
+mod sqlx;
 mod store;
+#[cfg(toasty_live_config)]
+mod toasty;
+#[cfg(tokio_pg_live_config)]
+mod tokio_postgres;
 mod worker;
 
 use serde::Deserialize;
 
 pub use handle::{LiveConfig, LiveRef, LiveView};
 
-/// 动态配置支持的后端，按它分 PG / SQLite 两支。variant 跟着 feature 走：没开 `sqlite` 就没有 `Sqlite`，
+/// 动态配置支持的后端，按它分 PG / SQLite / MySQL。variant 跟着 feature 走：没开 `sqlite` 就没有 `Sqlite`，
 /// `match` 时漏了已开的后端编译不过
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Backend {
-    #[cfg(feature = "postgres")]
+    #[cfg(live_config_pg)]
     Postgres,
-    #[cfg(feature = "sqlite")]
+    #[cfg(live_config_sqlite)]
     Sqlite,
+    #[cfg(live_config_mysql)]
+    MySql,
 }
 pub(crate) use source::{LiveConfigSource, live_config_source, live_config_source_for};
 pub(crate) use store::Store;

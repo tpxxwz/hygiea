@@ -16,9 +16,9 @@ use hygiea_core::{BaseErr, Result, ResultExt, ensure, err};
 
 use super::Backend;
 use super::LiveConfigOptions;
+use super::Store;
 use super::handle::LiveConfig;
 use super::schema::Tables;
-use super::store::Store;
 use super::worker::{Binding, Command, Effective, HistoryRetention, NsState, Worker};
 use crate::RepoErr;
 
@@ -78,13 +78,12 @@ impl std::fmt::Debug for LiveConfigSource {
 impl LiveConfigSource {
     /// 只校验配置，不连库（小池第一次用时才连）
     fn new(store: Store, config: &LiveConfigOptions) -> Result<Self> {
+        // 有推送（PG 的 LISTEN）的轮询只是兜底；没有的（SQLite、MySQL、toasty 的 PG）主要靠它
         let backend = store.backend();
-        let poll_interval_secs = config.poll_interval_secs.unwrap_or(match backend {
-            #[cfg(feature = "postgres")]
-            Backend::Postgres => 60,
-            #[cfg(feature = "sqlite")]
-            Backend::Sqlite => 1,
-        });
+        let poll_interval_secs =
+            config
+                .poll_interval_secs
+                .unwrap_or(if store.has_push() { 60 } else { 1 });
         ensure!(poll_interval_secs > 0, BaseErr::NotPositive, {
             "param": "live_config.poll_interval_secs",
             "op": "LiveConfigSource::new",

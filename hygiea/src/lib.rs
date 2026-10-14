@@ -10,11 +10,13 @@
 pub use hygiea_core::*;
 
 // ========== 组件（各自一个 crate，core 不能依赖它们，所以由 facade 导出） ==========
-/// 数据库组件：`db-sqlx-postgres`、`db-sqlx-sqlite`、`db-seaorm-postgres`；连接池的动态配置 `db-live-config`
+/// 数据库组件：框架 `db-sqlx` / `db-seaorm` / `db-toasty` / `db-tokio-postgres` 和数据库 `db-postgres` / `db-sqlite` / `db-mysql` 组合；
+/// 功能 `db-live-config`、`db-lock`、`db-lock-row`
 #[cfg(any(
-    feature = "db-sqlx-postgres",
-    feature = "db-sqlx-sqlite",
-    feature = "db-seaorm-postgres"
+    feature = "db-sqlx",
+    feature = "db-seaorm",
+    feature = "db-toasty",
+    feature = "db-tokio-postgres"
 ))]
 pub use hygiea_db as db;
 

@@ -1,0 +1,36 @@
+# SqlxMySqlConfig（hygiea::db，feature db-sqlx + db-mysql；live_config 段要再开 db-live-config）的配置模板。开 db-lock 有锁（GET_LOCK）
+#
+# 列出全部配置项：生效的值等于代码默认值，默认不启用的可选项写成注释。复制到自己项目的 config/<env>.toml，
+# 只需要写和默认值不同的项。段名 [db] 是应用配置结构体里这个字段的名字（`struct AppConfig { db: SqlxMySqlConfig, .. }`），按自己的改。
+# 通用规则见 hygiea 的 README「配置」。pool 段和 SqlxPgConfig 的一样
+#
+# 本文件由所在 crate 的 tests/config_template.rs 按 SqlxMySqlConfig 解析校验，改了配置结构体要同步改这里。
+
+[db.connect]
+host = "localhost"
+port = 3306
+username = "root"
+password = ""
+database = "mysql"
+# 追加到连接 url 上的参数，不带开头的 ?
+params = ""
+
+[db.pool]
+# 连接池。数字项不写时用默认值（注释里的值）
+# max_connections = 10
+# min_connections = 0
+# acquire_timeout_secs = 30
+# idle_timeout_secs = 600
+# max_lifetime_secs = 1800
+test_before_acquire = true
+connect_lazy = false
+
+[db.live_config]
+# 连接池的数据库配置表（动态配置，feature db-live-config）。默认不开，要用的连接池写 true。
+# MySQL 没有推送，只靠轮询；表名前缀是 [registry] app_name 加 _，见 docs/design/live-config.md
+enabled = false
+# 对一遍版本号的间隔（秒）。不写：1
+# poll_interval_secs = 1
+# 变更历史表只留最新的多少行、隔多少分钟清一次。两项要么都写、要么都不写
+# history_keep_rows = 10000
+# history_trim_interval_mins = 60

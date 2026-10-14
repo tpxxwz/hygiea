@@ -43,10 +43,102 @@
 //! - feature 在整个依赖图里合并：任何一个依赖开了 `hygiea-db/lock-row`，这里就是锁表实现。用 `cargo tree -e features`
 //!   确认实际开了哪个
 
-#[cfg(feature = "postgres")]
-mod postgres;
-#[cfg(all(feature = "postgres", feature = "lock-row"))]
+// 规则（和数据库、驱动无关）。SQL 在 `sql/<数据库>/lock.rs`
+#[cfg(lock_row_pg)]
 mod table;
+// 执行：每个驱动一个目录，里面一种数据库一个文件
+#[cfg(any(sqlx_lock_pg, sqlx_lock_mysql))]
+mod sqlx;
+#[cfg(toasty_lock_pg)]
+mod toasty;
+#[cfg(tokio_pg_lock)]
+mod tokio_postgres;
 
-#[cfg(feature = "postgres")]
-pub(crate) use postgres::{PgLock, impl_pg_lock};
+#[cfg(sqlx_lock_pg)]
+pub(crate) use self::sqlx::PgLock;
+#[cfg(sqlx_lock_mysql)]
+pub(crate) use self::sqlx::{MySqlLock, impl_mysql_lock};
+#[cfg(toasty_lock_pg)]
+pub(crate) use self::toasty::ToastyPgLock;
+#[cfg(tokio_pg_lock)]
+pub(crate) use self::tokio_postgres::TokioPgLock;
+
+/// 日志、错误、guard 里显示的 key
+#[cfg(lock_pg)]
+fn i64_name(key: i64) -> String {
+    format!("advisory {key}")
+}
+
+#[cfg(lock_pg)]
+fn pair_name(key1: i32, key2: i32) -> String {
+    format!("advisory {key1},{key2}")
+}
+
+/// 哈希出来的锁显示原来的字符串 key，排查时能对上 `pg_locks` 里的数字
+#[cfg(all(lock_pg, not(lock_row_pg)))]
+fn hashed_name(hashed: i64, key: &hygiea_core::lock::LockKey) -> hygiea_core::Result<String> {
+    Ok(format!("advisory {hashed} (hashed {})", key.as_str()?))
+}
+
+/// 给 PG 连接池实现 `DistributedLock`，连接池要有 `locker` 字段（[`self::sqlx`] 的 `PgLock` 或 [`self::toasty`] 的 `ToastyPgLock`，
+/// 两个驱动的锁方法名一样）
+#[cfg(lock_pg)]
+macro_rules! impl_pg_lock {
+    ($pool:ty) => {
+        #[hygiea_core::app::async_trait]
+        impl hygiea_core::lock::DistributedLock for $pool {
+            async fn try_lock(
+                &self,
+                key: hygiea_core::lock::LockKey,
+            ) -> hygiea_core::Result<Option<hygiea_core::lock::LockGuard>> {
+                self.locker.try_key(&key).await
+            }
+
+            async fn try_lock_i64(
+                &self,
+                key: impl Into<hygiea_core::lock::LockKeyI64> + Send,
+            ) -> hygiea_core::Result<Option<hygiea_core::lock::LockGuard>> {
+                self.locker.try_i64(key.into().get()).await
+            }
+
+            async fn try_lock_i32(
+                &self,
+                key1: impl Into<hygiea_core::lock::LockType> + Send,
+                key2: impl Into<hygiea_core::lock::LockKeyI32> + Send,
+            ) -> hygiea_core::Result<Option<hygiea_core::lock::LockGuard>> {
+                self.locker
+                    .try_pair(key1.into().key().get(), key2.into().get())
+                    .await
+            }
+
+            async fn lock(
+                &self,
+                key: hygiea_core::lock::LockKey,
+                timeout: std::time::Duration,
+            ) -> hygiea_core::Result<Option<hygiea_core::lock::LockGuard>> {
+                self.locker.lock_key(&key, timeout).await
+            }
+
+            async fn lock_i64(
+                &self,
+                key: impl Into<hygiea_core::lock::LockKeyI64> + Send,
+                timeout: std::time::Duration,
+            ) -> hygiea_core::Result<Option<hygiea_core::lock::LockGuard>> {
+                self.locker.lock_i64(key.into().get(), timeout).await
+            }
+
+            async fn lock_i32(
+                &self,
+                key1: impl Into<hygiea_core::lock::LockType> + Send,
+                key2: impl Into<hygiea_core::lock::LockKeyI32> + Send,
+                timeout: std::time::Duration,
+            ) -> hygiea_core::Result<Option<hygiea_core::lock::LockGuard>> {
+                self.locker
+                    .lock_pair(key1.into().key().get(), key2.into().get(), timeout)
+                    .await
+            }
+        }
+    };
+}
+#[cfg(lock_pg)]
+pub(crate) use impl_pg_lock;

@@ -1,4 +1,4 @@
-# SqlxSqliteConfig（hygiea::db，feature db-sqlx-sqlite；live_config 段要再开 db-live-config）的配置模板
+# SqlxSqliteConfig（hygiea::db，feature db-sqlx + db-sqlite；live_config 段要再开 db-live-config）的配置模板
 #
 # 列出全部配置项：生效的值等于代码默认值，默认不启用的可选项写成注释。复制到自己项目的 config/<env>.toml，
 # 删掉用不到的项、改需要改的值；只需要写和默认值不同的项。互斥的写法（二选一）都在这里，注释里写明了怎么切换。

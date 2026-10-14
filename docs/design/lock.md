@@ -87,16 +87,23 @@ lock_key!(K::Two, { "shop": s, "day": d })   // 多个变量
 
 ## 3. PostgreSQL 实现（hygiea-db）
 
-`SqlxPgPool`、`SeaOrmPgPool`（用底层的 sqlx 池）直接实现 `DistributedLock`，实现只有一份（`lock/postgres.rs` 的 `PgLock`，
+`SqlxPgPool`、`SeaOrmPgPool`（用底层的 sqlx 池）直接实现 `DistributedLock`，实现只有一份（`lock/sqlx/mod.rs` 的 `PgLock`，
 `impl_pg_lock!` 给两个连接池生成 impl）。
 
 ```text
-try_lock_i64(k)  ── 主池 begin ──> SELECT pg_try_advisory_xact_lock(k)
+try_lock_i64(k)  ── 主池取连接 ──> BEGIN; SET LOCAL ..(lock_timeout = 0) ──> SELECT pg_try_advisory_xact_lock(k)
                                     ├─ true  ──> guard 持有事务；release / drop 时 ROLLBACK，锁随事务释放
-                                    └─ false ──> 丢掉事务（连接归还时回滚），Ok(None)
-lock_i64(k, t)   ── 校验 t ──> begin ──> set_config('lock_timeout', t, true) ──> SELECT pg_advisory_xact_lock(k)
+                                    └─ false ──> 当场 ROLLBACK，Ok(None)
+lock_i64(k, t)   ── 校验 t ──> BEGIN; SET LOCAL ..(lock_timeout = t) ──> SELECT pg_advisory_xact_lock(k)
                                     └─ 55P03（lock_not_available）──> Ok(None)
 ```
+
+- 锁的事务一律用一条消息开（`sql/postgres/mod.rs` 的 `begin_sql`，一次往返）：`BEGIN ISOLATION LEVEL READ COMMITTED` 加四个 `SET LOCAL`，
+  `lock_timeout` 按方法设，`statement_timeout`、`idle_in_transaction_session_timeout`、`transaction_timeout` 设 0。
+  只在锁事务里生效，DBA 在库、用户上设的超时既打断不了等锁、也断不开持锁，业务查询照旧受保护；经 PgBouncer transaction 模式也一样。
+  READ COMMITTED 让 advisory lock 不挡同库的 vacuum。只支持最新的 PG（`transaction_timeout` 是 PG 17 加的）
+- 不用 sqlx 的 `Transaction`，自己取连接、发 BEGIN / ROLLBACK：BEGIN 那条消息中途报错、加锁出错、等锁时被取消、回滚失败，
+  连接都直接关掉不还回池（sqlx 的自定义 BEGIN 中途报错时会把处于失败事务的连接还回池，下一个使用者收到 25P02）
 
 - 阻塞版的 `timeout` 必须是整数毫秒（`lock_timeout` 的单位）。0 分流到 `try_*`；带不足 1 毫秒零头的、不足 1 毫秒的（转成 0 在 PG 里是不限时）、
   超过 `i32::MAX` 毫秒的（`lock_timeout` 的上限，约 24.8 天）开事务之前就返回 `LockErr::InvalidTimeout`，不发 SQL
@@ -105,7 +112,7 @@ lock_i64(k, t)   ── 校验 t ──> begin ──> set_config('lock_timeout'
 - 进程崩溃、连接断开，PG 中止事务，锁跟着释放，不需要租约
 - `try_lock_i32` 用原生的 `pg_try_advisory_xact_lock(int, int)`：PG 上和 `try_lock_i64` 是两个 key 空间，
   和 core 的默认实现（合成一个 i64）不同。`pg_locks` 里看到的是 `classid = 锁类型, objid = key2, objsubid = 2`
-- 字符串 key（feature `lock-row`）：begin ──> `set_config('lock_timeout', ..)` ──> `INSERT INTO {app}_lock (key) VALUES ($1)`，不提交
+- 字符串 key（feature `lock-row`）：BEGIN（同上）──> `INSERT INTO {app}_lock (key) VALUES ($1)`，不提交
   - 别人持有（插了没提交）时撞主键，等它的事务结束：对方回滚就插入成功、拿到锁；多个人在等时只有一个插入成功，其余的接着等新的持有者
   - 55P03 ──> `Ok(None)`。INSERT 没有 `NOWAIT` / `SKIP LOCKED`，`try_lock` 用最小的 1 毫秒（0 是不限时），
     没人持有时不等，有人持有时约 1 毫秒后返回；没拿到时 PG 服务端日志记一条 lock timeout 的 ERROR
@@ -126,13 +133,13 @@ CREATE UNLOGGED TABLE {app_name}_lock (
 )
 ```
 
-- 建在 search_path 的第一个 schema。建表规则和动态配置一样（共用 `ddl.rs`）：表在、列对上且是 UNLOGGED 就用；不在就在事务里
+- 建在 search_path 的第一个 schema。建表规则和动态配置一样（共用 `sql/` 的规则）：表在、列对上且是 UNLOGGED 就用；不在就在事务里
   加 advisory lock `(builtin::LOCK_TYPE, Lock::LockTableDdl)`、再查一遍后建；列对不上或不是 UNLOGGED 不动它，拒绝启动（`RepoErr::LockTableSchemaMismatch`），DDL 打在日志里
 - 启动时（`from_config`）建；`connect_lazy` 时第一次用字符串 key 时建
 - 行永远不提交，表一直是空的。UNLOGGED：插入不写 WAL；崩溃后清空、不复制到从库，对空表没有影响
 - 持有中的行别的会话看不到，查"谁持有某个 key"只能从 `pg_locks` 的 transactionid 等待关系反推
 - 不要手动往表里插入并提交：撞上已提交的行时 INSERT 立即报唯一约束冲突，这个 key 一直拿不到（`LockErr::AcquireFailed`）
-- 已建好的表不会自动升级，改结构要同时改 `sql/postgres.sql` 和 `table.rs` 的 `EXPECTED`，已有的库手动改
+- 已建好的表不会自动升级，改结构要同时改 `sql/postgres/lock.sql` 和 `sql/postgres/lock.rs` 的 `TABLE_COLUMNS`，已有的库手动改
 
 ## 4. 进程内的锁：`TokioLock`（hygiea-core，feature `lock-tokio`）
 

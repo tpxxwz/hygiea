@@ -1,0 +1,16 @@
+# ToastyMySqlConfig（hygiea::db，feature db-toasty + db-mysql）的配置模板。toasty 现在是占位，只有连接配置
+#
+# 列出全部配置项：生效的值等于代码默认值。复制到自己项目的 config/<env>.toml，只需要写和默认值不同的项。
+# 段名 [db] 是应用配置结构体里这个字段的名字（`struct AppConfig { db: ToastyMySqlConfig, .. }`），按自己的改。
+# 通用规则见 hygiea 的 README「配置」。池参数用 toasty 的默认值
+#
+# 本文件由所在 crate 的 tests/config_template.rs 按 ToastyMySqlConfig 解析校验，改了配置结构体要同步改这里。
+
+[db.connect]
+host = "localhost"
+port = 3306
+username = "root"
+password = ""
+database = "mysql"
+# 追加到连接 url 上的参数，不带开头的 ?
+params = ""
