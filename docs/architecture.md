@@ -74,7 +74,7 @@ crate 的分层和一句话职责见根目录 `README.md` 的 Architecture 一�
 | `hygiea-db/src/error.rs` | `RepoErr`：按操作分的数据库错误，0x 事务、1x 执行语句（10 兜底，11-14 增删改查）、2x 动态配置、3x 锁表、9x 参数 |
 | `hygiea-db/src/config.rs` | 连接池配置的公共部分：`PgConnectConfig` / `SqliteConnectConfig`（`[db.connect]`，连哪个库）、`PoolConfig`（`[db.pool]`，所有数据库、框架共用） |
 | `hygiea-db/src/live_config/` | 连接池的数据库配置表（feature `live-config`）：`mod.rs` 配置和对外导出，`source.rs` 绑定入口，`handle.rs` 句柄（`LiveConfig` / `LiveView`），`worker.rs` 后台任务，`store.rs` 独立小池和查询，`schema.rs` 表结构检查和建表，`sql/` 建表语句。设计说明见 `docs/design/live-config.md` |
-| `hygiea-db/src/lock/` | PG 连接池的分布式锁（feature `lock`）：`postgres.rs` 是事务级 advisory lock 和字符串 key 的行锁，`impl_pg_lock!` 给 `SqlxPgPool` / `SeaOrmPgPool` 实现 `DistributedLock`；`table.rs` 是锁表 `{app_name}_lock`（feature `lock-row`）的检查和建表，建表语句在 `sql/postgres.sql` |
+| `hygiea-db/src/lock/` | PG 连接池的分布式锁（feature `lock`）：`postgres.rs` 是事务级 advisory lock 和字符串 key 的锁表（插入不提交的行、靠主键冲突互斥），`impl_pg_lock!` 给 `SqlxPgPool` / `SeaOrmPgPool` 实现 `DistributedLock`；`table.rs` 是锁表 `{app_name}_lock`（feature `lock-row`）的检查和建表，建表语句在 `sql/postgres.sql` |
 | `hygiea-db/src/ddl.rs` | 框架建的表（动态配置、锁表）共用的检查代码：表名前缀的校验、读表的列。建表时串行化的 advisory lock 是 `hygiea_core::builtin` 的 `(LOCK_TYPE, Lock::*)` |
 | `hygiea-redis/src/fred_pool.rs` | 连接池组件 |
 | `hygiea-http/src/axum_server.rs` | HTTP 服务组件 |

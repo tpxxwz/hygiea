@@ -19,4 +19,7 @@ pub enum LockErr {
     /// 直接返回它，`op` 写后端和方法，比如 `"redis: try_lock_i32"`
     #[error(err_code = "04", err_tpl = "Unsupported lock operation: {{ op }}")]
     Unsupported,
+    /// 阻塞版的 `timeout` 超出后端支持的范围（比如 PostgreSQL 要在 1 毫秒到 `i32::MAX` 毫秒之间），没有发给后端
+    #[error(err_code = "05", err_tpl = "Invalid lock timeout: {{ cause }}")]
+    InvalidTimeout,
 }

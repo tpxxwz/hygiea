@@ -1,7 +1,7 @@
-//! PG 的锁表 `{app_name}_lock`：字符串 key 一行，加锁拿这一行的行锁。
+//! PG 的锁表 `{app_name}_lock`（UNLOGGED）：加锁是在事务里插入 key 那一行、不提交，靠主键冲突互斥，释放时回滚，表一直是空的。
 //!
 //! 建表规则和动态配置一样，只看 `current_schema()`：没有就建（advisory lock `hygiea_core::builtin` 的 `(LOCK_TYPE, Lock::LockTableDdl)` 串行化，拿到锁后再查一遍）；
-//! 有且列对上就用；列对不上不动它，拒绝启动，哪里不对和 DDL 打在日志里。已经建好的表不会自动升级，
+//! 有且列对上、是 UNLOGGED 就用；对不上不动它，拒绝启动，哪里不对和 DDL 打在日志里。已经建好的表不会自动升级，
 //! 改了 `sql/postgres.sql` 的列要同时改 [`EXPECTED`]，已有的库手动改
 
 use std::sync::Arc;
@@ -10,7 +10,6 @@ use sqlx::{AssertSqlSafe, Connection, PgPool};
 use tokio::sync::OnceCell;
 
 use hygiea_core::app::AppErr;
-use hygiea_core::lock::LockErr;
 use hygiea_core::{Result, ResultExt, err};
 
 use crate::RepoErr;
@@ -20,7 +19,7 @@ use crate::ddl::{is_ident, postgres_columns};
 const DDL: &str = include_str!("sql/postgres.sql");
 
 /// 期望的列：(列名, udt_name)
-const EXPECTED: [(&str, &str); 2] = [("key", "text"), ("created_at", "timestamptz")];
+const EXPECTED: [(&str, &str); 1] = [("key", "text")];
 
 #[derive(Clone, Debug)]
 pub(crate) struct LockTable {
@@ -53,28 +52,9 @@ impl LockTable {
         DDL.replace("{p}", &self.prefix)
     }
 
-    pub(crate) fn select_skip_locked(&self) -> String {
-        format!(
-            "SELECT key FROM {} WHERE key = $1 FOR UPDATE SKIP LOCKED",
-            self.name
-        )
-    }
-
-    pub(crate) fn select_for_update(&self) -> String {
-        format!("SELECT key FROM {} WHERE key = $1 FOR UPDATE", self.name)
-    }
-
-    /// 保证 key 那一行在（自动提交）。已有的行不加锁，别人正持有它也不会等
-    pub(crate) async fn insert(&self, pool: &PgPool, key: &str) -> Result<()> {
-        sqlx::query(AssertSqlSafe(format!(
-            "INSERT INTO {} (key) VALUES ($1) ON CONFLICT DO NOTHING",
-            self.name
-        )))
-        .bind(key)
-        .execute(pool)
-        .await
-        .wrap_err(|| err!(LockErr::AcquireFailed, key))?;
-        Ok(())
+    /// 加锁：插入 key 那一行，不提交。别人正持有（插了没提交）时等它的事务结束，最多等事务的 `lock_timeout`
+    pub(crate) fn insert(&self) -> String {
+        format!("INSERT INTO {} (key) VALUES ($1)", self.name)
     }
 
     /// 检查、建表，只做一次
@@ -121,7 +101,7 @@ impl LockTable {
         Ok(())
     }
 
-    /// 表在且列对上：`true`；不在：`false`；列对不上：拒绝启动
+    /// 表在、列对上且是 UNLOGGED：`true`；不在：`false`；对不上：拒绝启动
     async fn ready_or_broken(&self, conn: &mut sqlx::PgConnection) -> Result<bool> {
         let columns = postgres_columns(conn, vec![self.name.clone()])
             .await
@@ -133,12 +113,32 @@ impl LockTable {
             .iter()
             .map(|(name, ty)| (name.to_string(), ty.to_string()))
             .collect();
-        if *actual == expected {
+        if *actual != expected {
+            tracing::error!(
+                "lock table {}: columns expected {expected:?}, actual {actual:?}, left untouched; \
+                 fix it by hand (or use another app name) to match this DDL, then restart:\n{}",
+                self.name,
+                self.ddl()
+            );
+            return Err(err!(RepoErr::LockTableSchemaMismatch, self.name.clone()));
+        }
+        // relpersistence：p 普通表，u UNLOGGED
+        let persistence: Option<String> = sqlx::query_scalar(
+            "SELECT c.relpersistence::text FROM pg_class c \
+             JOIN pg_namespace n ON n.oid = c.relnamespace \
+             WHERE n.nspname = current_schema() AND c.relname = $1",
+        )
+        .bind(&self.name)
+        .fetch_optional(&mut *conn)
+        .await
+        .wrap_err(|| self.check_err())?;
+        if persistence.as_deref() == Some("u") {
             return Ok(true);
         }
         tracing::error!(
-            "lock table {}: columns expected {expected:?}, actual {actual:?}, left untouched; \
-             fix it by hand (or use another app name) to match this DDL, then restart:\n{}",
+            "lock table {}: expected UNLOGGED, actual relpersistence {persistence:?}, left untouched; \
+             fix it by hand (ALTER TABLE {} SET UNLOGGED), then restart:\n{}",
+            self.name,
             self.name,
             self.ddl()
         );
@@ -160,11 +160,8 @@ mod tests {
     #[test]
     fn names_follow_app_name() {
         let table = LockTable::new("dict_jp").unwrap();
-        assert!(table.ddl().contains("CREATE TABLE dict_jp_lock ("));
-        assert_eq!(
-            table.select_skip_locked(),
-            "SELECT key FROM dict_jp_lock WHERE key = $1 FOR UPDATE SKIP LOCKED"
-        );
+        assert!(table.ddl().contains("CREATE UNLOGGED TABLE dict_jp_lock ("));
+        assert_eq!(table.insert(), "INSERT INTO dict_jp_lock (key) VALUES ($1)");
         assert!(LockTable::new("dict-jp").is_err());
     }
 }

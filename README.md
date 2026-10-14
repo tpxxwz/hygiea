@@ -67,7 +67,7 @@
 | `db-seaorm-postgres` | `hygiea-db`（`seaorm` + `postgres`） | `hygiea::db::SeaOrmPgComponent` / `SeaOrmPgPool` |
 | `db-live-config` | `hygiea-db`（`live-config`），和上面的连接池组合一起开 | 连接池上的 `live_config` / `live_config_all`：数据库配置表，改了表程序自动拿到新值（`hygiea::db::LiveConfig` 等） |
 | `db-lock` | `hygiea-db`（`lock`），带上 `lock`，和 PostgreSQL 连接池组合一起开 | PG 连接池实现 `DistributedLock`：整数 key 用原生 advisory lock；字符串 key 哈希成 i64（可能碰撞） |
-| `db-lock-row` | `hygiea-db`（`lock-row`），带上 `db-lock` | PG 的字符串 key 改用 `{app_name}_lock` 表的行锁，精确；开不开要所有实例一致，见设计说明 |
+| `db-lock-row` | `hygiea-db`（`lock-row`），带上 `db-lock` | PG 的字符串 key 改用 `{app_name}_lock` 表（UNLOGGED，插入不提交的行、靠主键冲突互斥），精确；开不开要所有实例一致，见设计说明 |
 | `redis-fred` | `hygiea-redis`（`fred`） | `hygiea::redis::RedisComponent` / `FredRedisPool` |
 | `http-axum` | `hygiea-http`（`axum`） | `hygiea::http::AxumComponent` |
 | `http-client-reqwest` | `hygiea-http-client`（`reqwest`） | `hygiea::http_client::reqwest_client::ReqwestComponent` / `ReqwestConfig`，请求 API 也在这个模块；在 `Resources` 中提供 `ReqwestClient` |
@@ -468,6 +468,7 @@ pub enum LegacyErrors {
 | `99900302` | `LockErr::ReleaseFailed` | Release lock failed: {{ key }} |
 | `99900303` | `LockErr::InvalidKey` | Invalid lock key: {{ cause }} |
 | `99900304` | `LockErr::Unsupported` | Unsupported lock operation: {{ op }} |
+| `99900305` | `LockErr::InvalidTimeout` | Invalid lock timeout: {{ cause }} |
 | `99910001` | `RepoErr::TransactionBeginFailed` | Db transaction begin failed: {{ op }} |
 | `99910002` | `RepoErr::TransactionCommitFailed` | Db transaction commit failed: {{ op }} |
 | `99910010` | `RepoErr::ExecFailed` | Db exec failed: {{ op }} |

@@ -1,4 +1,4 @@
-//! PostgreSQL 的锁：整数 key 用事务级 advisory lock；字符串 key 开了 `lock-row` 用锁表的行锁，
+//! PostgreSQL 的锁：整数 key 用事务级 advisory lock；字符串 key 开了 `lock-row` 在锁表里插入不提交的行，靠主键冲突互斥，
 //! 没开就哈希成 i64（`LockKey::hashed_i64`）走 advisory lock，有损，见 lock 模块文档
 
 use std::time::Duration;
@@ -80,8 +80,9 @@ impl PgLock {
         if timeout.is_zero() {
             return self.try_advisory(key, name).await;
         }
+        let millis = timeout_millis(timeout)?;
         let mut tx = self.begin(&name).await?;
-        set_lock_timeout(&mut tx, timeout, &name).await?;
+        set_lock_timeout(&mut tx, millis, &name).await?;
         let result = sqlx::query("SELECT pg_advisory_xact_lock($1)")
             .bind(key)
             .execute(&mut *tx)
@@ -99,9 +100,10 @@ impl PgLock {
         if timeout.is_zero() {
             return self.try_pair(key1, key2).await;
         }
+        let millis = timeout_millis(timeout)?;
         let name = format!("advisory {key1},{key2}");
         let mut tx = self.begin(&name).await?;
-        set_lock_timeout(&mut tx, timeout, &name).await?;
+        set_lock_timeout(&mut tx, millis, &name).await?;
         let result = sqlx::query("SELECT pg_advisory_xact_lock($1, $2)")
             .bind(key1)
             .bind(key2)
@@ -111,20 +113,11 @@ impl PgLock {
         Ok(guard(tx, name, got))
     }
 
-    /// 字符串 key：锁表里这个 key 那一行的行锁，拿不到的跳过（`SKIP LOCKED`）
+    /// 字符串 key：在锁表里插入 key 那一行、不提交。INSERT 没有 `NOWAIT` / `SKIP LOCKED`，
+    /// 别人持有时最多等 1 毫秒（`lock_timeout` 的最小值，0 在 PG 里是不限时），等不到返回 `None`
     #[cfg(feature = "lock-row")]
     pub(crate) async fn try_key(&self, key: &LockKey) -> Result<Option<LockGuard>> {
-        let name = key.as_str()?.to_string();
-        self.table.ensure(&self.pool).await?;
-        self.table.insert(&self.pool, &name).await?;
-        let mut tx = self.begin(&name).await?;
-        let row: Option<String> =
-            sqlx::query_scalar(sqlx::AssertSqlSafe(self.table.select_skip_locked()))
-                .bind(&name)
-                .fetch_optional(&mut *tx)
-                .await
-                .wrap_err(|| acquire_err(&name))?;
-        Ok(guard(tx, name, row.is_some()))
+        self.insert_key(key, 1).await
     }
 
     #[cfg(feature = "lock-row")]
@@ -136,12 +129,17 @@ impl PgLock {
         if timeout.is_zero() {
             return self.try_key(key).await;
         }
+        self.insert_key(key, timeout_millis(timeout)?).await
+    }
+
+    /// 插入 key 那一行，最多等 `millis` 毫秒。撞上已经提交的行（被人手动插入）报 23505，作为加锁失败报出来
+    #[cfg(feature = "lock-row")]
+    async fn insert_key(&self, key: &LockKey, millis: i32) -> Result<Option<LockGuard>> {
         let name = key.as_str()?.to_string();
         self.table.ensure(&self.pool).await?;
-        self.table.insert(&self.pool, &name).await?;
         let mut tx = self.begin(&name).await?;
-        set_lock_timeout(&mut tx, timeout, &name).await?;
-        let result = sqlx::query(sqlx::AssertSqlSafe(self.table.select_for_update()))
+        set_lock_timeout(&mut tx, millis, &name).await?;
+        let result = sqlx::query(sqlx::AssertSqlSafe(self.table.insert()))
             .bind(&name)
             .execute(&mut *tx)
             .await;
@@ -195,13 +193,37 @@ fn guard(tx: Transaction<'static, Postgres>, name: String, got: bool) -> Option<
     }))
 }
 
-/// 这个事务里等锁最多等多久（`SET LOCAL lock_timeout`），至少 1 毫秒：0 在 PG 里是不限时
+/// 阻塞版的 `timeout` 转成 `lock_timeout` 的毫秒数，在开事务之前校验，不合法的不发给 PG：
+/// 必须是整数毫秒（`lock_timeout` 的单位是毫秒），在 1 毫秒到 `i32::MAX` 毫秒（约 24.8 天，`lock_timeout` 的上限）之间，
+/// 否则报错。调用方先把 0 分流到 `try_*`
+fn timeout_millis(timeout: Duration) -> Result<i32> {
+    if !timeout.subsec_nanos().is_multiple_of(1_000_000) {
+        return Err(err!(
+            LockErr::InvalidTimeout,
+            format!("postgres: timeout {timeout:?} is not a whole number of milliseconds")
+        ));
+    }
+    let millis = timeout.as_millis();
+    if millis == 0 {
+        return Err(err!(
+            LockErr::InvalidTimeout,
+            format!("postgres: timeout {timeout:?} is less than 1ms (0 means try_lock)")
+        ));
+    }
+    i32::try_from(millis).wrap_err(|| {
+        err!(
+            LockErr::InvalidTimeout,
+            format!("postgres: timeout {timeout:?} exceeds {}ms", i32::MAX)
+        )
+    })
+}
+
+/// 这个事务里等锁最多等多久（`SET LOCAL lock_timeout`），`millis` 由 [`timeout_millis`] 校验过
 async fn set_lock_timeout(
     tx: &mut Transaction<'static, Postgres>,
-    timeout: Duration,
+    millis: i32,
     name: &str,
 ) -> Result<()> {
-    let millis = timeout.as_millis().max(1);
     sqlx::query("SELECT set_config('lock_timeout', $1, true)")
         .bind(format!("{millis}ms"))
         .execute(&mut **tx)
@@ -284,3 +306,29 @@ macro_rules! impl_pg_lock {
     };
 }
 pub(crate) use impl_pg_lock;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 1 毫秒到 i32::MAX 毫秒之间的整数毫秒转成毫秒数；带零头的、超出范围的报 InvalidTimeout
+    #[test]
+    fn timeout_millis_range() {
+        assert_eq!(timeout_millis(Duration::from_millis(1)).unwrap(), 1);
+        assert_eq!(timeout_millis(Duration::from_secs(3)).unwrap(), 3000);
+        assert_eq!(
+            timeout_millis(Duration::from_millis(i32::MAX as u64)).unwrap(),
+            i32::MAX
+        );
+        for bad in [
+            Duration::from_micros(999),
+            Duration::from_micros(1_900),
+            Duration::from_nanos(1_000_001),
+            Duration::from_millis(i32::MAX as u64 + 1),
+            Duration::MAX,
+        ] {
+            let e = timeout_millis(bad).unwrap_err();
+            assert!(e.is(LockErr::InvalidTimeout), "{bad:?}: {e:#}");
+        }
+    }
+}

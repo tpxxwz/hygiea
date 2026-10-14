@@ -49,6 +49,50 @@ where
     }
 }
 
+/// 阻塞版的 timeout 带零头、不足 1 毫秒、超过 i32::MAX 毫秒：开事务之前就报错。连接池是 connect_lazy、
+/// 端口连不上，报的是 InvalidTimeout 而不是连接错误，说明没有连库、没有发 SQL
+#[tokio::test]
+async fn invalid_timeout_is_rejected_before_connecting() {
+    use hygiea_core::app::{ConfigResource, RegistryConfig};
+    use hygiea_core::lock::LockErr;
+    use hygiea_db::{PgConnectConfig, PoolConfig, SqlxPgConfig, SqlxPgPool};
+
+    let config = SqlxPgConfig {
+        connect: PgConnectConfig {
+            port: 1,
+            ..Default::default()
+        },
+        pool: PoolConfig {
+            connect_lazy: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let registry = RegistryConfig {
+        app_name: "hy".to_string(),
+        ..Default::default()
+    };
+    let pool = SqlxPgPool::from_config(&config, &registry).await.unwrap();
+    for timeout in [
+        Duration::from_micros(500),
+        Duration::from_micros(1_900),
+        Duration::MAX,
+    ] {
+        let errors = [
+            pool.lock_i64(1, timeout).await.unwrap_err(),
+            pool.lock_i32(TestLockType::Job, 1, timeout)
+                .await
+                .unwrap_err(),
+            pool.lock(lock_key!(TestLockKey::Job, 1), timeout)
+                .await
+                .unwrap_err(),
+        ];
+        for e in errors {
+            assert!(e.is(LockErr::InvalidTimeout), "{timeout:?}: {e:#}");
+        }
+    }
+}
+
 /// 用代码启动的官方 postgres 镜像
 #[container]
 mod postgres {
@@ -211,13 +255,21 @@ mod postgres {
         );
     }
 
-    /// 字符串 key：启动时建了锁表，key 一行，行锁互斥；阻塞版超时、等到释放
+    /// 字符串 key：启动时建了 UNLOGGED 的锁表，插入不提交的行、靠主键冲突互斥；阻塞版超时、等到释放；
+    /// 行永远不提交，持有中、释放后表里都看不到
     #[cfg(feature = "lock-row")]
     #[tokio::test]
     async fn string_key_uses_lock_table() {
         let server = start().await;
         let (a, b) = (pool(&server).await, pool(&server).await);
         assert!(table_exists(&a, "hy_lock").await, "启动时建表");
+        let persistence: String = sqlx::query_scalar(
+            "SELECT relpersistence::text FROM pg_class WHERE oid = 'hy_lock'::regclass",
+        )
+        .fetch_one(&*a)
+        .await
+        .unwrap();
+        assert_eq!(persistence, "u", "UNLOGGED");
 
         let guard = a
             .try_lock(lock_key!(TestLockKey::Job, 1))
@@ -250,13 +302,45 @@ mod postgres {
         });
         tokio::time::sleep(Duration::from_millis(300)).await;
         guard.release().await.unwrap();
-        assert!(waiter.await.unwrap().unwrap().is_some());
 
-        let keys: Vec<String> = sqlx::query_scalar("SELECT key FROM hy_lock ORDER BY key")
-            .fetch_all(&*a)
+        let waited = waiter.await.unwrap().unwrap().unwrap();
+        assert_eq!(count_rows(&a).await, 0, "持有中的行没提交，看不到");
+        waited.release().await.unwrap();
+        assert_eq!(count_rows(&a).await, 0, "释放后行跟着回滚");
+    }
+
+    #[cfg(feature = "lock-row")]
+    async fn count_rows(pool: &SqlxPgPool) -> i64 {
+        sqlx::query_scalar("SELECT count(*) FROM hy_lock")
+            .fetch_one(&**pool)
             .await
-            .unwrap();
-        assert_eq!(keys, ["999100002:job:1", "999100002:job:2"]);
+            .unwrap()
+    }
+
+    /// 字符串 key：多个实例同时 try 同一个 key，只有一个拿到，其余的不等（最多 1 毫秒）返回 None
+    #[cfg(feature = "lock-row")]
+    #[tokio::test]
+    async fn concurrent_try_lock_has_one_winner() {
+        let server = start().await;
+        let mut pools = Vec::new();
+        for _ in 0..8 {
+            pools.push(pool(&server).await);
+        }
+        for round in 0..3 {
+            let mut tries = tokio::task::JoinSet::new();
+            for p in &pools {
+                let p = p.clone();
+                tries.spawn(async move { p.try_lock(lock_key!(TestLockKey::Job, round)).await });
+            }
+            let mut winners = Vec::new();
+            while let Some(result) = tries.join_next().await {
+                winners.extend(result.unwrap().unwrap());
+            }
+            assert_eq!(winners.len(), 1, "第 {round} 轮");
+            for guard in winners {
+                guard.release().await.unwrap();
+            }
+        }
     }
 
     /// 没开 lock-row：字符串 key 哈希成 i64 走 advisory lock，不建表；
@@ -379,6 +463,26 @@ mod postgres {
             ..Default::default()
         };
         let e = SqlxPgPool::from_config(&config, &app("bad"))
+            .await
+            .unwrap_err();
+        assert!(e.is(RepoErr::LockTableSchemaMismatch), "{e:#}");
+    }
+
+    /// 已有同名的表、列对上但不是 UNLOGGED：不动它，拒绝启动
+    #[cfg(feature = "lock-row")]
+    #[tokio::test]
+    async fn logged_table_refuses_to_start() {
+        let server = start().await;
+        let other = pool(&server).await;
+        sqlx::raw_sql("CREATE TABLE logged_lock (key text PRIMARY KEY)")
+            .execute(&*other)
+            .await
+            .unwrap();
+        let config = SqlxPgConfig {
+            connect: connect(&server),
+            ..Default::default()
+        };
+        let e = SqlxPgPool::from_config(&config, &app("logged"))
             .await
             .unwrap_err();
         assert!(e.is(RepoErr::LockTableSchemaMismatch), "{e:#}");

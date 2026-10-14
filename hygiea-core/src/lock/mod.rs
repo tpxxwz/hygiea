@@ -121,6 +121,7 @@ pub trait DistributedLock: Send + Sync {
     }
 
     /// 字符串 key 加锁，拿不到就等，最多等 `timeout`，超时返回 `Ok(None)`。`timeout` 为 0 等于 `try_lock`。
+    /// 后端可以限制 `timeout` 的范围和精度（比如 PostgreSQL 是毫秒），超出范围返回 [`LockErr::InvalidTimeout`]，不发给后端。
     /// 默认每隔最多 100 毫秒反复 `try_lock`
     async fn lock(&self, key: LockKey, timeout: Duration) -> Result<Option<LockGuard>> {
         poll_until(timeout, || self.try_lock(key.clone())).await

@@ -4,7 +4,7 @@
 //!    编号 = 项目前缀（Cargo.toml 的 `err_code_project_prefix`，这里是 001）+ 模块前缀 + code
 //! 2. 锁类型 + id：`try_lock_i32`，PG 上是原生的 `pg_try_advisory_xact_lock(int, int)`
 //! 3. 任意 i64：`try_lock_i64`，不用注册
-//! 4. 字符串 key：`lock_key!` 生成。本示例开了 `db-lock-row`，PG 上是锁表 `example_lock` 的行锁（启动时建表）；
+//! 4. 字符串 key：`lock_key!` 生成。本示例开了 `db-lock-row`，PG 上是在锁表 `example_lock` 里插入不提交的行（启动时建表）；
 //!    没开 `db-lock-row` 时 `try_lock` 把 key 哈希成 i64 走 advisory lock，和第 6 步显式 `hashed_i64()` 一样
 //! 5. 阻塞版：拿不到就等，最多等 timeout；guard 没 release 就 drop 时在后台释放
 //! 6. 哈希降级：`lock_key!(..).hashed_i64()?` 交给 `try_lock_i64`，不用锁表；有损（不同 key 可能撞到同一个数，
@@ -109,11 +109,12 @@ async fn main() -> Result<()> {
     let export = b.try_lock(lock_key!(OrderLockKey::Export, "alice")).await?;
     println!("b 拿锁：{:?}", export.as_ref().map(|g| g.key()));
 
+    // 持有中的行没提交，别的会话查不到；释放时回滚，行跟着撤掉，表一直是空的
     let rows: Vec<String> = sqlx::query_scalar("SELECT key FROM example_lock ORDER BY key")
         .fetch_all(&*a)
         .await
         .map_err(|e| hygiea::err!(hygiea::BaseErr::SysErr).with_source(e))?;
-    println!("锁表 example_lock 里的行：{rows:?}");
+    println!("锁表 example_lock 里看得到的行（持有中也是空的）：{rows:?}");
 
     // ---- 阻塞版：a 半秒后释放，b 最多等 3 秒 ----
     let start = tokio::time::Instant::now();

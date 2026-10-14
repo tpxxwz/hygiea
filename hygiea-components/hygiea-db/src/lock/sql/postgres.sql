@@ -1,8 +1,8 @@
 -- hygiea 分布式锁的锁表（feature lock-row），建在 search_path 的第一个 schema 里。{p} 是前缀（应用名加 _）。
--- 字符串 key 一行，加锁时补上，不删；加锁拿的是这一行的行锁。
+-- 加锁是在事务里插入 key 那一行、不提交，别人插同一个 key 时撞主键要等这个事务结束；释放就是回滚，行跟着撤掉。
+-- 行永远不提交，表一直是空的，所以用 UNLOGGED：不写 WAL，崩溃后被清空、不复制到从库都没有影响。
 -- 表不存在时才执行；手动执行时把 {p} 换掉。改了列要同时改 table.rs 的 EXPECTED
 
-CREATE TABLE {p}lock (
-    key        text        PRIMARY KEY,
-    created_at timestamptz NOT NULL DEFAULT now()
+CREATE UNLOGGED TABLE {p}lock (
+    key text PRIMARY KEY
 );

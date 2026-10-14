@@ -3,7 +3,7 @@
 //!
 //! | 后端 | `try_lock_i64` / `try_lock_i32` 和阻塞版 | 字符串 key（`try_lock` / `lock`） |
 //! |---|---|---|
-//! | PostgreSQL（`SqlxPgPool`、`SeaOrmPgPool`） | 原生事务级 advisory lock | 开了 `lock-row`：`{app_name}_lock` 表的行锁，精确；没开：哈希成 i64 走 advisory lock，有损（见下） |
+//! | PostgreSQL（`SqlxPgPool`、`SeaOrmPgPool`） | 原生事务级 advisory lock | 开了 `lock-row`：在 `{app_name}_lock` 表里插入不提交的行，靠主键冲突互斥，精确；没开：哈希成 i64 走 advisory lock，有损（见下） |
 //!
 //! PG 每次加锁从主池开一个事务（占一条连接），锁交给返回的 guard：`release()` 或 drop 时回滚事务，锁跟着释放；
 //! 进程崩溃、连接断开时 PG 中止事务，锁也释放。持锁期间那条连接一直占着，同时持有的锁加上业务查询要在
@@ -11,9 +11,24 @@
 //!
 //! - `try_lock_i32` 用原生的 `(int, int)` 形式：PG 上它和 `try_lock_i64` 是两个 key 空间（`(0, 42)` 和 `42` 是两把锁），
 //!   和 hygiea-core 的默认实现（合成一个 i64）不同
-//! - 阻塞版用 `lock_timeout` 原生等待，超时返回 `Ok(None)`；`timeout` 为 0 等于 `try_*`
-//! - 锁表的建表规则和动态配置一样：表在且列对上就用，不在就建，列对不上拒绝启动。启动时建（`connect_lazy` 时第一次用字符串 key 时建）。
-//!   表里一个 key 一行，加锁时补上，不删
+//! - 阻塞版用 `lock_timeout` 原生等待，超时返回 `Ok(None)`；`timeout` 为 0 等于 `try_*`。`timeout` 精度是毫秒，
+//!   必须是整数毫秒（`1.9ms` 这种带零头的报错），在 1 毫秒到 `i32::MAX` 毫秒（约 24.8 天，`lock_timeout` 的上限）之间（0 除外），
+//!   否则返回 `LockErr::InvalidTimeout`，开事务之前就报错，不发任何 SQL
+//! - 锁表的建表规则和动态配置一样：表在、列对上且是 UNLOGGED 就用，不在就建，对不上拒绝启动。启动时建（`connect_lazy` 时第一次用字符串 key 时建）
+//!
+//! # 开了 `lock-row` 时的字符串 key：锁表
+//!
+//! 加锁是在事务里 `INSERT INTO {app_name}_lock (key) VALUES ($1)`、不提交；别人插同一个 key 时撞主键，要等这个事务结束。
+//! 释放就是回滚，行跟着撤掉，表一直是空的，不随 key 的个数增长。
+//!
+//! - 表是 UNLOGGED：插入不写 WAL；崩溃后被清空、不复制到从库，对一张永远是空的表没有影响。主从切换后新主库上是空表，直接能用
+//! - INSERT 没有 `NOWAIT` / `SKIP LOCKED`，`try_lock` 用 1 毫秒的 `lock_timeout`（最小值）：没人持有时不等；
+//!   有人持有时约 1 毫秒后返回 `Ok(None)`，所以 `try_lock` 不是立即返回，而是最多等约 1 毫秒。
+//!   没拿到时 PG 服务端日志会记一条 `ERROR: canceling statement due to lock timeout`（默认 `log_min_error_statement`
+//!   还会带上语句），高频 try 时注意日志量
+//! - 持有中的行没提交，别的会话查表看不到，查"谁持有某个 key"只能从 `pg_locks` 的 transactionid 等待关系反推
+//! - 每次加锁留下一个回滚掉的元组和索引项，由 autovacuum 清理
+//! - 不要手动往表里插入并提交：撞上已提交的行时 INSERT 立即报唯一约束冲突，这个 key 一直拿不到锁，返回 `LockErr::AcquireFailed`
 //!
 //! # 没开 `lock-row` 时的字符串 key：哈希降级
 //!
