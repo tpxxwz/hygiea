@@ -1,7 +1,7 @@
 # Rust
 target/
 **/target/
-hygiea-playground/
+playground/Cargo.lock
 
 # IDE
 .idea/
