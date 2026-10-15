@@ -1,6 +1,7 @@
 # Rust
 target/
 **/target/
+hygiea-playground/
 
 # IDE
 .idea/
