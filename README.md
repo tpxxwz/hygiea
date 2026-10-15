@@ -118,19 +118,19 @@ let lock_client = resources.require::<DbLockClient>()?; // 里面是哪种数据
 ```toml
 [dependencies]
 # 错误处理、日期时间、环境变量、字符串不需要 feature
-hygiea = "0.1.1-alpha.5"
+hygiea = "0.1.1-alpha.6"
 
 # 应用框架，加上需要的组件
-hygiea = { version = "0.1.1-alpha.5", features = ["app", "db-sqlx", "db-postgres", "http-axum"] }
+hygiea = { version = "0.1.1-alpha.6", features = ["app", "db-sqlx", "db-postgres", "http-axum"] }
 
 # 全部
-hygiea = { version = "0.1.1-alpha.5", features = ["full"] }
+hygiea = { version = "0.1.1-alpha.6", features = ["full"] }
 ```
 
 或者用 `cargo add`：
 
 ```bash
-cargo add hygiea@0.1.1-alpha.5 --features app,db-sqlx,db-postgres,http-axum
+cargo add hygiea@0.1.1-alpha.6 --features app,db-sqlx,db-postgres,http-axum
 ```
 
 ### 应用框架
