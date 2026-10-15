@@ -12,7 +12,7 @@ use crate::config::{MYSQL_POOL_SIZE, MySqlConnectConfig, PoolConfig};
 #[cfg(feature = "live-config")]
 use crate::live_config::{DbLiveConfig, MySqlLiveConfigConfig, Store};
 #[cfg(feature = "lock")]
-use crate::lock::{DbLock, MySqlLock, MySqlLockConfig};
+use crate::lock::{DbLockClient, MySqlLock, MySqlLockConfig};
 
 // ---- config -----------------------------------------------------------------
 
@@ -108,11 +108,11 @@ impl DbConfig for SeaOrmMySqlConfig {
     /// 和业务池共用时用 SeaORM 底下的 sqlx 池：`Database::connect` 按 mysql:// 建的，一定是 MySQL 连接池，
     /// `get_mysql_connection_pool` 不会 panic
     #[cfg(feature = "lock")]
-    async fn lock(
+    async fn lock_client(
         &self,
         pool: Option<&SeaOrmMySqlPool>,
         registry_config: &RegistryConfig,
-    ) -> Result<DbLock> {
+    ) -> Result<DbLockClient> {
         let lock = MySqlLock::new(
             pool.map(|p| p.inner.get_mysql_connection_pool()),
             &self.connect,
@@ -121,7 +121,7 @@ impl DbConfig for SeaOrmMySqlConfig {
             registry_config,
         )
         .await?;
-        Ok(DbLock::mysql(lock))
+        Ok(DbLockClient::mysql(lock))
     }
 }
 
@@ -143,7 +143,7 @@ impl std::ops::Deref for SeaOrmMySqlPool {
 
 // ---- component --------------------------------------------------------------
 
-/// MySQL 连接组件（SeaORM），按 `uses` 放进 Resources 的是 [`SeaOrmMySqlPool`]、`DbLiveConfig`、`DbLock`，见 [`DbComponent`]
+/// MySQL 连接组件（SeaORM），按 `uses` 放进 Resources 的是 [`SeaOrmMySqlPool`]、`DbLiveConfig`、`DbLockClient`，见 [`DbComponent`]
 pub type SeaOrmMySqlComponent = DbComponent<SeaOrmMySqlConfig>;
 
 #[cfg(test)]

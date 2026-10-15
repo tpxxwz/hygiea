@@ -1,9 +1,9 @@
-//! 分布式锁（feature `lock`）：PG、MySQL 的连接池组件 `uses` 带 4 时，把 [`DbLock`] 匿名放进 Resources（整个应用只能有一个组件开），
+//! 分布式锁（feature `lock`）：PG、MySQL 的连接池组件 `uses` 带 4 时，把 [`DbLockClient`] 匿名放进 Resources（整个应用只能有一个组件开），
 //! 它实现 hygiea-core 的 [`DistributedLock`](hygiea_core::lock::DistributedLock)，用法和 key 的规则见 `hygiea::lock`。
 //!
 //! ```ignore
-//! let lock = resources.require::<DbLock>()?;
-//! let Some(guard) = lock.try_lock(lock_key!(JobLockKey::Settle, day)).await? else { return Ok(()) };
+//! let lock_client = resources.require::<DbLockClient>()?;
+//! let Some(guard) = lock_client.try_lock(lock_key!(JobLockKey::Settle, day)).await? else { return Ok(()) };
 //! ```
 //!
 //! | 后端 | `try_lock_i64` / `try_lock_i32` 和阻塞版 | 字符串 key（`try_lock` / `lock`） |
@@ -137,7 +137,7 @@ fn pair_name(key1: i32, key2: i32) -> String {
 /// 实现 hygiea-core 的 [`DistributedLock`](hygiea_core::lock::DistributedLock)，里面是哪种数据库由建它的组件决定，用法一样。
 /// `Clone` 后共用同一个池
 #[derive(Clone, Debug)]
-pub struct DbLock(Backend);
+pub struct DbLockClient(Backend);
 
 #[derive(Clone, Debug)]
 enum Backend {
@@ -159,7 +159,7 @@ macro_rules! each {
     };
 }
 
-impl DbLock {
+impl DbLockClient {
     #[cfg(sqlx_lock_pg)]
     pub(crate) fn postgres(lock: PgLock) -> Self {
         Self(Backend::Postgres(lock))
@@ -177,7 +177,7 @@ impl DbLock {
 }
 
 #[hygiea_core::app::async_trait]
-impl hygiea_core::lock::DistributedLock for DbLock {
+impl hygiea_core::lock::DistributedLock for DbLockClient {
     async fn try_lock(&self, key: LockKey) -> Result<Option<LockGuard>> {
         each!(self, l => l.try_key(&key).await)
     }

@@ -193,7 +193,7 @@ mod pool {
     async fn uses_puts_resources_via_registry() {
         use hygiea_core::app::AppErr;
         use hygiea_core::lock::DistributedLock;
-        use hygiea_db::{DbLiveConfig, DbLock, DbUses};
+        use hygiea_db::{DbLiveConfig, DbLockClient, DbUses};
 
         #[derive(Default, serde::Serialize, serde::Deserialize)]
         struct Cache {
@@ -206,11 +206,11 @@ mod pool {
             ..sqlx_config(&server)
         };
         let registry = Registry::new().add_named::<SqlxPgComponent>("main", all.clone());
-        let (pool, live, lock) = with_resources(registry, |res| {
+        let (pool, live, lock_client) = with_resources(registry, |res| {
             (
                 res.get_named::<SqlxPgPool>("main").unwrap(),
                 res.get_named::<DbLiveConfig>("main").unwrap(),
-                res.get::<DbLock>().unwrap(),
+                res.get::<DbLockClient>().unwrap(),
             )
         })
         .await;
@@ -227,7 +227,7 @@ mod pool {
                 .ttl_secs,
             0
         );
-        assert!(lock.try_lock_i64(1).await.unwrap().is_some());
+        assert!(lock_client.try_lock_i64(1).await.unwrap().is_some());
 
         let lock_only = SqlxPgConfig {
             uses: DbUses::try_from(4).unwrap(),
@@ -842,9 +842,9 @@ mod lock {
             .await
             .unwrap();
         assert!(db.pool.is_none());
-        let lock = db.lock.clone().unwrap();
+        let lock_client = db.lock_client.clone().unwrap();
         let other = pool(&server).await;
-        let guard = lock.try_lock_i64(1).await.unwrap().unwrap();
+        let guard = lock_client.try_lock_i64(1).await.unwrap().unwrap();
         assert!(other.try_lock_i64(1).await.unwrap().is_none());
         let lock_conns = || async {
             sqlx::query_scalar::<_, i64>(

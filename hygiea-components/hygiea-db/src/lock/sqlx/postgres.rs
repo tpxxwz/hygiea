@@ -29,7 +29,7 @@ use crate::sql::table_prefix;
 #[cfg(sqlx_lock_row)]
 use crate::sqlx::internal::postgres::columns;
 
-/// PG 的锁，[`DbLock`](super::super::DbLock) 里放的就是它
+/// PG 的锁，[`DbLockClient`](super::super::DbLockClient) 里放的就是它
 #[derive(Clone, Debug)]
 pub(crate) struct PgLock {
     /// 业务池的 sqlx 池，或者单独建的池

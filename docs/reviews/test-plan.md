@@ -216,7 +216,7 @@
 
 ### hygiea-grpc
 
-- **单元（`tonic_server.rs`）**：缺少 `serve_fn` 报 `ConfigMissing`；地址非法报 `InvalidConfig`；端口被占用报 `BindFailed`；`shutdown_timeout` 的换算。
+- **单元（`tonic_server.rs`）**：地址非法报 `InvalidConfig`；端口被占用报 `BindFailed`；`shutdown_timeout` 的换算。
 - **集成（`tests/tonic_serve.rs`）**：自定义一个收到取消信号就退出的 `serve_fn`，验证取消后能正常 join；可选：注册 tonic-health 服务，用客户端调用一次。
 
 ## 五、examples

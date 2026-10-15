@@ -23,7 +23,7 @@ use hygiea::app::Registry;
 use hygiea::db::{
     PoolConfig, SqliteConnectConfig, SqlxSqliteComponent, SqlxSqliteConfig, SqlxSqlitePool,
 };
-use hygiea::http::{AxumComponent, AxumConfig, arity0_state};
+use hygiea::http::{AxumComponent, AxumComponentConfig, AxumConfig, arity0_state};
 use hygiea::{BaseErr, Result, ResultExt, err};
 
 // ---- 应用状态：handler 用到的资源 ----
@@ -76,17 +76,19 @@ async fn main() -> Result<()> {
         }),
         ..Default::default()
     };
-    let http = AxumConfig {
-        host: "127.0.0.1".to_string(),
-        port: 8081,
+    let http = AxumComponentConfig {
+        config: AxumConfig {
+            host: "127.0.0.1".to_string(),
+            port: 8081,
+            ..Default::default()
+        },
         // activate 时才调用：before_activate 已经把 AppState 放进 Resources 了
-        router: Some(Box::new(|resources| {
+        router: Box::new(|resources| {
             let state = resources.require::<Arc<AppState>>()?;
             Ok(Router::new()
                 .route("/users", get(arity0_state(list_users)))
                 .with_state(state))
-        })),
-        ..Default::default()
+        }),
     };
 
     let (result, _log_guard) = Registry::new()

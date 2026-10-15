@@ -63,7 +63,7 @@
 | `db-sqlx` / `db-seaorm` | `hygiea-db`（`sqlx` / `seaorm`） | 选框架，和下面的数据库组合出连接池组件；开 `db-sqlx` 或 `db-seaorm` 就有 `hygiea::db::HyUtcDateTime` |
 | `db-postgres` / `db-sqlite` / `db-mysql` | `hygiea-db`（`postgres` / `sqlite` / `mysql`） | 选数据库，对开了的框架都生效。MySQL 要 8.0 以上 |
 | `db-live-config` | `hygiea-db`（`live-config`） | 数据库配置表（动态配置）：组件的 `uses` 带 2 时按组件名提供 `hygiea::db::DbLiveConfig`（`bind` / `bind_all` 绑到 struct），改了表程序自动拿到新值。PG 靠 NOTIFY 推送，MySQL、SQLite 轮询；`[db.live_config]` 可以改表名前缀、轮询间隔，覆盖段换 schema / 用户 |
-| `db-lock` | `hygiea-db`（`lock`），带上 `lock` | 分布式锁：PG、MySQL 组件的 `uses` 带 4 时匿名提供 `hygiea::db::DbLock`（实现 `DistributedLock`，整个应用只能有一个）。PG 整数 key 用原生 advisory lock，字符串 key 要开 `db-lock-row`（不开返回 `LockErr::Unsupported`，想不建表的自己 `LockKeyI64::xxh3_64` 后走 i64）；MySQL 全部用 `GET_LOCK`、不建表，锁名最长 64 个字符；`[db.lock]` 可以给锁单独的池、覆盖连接参数 |
+| `db-lock` | `hygiea-db`（`lock`），带上 `lock` | 分布式锁：PG、MySQL 组件的 `uses` 带 4 时匿名提供 `hygiea::db::DbLockClient`（实现 `DistributedLock`，整个应用只能有一个）。PG 整数 key 用原生 advisory lock，字符串 key 要开 `db-lock-row`（不开返回 `LockErr::Unsupported`，想不建表的自己 `LockKeyI64::xxh3_64` 后走 i64）；MySQL 全部用 `GET_LOCK`、不建表，锁名最长 64 个字符；`[db.lock]` 可以给锁单独的池、覆盖连接参数 |
 | `db-lock-row` | `hygiea-db`（`lock-row`），带上 `db-lock` | PG 的字符串 key 用 `{前缀}lock` 表（前缀默认应用名加 `_`，`[db.lock] table_prefix` 可改）（UNLOGGED，插入不提交的行、靠主键冲突互斥），精确；开不开要所有实例一致，见设计说明。和 MySQL 无关 |
 | `redis-fred` | `hygiea-redis`（`fred`） | `hygiea::redis::RedisComponent` / `FredRedisPool` |
 | `http-axum` | `hygiea-http`（`axum`） | `hygiea::http::AxumComponent` |
@@ -104,7 +104,7 @@ host = "mysql-coord"
 ```rust
 let pool = resources.require_named::<SqlxPgPool>("main")?;
 let sync = resources.require_named::<DbLiveConfig>("main")?.bind("sync", Sync::default()).await?;
-let lock = resources.require::<DbLock>()?;   // 里面是哪种数据库调用方不用管
+let lock_client = resources.require::<DbLockClient>()?; // 里面是哪种数据库调用方不用管
 ```
 
 不经过 Registry（测试、脚本）用 `DbResources::from_config` 直接建。完整的规则见 `hygiea-db` 的 crate 文档
@@ -160,7 +160,7 @@ use axum::Router;
 use axum::routing::get;
 use hygiea::app::{ConfigArgs, IntoRegistryConfig, Registry, RegistryConfig};
 use hygiea::db::{SqlxSqliteComponent, SqlxSqliteConfig};
-use hygiea::http::{AxumComponent, AxumConfig};
+use hygiea::http::{AxumComponent, AxumComponentConfig, AxumConfig};
 use hygiea::Result;
 use serde::Deserialize;
 
@@ -181,12 +181,15 @@ impl IntoRegistryConfig for AppConfig {
 #[tokio::main]
 async fn main() -> Result<()> {
     // 读 config/<env>.toml（默认 dev），再叠加 -f 指定的文件、HYGIEA__ 环境变量、--set
-    let (registry, mut config) = Registry::load_config::<AppConfig>(&ConfigArgs::from_cli());
-    config.http.router = Some(Box::new(|_| Ok(Router::new().route("/hello", get(|| async { "hello\n" })))));
+    let (registry, config) = Registry::load_config::<AppConfig>(&ConfigArgs::from_cli());
+    let http = AxumComponentConfig {
+        config: config.http,
+        router: Box::new(|_| Ok(Router::new().route("/hello", get(|| async { "hello\n" })))),
+    };
 
     let (result, _log_guard) = registry
         .add::<SqlxSqliteComponent>(config.db)
-        .add::<AxumComponent>(config.http)
+        .add::<AxumComponent>(http)
         .run()
         .await;
     result
@@ -263,7 +266,7 @@ fn main() {
 
 ### 分布式锁
 
-`lock` feature 提供 trait 和 key，后端由组件实现（`db-lock`：PG、MySQL 连接池组件提供的 `hygiea::db::DbLock`）；只要进程内互斥的用 `lock-tokio` 的 `TokioLock`。锁不可重入，拿不到返回 `Ok(None)`。
+`lock` feature 提供 trait 和 key，后端由组件实现（`db-lock`：PG、MySQL 连接池组件提供的 `hygiea::db::DbLockClient`）；只要进程内互斥的用 `lock-tokio` 的 `TokioLock`。锁不可重入，拿不到返回 `Ok(None)`。
 key 有三种，锁类型和字符串 key 都要注册，编号的规则和错误码一样（项目前缀 3 位 + 模块前缀 + 编号，共 9 位，和错误码共用项目前缀），
 两个 derive 共用一套编号，同模块编译期、跨 crate 启动时查重：
 
@@ -547,7 +550,7 @@ pub enum LegacyErrors {
 | `app_background_task` | 后台任务、优雅关闭、超时强制结束、`stop` 收尾 |
 | `app_config` | 配置文件、`-f`、环境变量、`--set` 的合并，框架参数合进自己的命令行 |
 | `db_live_config` | 数据库配置表：SQLite 组件 `uses = 3` 提供的 `DbLiveConfig` 绑定到 struct、改表后程序自动拿到新值（SQLite 文件库） |
-| `db_lock` | PG 的分布式锁 `DbLock`：注册锁类型和字符串 key，`DbResources` 直接建两个实例抢同一把锁，不可重入、release / drop 释放、阻塞版等待和超时；字符串 key 用锁表（`db-lock-row`）和哈希成 i64 两种方式对比（Docker 起临时 postgres） |
+| `db_lock` | PG 的分布式锁 `DbLockClient`：注册锁类型和字符串 key，`DbResources` 直接建两个实例抢同一把锁，不可重入、release / drop 释放、阻塞版等待和超时；字符串 key 用锁表（`db-lock-row`）和哈希成 i64 两种方式对比（Docker 起临时 postgres） |
 | `lock_tokio` | 进程内的锁 `TokioLock`：业务代码只依赖 `DistributedLock`，多个任务抢同一个 key、阻塞版先到先得、整数 key 转成字符串 key |
 | `error_basic` | 错误 enum、`err!` 的写法、错误码 |
 | `string_template` | `fmt_tpl!`、`fmt_tpl_once!`、`fmt_pos!` |

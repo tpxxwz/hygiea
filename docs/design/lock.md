@@ -88,11 +88,11 @@ lock_key!(K::Two, { "shop": s, "day": d })   // 多个变量
   和 `HyErr::new` 一样只靠"不用 `__private`"的约定
 - 绕过 hygiea 直接操作库（手写 `pg_advisory_lock`、改锁表）
 
-## 3. hygiea-db 里的锁：`DbLock`
+## 3. hygiea-db 里的锁：`DbLockClient`
 
-PG、MySQL 的连接池组件（sqlx、SeaORM 各一个）配置的 `uses` 带 4 时，把 `DbLock` **匿名**放进 Resources，整个应用只能有一个：
-两个组件都开锁（哪种数据库都算）时 Registry 启动前报 `DuplicateProvider`。`DbLock` 实现 `DistributedLock`，里面是哪种数据库
-由建它的组件决定（`Pg(PgLock)` / `MySql(MySqlLock)`），调用方 `resources.require::<DbLock>()` 拿到就用，不用管。
+PG、MySQL 的连接池组件（sqlx、SeaORM 各一个）配置的 `uses` 带 4 时，把 `DbLockClient` **匿名**放进 Resources，整个应用只能有一个：
+两个组件都开锁（哪种数据库都算）时 Registry 启动前报 `DuplicateProvider`。`DbLockClient` 实现 `DistributedLock`，里面是哪种数据库
+由建它的组件决定（`Pg(PgLock)` / `MySql(MySqlLock)`），调用方 `resources.require::<DbLockClient>()` 拿到就用，不用管。
 实现每种数据库只有一份（`lock/sqlx/postgres.rs`、`lock/sqlx/mysql.rs`），sqlx、SeaORM 的组件共用（SeaORM 交出底层的 sqlx 池）。
 不经过 Registry 时用 `DbResources::from_config` 建。
 

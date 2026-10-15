@@ -27,7 +27,7 @@ pub async fn open_pool<C: DbConfig>(config: &C, app: &RegistryConfig) -> C::Pool
     open(config, app).await.pool.unwrap()
 }
 
-/// 锁的测试里的一个实例：`uses` 带 4 建出来的资源，方法直接是锁的（`Deref` 到 `DbLock`），查询用 [`pool`](Self::pool)
+/// 锁的测试里的一个实例：`uses` 带 4 建出来的资源，方法直接是锁的（`Deref` 到 `DbLockClient`），查询用 [`pool`](Self::pool)
 #[cfg(all(feature = "lock", any(feature = "postgres", feature = "mysql")))]
 #[derive(Clone)]
 pub struct LockInst<C: DbConfig>(pub DbResources<C>);
@@ -50,10 +50,10 @@ impl<C: DbConfig> LockInst<C> {
 
 #[cfg(all(feature = "lock", any(feature = "postgres", feature = "mysql")))]
 impl<C: DbConfig> std::ops::Deref for LockInst<C> {
-    type Target = hygiea_db::DbLock;
+    type Target = hygiea_db::DbLockClient;
 
     fn deref(&self) -> &Self::Target {
-        self.0.lock.as_ref().unwrap()
+        self.0.lock_client.as_ref().unwrap()
     }
 }
 

@@ -15,7 +15,9 @@ use hygiea_core::app::{
     CancellationToken, Component, DeferredComponent, Name, ReadyResources, Registry, ResourceSink,
     Resources,
 };
-use hygiea_grpc::{TonicComponent, TonicConfig, TonicServe, TonicServeFn, tonic_serve_fn};
+use hygiea_grpc::{
+    TonicComponent, TonicComponentConfig, TonicConfig, TonicServe, TonicServeFn, tonic_serve_fn,
+};
 
 /// 启动 registry，把 `Resources` 交给 `check`，拿回它的结果。
 /// 启动成功后 `run` 会一直等退出信号，所以放到后台任务里，拿到结果就 abort
@@ -71,11 +73,13 @@ impl FakeRouter {
     }
 }
 
-fn local_config(serve_fn: TonicServeFn) -> TonicConfig {
-    TonicConfig {
-        addr: "127.0.0.1:0".to_string(),
-        serve_fn: Some(serve_fn),
-        ..Default::default()
+fn local_config(serve_fn: TonicServeFn) -> TonicComponentConfig {
+    TonicComponentConfig {
+        config: TonicConfig {
+            addr: "127.0.0.1:0".to_string(),
+            ..Default::default()
+        },
+        serve_fn,
     }
 }
 

@@ -86,8 +86,6 @@ pub struct TonicConfig {
     pub addr: String,
     /// 关闭时最多等多久（秒）让手上的请求处理完，不写用 Registry 的默认值（15 秒）
     pub shutdown_timeout_secs: Option<u64>,
-    #[serde(skip)]
-    pub serve_fn: Option<TonicServeFn>,
 }
 
 impl Default for TonicConfig {
@@ -95,9 +93,14 @@ impl Default for TonicConfig {
         Self {
             addr: "0.0.0.0:50051".to_string(),
             shutdown_timeout_secs: None,
-            serve_fn: None,
         }
     }
+}
+
+/// [`TonicComponent`] 的配置：配置文件里的部分（[`TonicConfig`]）加上代码里给的 [`TonicServeFn`]
+pub struct TonicComponentConfig {
+    pub config: TonicConfig,
+    pub serve_fn: TonicServeFn,
 }
 
 // ---- component --------------------------------------------------------------
@@ -105,18 +108,21 @@ impl Default for TonicConfig {
 /// gRPC 服务组件，Deferred：`prepare` 校验配置、绑定端口，`activate` 才开始接请求
 pub struct TonicComponent {
     config: TonicConfig,
-    /// `prepare` 绑好的端口和取出的 serve_fn，`activate` 里建服务、交给后台任务
-    prepared: Option<(tokio::net::TcpListener, TonicServeFn)>,
+    /// `activate` 里调用一次后取走
+    serve_fn: Option<TonicServeFn>,
+    /// `prepare` 绑好的端口，`activate` 里交给后台任务
+    listener: Option<tokio::net::TcpListener>,
 }
 
 #[component]
 impl DeferredComponent for TonicComponent {
-    type Config = TonicConfig;
+    type Config = TonicComponentConfig;
 
     fn build(_name: Name, config: Self::Config) -> Self {
         Self {
-            config,
-            prepared: None,
+            config: config.config,
+            serve_fn: Some(config.serve_fn),
+            listener: None,
         }
     }
 
@@ -127,12 +133,6 @@ impl DeferredComponent for TonicComponent {
     }
 
     async fn prepare(&mut self, _sink: &ResourceSink) -> Result<()> {
-        let serve_fn = self
-            .config
-            .serve_fn
-            .take()
-            .ok_or_else(|| err!(AppErr::ConfigMissing, "TonicConfig.serve_fn"))?;
-
         let addr = self
             .config
             .addr
@@ -149,7 +149,7 @@ impl DeferredComponent for TonicComponent {
             .wrap_err(|| err!(AppErr::BindFailed, &self.config.addr))?;
 
         tracing::info!("gRPC server listener bound to {}", self.config.addr);
-        self.prepared = Some((listener, serve_fn));
+        self.listener = Some(listener);
         Ok(())
     }
 
@@ -158,12 +158,12 @@ impl DeferredComponent for TonicComponent {
         resources: ReadyResources,
         shutdown: CancellationToken,
     ) -> Result<Option<tokio::task::JoinHandle<()>>> {
-        let (listener, serve_fn) = self.prepared.take().ok_or_else(|| {
-            err!(
+        let (Some(listener), Some(serve_fn)) = (self.listener.take(), self.serve_fn.take()) else {
+            return Err(err!(
                 AppErr::ComponentError,
                 "TonicComponent activated before prepare"
-            )
-        })?;
+            ));
+        };
         let serve = serve_fn(&resources)?;
 
         let addr_str = self.config.addr.clone();
@@ -209,9 +209,9 @@ mod tests {
     /// 不往 Resources 里放东西，也不依赖别的资源
     #[test]
     fn provides_and_depends_on_nothing() {
-        let config = TonicConfig {
-            serve_fn: Some(noop_serve_fn()),
-            ..Default::default()
+        let config = TonicComponentConfig {
+            config: TonicConfig::default(),
+            serve_fn: noop_serve_fn(),
         };
         let component = TonicComponent::build(hygiea_core::app::Name::from(""), config);
         assert!(component.provides().is_empty());
@@ -271,9 +271,12 @@ mod tests {
     fn shutdown_timeout_converts_secs_to_duration() {
         let component = TonicComponent::build(
             Name::from(""),
-            TonicConfig {
-                shutdown_timeout_secs: Some(7),
-                ..Default::default()
+            TonicComponentConfig {
+                config: TonicConfig {
+                    shutdown_timeout_secs: Some(7),
+                    ..Default::default()
+                },
+                serve_fn: noop_serve_fn(),
             },
         );
         assert_eq!(component.shutdown_timeout(), Some(Duration::from_secs(7)));
@@ -281,26 +284,14 @@ mod tests {
 
     #[test]
     fn shutdown_timeout_none_when_not_set() {
-        let component = TonicComponent::build(Name::from(""), TonicConfig::default());
-        assert_eq!(component.shutdown_timeout(), None);
-    }
-
-    #[tokio::test]
-    async fn missing_serve_fn_reports_config_missing() {
-        let resources = real_resources().await;
-        let mut component = TonicComponent::build(
+        let component = TonicComponent::build(
             Name::from(""),
-            TonicConfig {
-                addr: "127.0.0.1:0".to_string(),
-                serve_fn: None,
-                ..Default::default()
+            TonicComponentConfig {
+                config: TonicConfig::default(),
+                serve_fn: noop_serve_fn(),
             },
         );
-        let err = component
-            .prepare(&ResourceSink::new(&resources))
-            .await
-            .expect_err("缺 serve_fn 应该启动失败");
-        assert!(err.is(AppErr::ConfigMissing));
+        assert_eq!(component.shutdown_timeout(), None);
     }
 
     #[tokio::test]
@@ -308,10 +299,12 @@ mod tests {
         let resources = real_resources().await;
         let mut component = TonicComponent::build(
             Name::from(""),
-            TonicConfig {
-                addr: "not-an-address".to_string(),
-                serve_fn: Some(noop_serve_fn()),
-                ..Default::default()
+            TonicComponentConfig {
+                config: TonicConfig {
+                    addr: "not-an-address".to_string(),
+                    ..Default::default()
+                },
+                serve_fn: noop_serve_fn(),
             },
         );
         let err = component
@@ -332,10 +325,12 @@ mod tests {
 
         let mut component = TonicComponent::build(
             Name::from(""),
-            TonicConfig {
-                addr: addr.to_string(),
-                serve_fn: Some(noop_serve_fn()),
-                ..Default::default()
+            TonicComponentConfig {
+                config: TonicConfig {
+                    addr: addr.to_string(),
+                    ..Default::default()
+                },
+                serve_fn: noop_serve_fn(),
             },
         );
         let err = component

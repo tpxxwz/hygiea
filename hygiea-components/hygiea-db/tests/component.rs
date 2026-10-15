@@ -43,7 +43,7 @@ mod registry {
     use hygiea_core::lock::{DistributedLock, LockErr, hy_lock_key, hy_lock_type, lock_key};
     use hygiea_core::{ResultExt, err};
     use hygiea_db::{
-        DbLiveConfig, DbLock, DbUses, RepoErr, SeaOrmMySqlComponent, SeaOrmMySqlConfig,
+        DbLiveConfig, DbLockClient, DbUses, RepoErr, SeaOrmMySqlComponent, SeaOrmMySqlConfig,
         SeaOrmMySqlPool, SeaOrmPgComponent, SeaOrmPgConfig, SeaOrmPgPool, SeaOrmSqliteComponent,
         SeaOrmSqliteConfig, SeaOrmSqlitePool, SqlxMySqlComponent, SqlxMySqlConfig, SqlxMySqlPool,
         SqlxPgComponent, SqlxPgConfig, SqlxPgPool, SqlxSqliteComponent, SqlxSqliteConfig,
@@ -425,7 +425,7 @@ database = "{local}"
                 "{name} 没有动态配置"
             );
         }
-        assert!(res.contains::<DbLock>());
+        assert!(res.contains::<DbLockClient>());
 
         // 业务池：各连各的库、各用各的用户
         assert_eq!(
@@ -883,8 +883,8 @@ database = "{local}"
     async fn lock_between_two_instances() {
         let env = Env::new().await;
         let second = env.instance().await;
-        let a = env.res().get::<DbLock>().unwrap();
-        let b = second.res.get::<DbLock>().unwrap();
+        let a = env.res().get::<DbLockClient>().unwrap();
+        let b = second.res.get::<DbLockClient>().unwrap();
         let root = env.mysql_root().await;
         let key = || lock_key!(TestLockKey::Job, 1);
 

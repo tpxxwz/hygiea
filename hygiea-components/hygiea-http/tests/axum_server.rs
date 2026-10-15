@@ -1,4 +1,4 @@
-//! `AxumComponent`（`src/axum_server.rs`）的集成测试：经 Registry 启动后能接请求、缺 router 时启动失败、
+//! `AxumComponent`（`src/axum_server.rs`）的集成测试：经 Registry 启动后能接请求、
 //! router 函数取 `before_activate` 放进去的 state（及取不到时启动失败），
 //! 以及绕开 Registry 手动驱动的完整生命周期（绑端口、真实请求、取消后优雅结束）
 //!
@@ -6,7 +6,6 @@
 
 #![cfg(feature = "axum")]
 
-use std::error::Error as _;
 use std::time::Duration;
 
 use axum::Router;
@@ -16,7 +15,7 @@ use hygiea_core::app::{
     AppErr, CancellationToken, Component, DeferredComponent, Name, ReadyResources, Registry,
     ResourceSink, Resources,
 };
-use hygiea_http::{AxumComponent, AxumConfig, arity0_state, arity1_state};
+use hygiea_http::{AxumComponent, AxumComponentConfig, AxumConfig, arity0_state, arity1_state};
 
 /// 先绑一个空闲端口拿到地址，再释放，交给 `AxumComponent` 自己 bind
 async fn free_addr() -> std::net::SocketAddr {
@@ -26,15 +25,20 @@ async fn free_addr() -> std::net::SocketAddr {
     probe.local_addr().expect("读取探测端口地址")
 }
 
-/// 监听 `addr`，带一个 `GET /ping` 返回 "pong" 的 router
-fn ping_config(addr: std::net::SocketAddr) -> AxumConfig {
+/// 监听 `addr`
+fn local_config(addr: std::net::SocketAddr) -> AxumConfig {
     AxumConfig {
         host: addr.ip().to_string(),
         port: addr.port(),
-        router: Some(Box::new(|_| {
-            Ok(Router::new().route("/ping", get(|| async { "pong" })))
-        })),
         ..Default::default()
+    }
+}
+
+/// 监听 `addr`，带一个 `GET /ping` 返回 "pong" 的 router
+fn ping_config(addr: std::net::SocketAddr) -> AxumComponentConfig {
+    AxumComponentConfig {
+        config: local_config(addr),
+        router: Box::new(|_| Ok(Router::new().route("/ping", get(|| async { "pong" })))),
     }
 }
 
@@ -82,25 +86,6 @@ async fn serves_request_after_registry_startup() {
     task.abort();
 }
 
-/// 没配 router：`prepare` 报错，Registry 启动失败
-#[tokio::test]
-async fn missing_router_fails_startup() {
-    let addr = free_addr().await;
-    let config = AxumConfig {
-        router: None,
-        ..ping_config(addr)
-    };
-    let (result, _guard) = Registry::new().add::<AxumComponent>(config).run().await;
-    // Registry 把组件的错误包成 ComponentStartFailed，组件自己报的 ConfigMissing 挂在 source 上
-    let err = result.unwrap_err();
-    assert!(err.is(AppErr::ComponentStartFailed), "{err:#}");
-    let source = err
-        .source()
-        .and_then(|e| e.downcast_ref::<HyErr>())
-        .unwrap();
-    assert!(source.is(AppErr::ConfigMissing), "{err:#}");
-}
-
 /// router 函数在 activate 时调用：能取到 `before_activate` 放进去的 state，交给 `with_state`，
 /// handler 用 `arity0_state` / `arity1_state` 拿到它
 #[tokio::test]
@@ -117,15 +102,15 @@ async fn router_fn_reads_state_put_in_before_activate() {
     }
 
     let addr = free_addr().await;
-    let config = AxumConfig {
-        router: Some(Box::new(|resources| {
+    let config = AxumComponentConfig {
+        config: local_config(addr),
+        router: Box::new(|resources| {
             let state = resources.require::<Greeting>()?;
             Ok(Router::new()
                 .route("/hello", get(arity0_state(hello)))
                 .route("/echo", post(arity1_state(echo)))
                 .with_state(state))
-        })),
-        ..ping_config(addr)
+        }),
     };
     let registry = Registry::new()
         .add::<AxumComponent>(config)
@@ -172,12 +157,12 @@ async fn router_fn_error_fails_startup() {
     struct Missing;
 
     let addr = free_addr().await;
-    let config = AxumConfig {
-        router: Some(Box::new(|resources| {
+    let config = AxumComponentConfig {
+        config: local_config(addr),
+        router: Box::new(|resources| {
             let _ = resources.require::<Missing>()?;
             Ok(Router::new())
-        })),
-        ..ping_config(addr)
+        }),
     };
     let (result, _guard) = Registry::new().add::<AxumComponent>(config).run().await;
     let err = result.unwrap_err();

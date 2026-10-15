@@ -14,7 +14,7 @@ use hygiea_core::{Result, err};
 #[cfg(live_config_any)]
 use crate::live_config::DbLiveConfig;
 #[cfg(lock_any)]
-use crate::lock::DbLock;
+use crate::lock::DbLockClient;
 
 // ---- uses -------------------------------------------------------------------
 
@@ -24,7 +24,7 @@ use crate::lock::DbLock;
 /// |---|---|
 /// | 1 pool | 连接池（比如 `SqlxPgPool`），按组件名 |
 /// | 2 live_config | `DbLiveConfig`，按组件名。几个组件都开就是几个源，各管各的 namespace |
-/// | 4 lock | `DbLock`，匿名：整个应用只能有一个组件开，两个都开时启动报 `DuplicateProvider` |
+/// | 4 lock | `DbLockClient`，匿名：整个应用只能有一个组件开，两个都开时启动报 `DuplicateProvider` |
 ///
 /// - 0、大于 7、没编译进来的功能（没开 feature `live-config` 却带了 2，没开 `lock` 却带了 4）解析配置时报错；
 ///   SQLite 带了 4（没有锁）启动时报错
@@ -132,11 +132,11 @@ pub trait DbConfig: Clone + Send + Sync + 'static {
     /// 建锁，`uses` 带 4 时调。`pool` 是业务池（`uses` 带 1 时有），锁的段没写覆盖时和它共用连接。
     /// 没有锁的数据库不实现，检查配置时已经拦下了
     #[cfg(lock_any)]
-    async fn lock(
+    async fn lock_client(
         &self,
         pool: Option<&Self::Pool>,
         registry_config: &RegistryConfig,
-    ) -> Result<DbLock> {
+    ) -> Result<DbLockClient> {
         let _ = (pool, registry_config);
         Err(err!(AppErr::InvalidConfig, "this database has no lock"))
     }
@@ -194,7 +194,7 @@ pub struct DbResources<C: DbConfig> {
     pub live_config: Option<DbLiveConfig>,
     /// 锁，`uses` 带 4
     #[cfg(lock_any)]
-    pub lock: Option<DbLock>,
+    pub lock_client: Option<DbLockClient>,
 }
 
 impl<C: DbConfig> Clone for DbResources<C> {
@@ -204,7 +204,7 @@ impl<C: DbConfig> Clone for DbResources<C> {
             #[cfg(live_config_any)]
             live_config: self.live_config.clone(),
             #[cfg(lock_any)]
-            lock: self.lock.clone(),
+            lock_client: self.lock_client.clone(),
         }
     }
 }
@@ -217,7 +217,7 @@ impl<C: DbConfig> std::fmt::Debug for DbResources<C> {
         #[cfg(live_config_any)]
         s.field("live_config", &self.live_config.is_some());
         #[cfg(lock_any)]
-        s.field("lock", &self.lock.is_some());
+        s.field("lock_client", &self.lock_client.is_some());
         s.finish()
     }
 }
@@ -231,7 +231,7 @@ impl<C: DbConfig> DbResources<C> {
             #[cfg(live_config_any)]
             live_config: None,
             #[cfg(lock_any)]
-            lock: None,
+            lock_client: None,
         };
         if let Err(e) = resources.open(config, registry_config).await {
             if let Err(close) = resources.close().await {
@@ -253,7 +253,11 @@ impl<C: DbConfig> DbResources<C> {
         }
         #[cfg(lock_any)]
         if uses.lock() {
-            self.lock = Some(config.lock(self.pool.as_ref(), registry_config).await?);
+            self.lock_client = Some(
+                config
+                    .lock_client(self.pool.as_ref(), registry_config)
+                    .await?,
+            );
         }
         Ok(())
     }
@@ -265,8 +269,8 @@ impl<C: DbConfig> DbResources<C> {
             live_config.close().await;
         }
         #[cfg(lock_any)]
-        if let Some(lock) = &self.lock {
-            lock.close().await;
+        if let Some(lock_client) = &self.lock_client {
+            lock_client.close().await;
         }
         if let Some(pool) = &self.pool {
             C::close(pool).await?;
@@ -277,7 +281,7 @@ impl<C: DbConfig> DbResources<C> {
 
 // ---- 组件 ---------------------------------------------------------------------
 
-/// 连接池组件：按配置的 `uses`（见 [`DbUses`]）把业务池、`DbLiveConfig` 按组件名，`DbLock` 匿名放进 Resources；
+/// 连接池组件：按配置的 `uses`（见 [`DbUses`]）把业务池、`DbLiveConfig` 按组件名，`DbLockClient` 匿名放进 Resources；
 /// 停止时按 [`DbResources::close`] 的顺序关掉。各连接池的组件是它的别名，比如
 /// `pub type SqlxPgComponent = DbComponent<SqlxPgConfig>;`
 ///
@@ -286,7 +290,7 @@ impl<C: DbConfig> DbResources<C> {
 /// ```ignore
 /// let pool = resources.require_named::<SqlxPgPool>("main")?;
 /// let sync = resources.require_named::<DbLiveConfig>("main")?.bind("markji_sync", MarkjiSync::default()).await?;
-/// let lock = resources.require::<DbLock>()?;
+/// let lock_client = resources.require::<DbLockClient>()?;
 /// ```
 pub struct DbComponent<C: DbConfig> {
     name: Name,
@@ -319,7 +323,7 @@ impl<C: DbConfig> ImmediateComponent for DbComponent<C> {
         }
         #[cfg(lock_any)]
         if uses.lock() {
-            provides.push(ResourceId::of::<DbLock>());
+            provides.push(ResourceId::of::<DbLockClient>());
         }
         provides
     }
@@ -338,8 +342,8 @@ impl<C: DbConfig> ImmediateComponent for DbComponent<C> {
             resources.insert_named(self.name.clone(), live_config.clone());
         }
         #[cfg(lock_any)]
-        if let Some(lock) = &built.lock {
-            resources.insert(lock.clone());
+        if let Some(lock_client) = &built.lock_client {
+            resources.insert(lock_client.clone());
         }
         self.resources = Some(built);
         Ok(None)
@@ -380,7 +384,7 @@ pub(crate) fn check_provides<C: DbConfig>(default: C, with_uses: impl Fn(DbUses)
     #[cfg(lock_any)]
     if C::LOCK {
         bits |= DbUses::LOCK;
-        expected.push(ResourceId::of::<DbLock>());
+        expected.push(ResourceId::of::<DbLockClient>());
     }
     let full = DbComponent::<C>::build(
         Name::from("primary"),

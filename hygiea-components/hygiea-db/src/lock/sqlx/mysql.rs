@@ -16,7 +16,7 @@ use crate::sql::mysql::lock::{
     ACQUIRE, ACQUIRED, RELEASE, RESTORE, i64_name, key_name, pair_name, timeout_secs,
 };
 
-/// MySQL 的锁，[`DbLock`](super::super::DbLock) 里放的就是它
+/// MySQL 的锁，[`DbLockClient`](super::super::DbLockClient) 里放的就是它
 #[derive(Clone, Debug)]
 pub(crate) struct MySqlLock {
     /// 业务池的 sqlx 池，或者单独建的池

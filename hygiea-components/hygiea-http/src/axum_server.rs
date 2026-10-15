@@ -31,16 +31,19 @@ pub struct HttpLimits {
 /// 可以从 [`ReadyResources`] 取出连接池、业务 state，交给 `Router::with_state`：
 ///
 /// ```ignore
-/// config.http.router = Some(Box::new(|resources| {
-///     let state = resources.require::<Arc<AppState>>()?;
-///     Ok(Router::new().route("/users", get(list_users)).with_state(state))
-/// }));
+/// let http = AxumComponentConfig {
+///     config: config.http,
+///     router: Box::new(|resources| {
+///         let state = resources.require::<Arc<AppState>>()?;
+///         Ok(Router::new().route("/users", get(list_users)).with_state(state))
+///     }),
+/// };
 /// ```
 ///
-/// 不需要资源的写 `Some(Box::new(|_| Ok(router)))`。返回 `Err` 时组件启动失败
+/// 不需要资源的写 `Box::new(|_| Ok(router))`。返回 `Err` 时组件启动失败
 pub type AxumRouterFn = Box<dyn FnOnce(&ReadyResources) -> Result<axum::Router> + Send + 'static>;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 #[serde(default, deny_unknown_fields)]
 pub struct AxumConfig {
     pub host: String,
@@ -51,23 +54,6 @@ pub struct AxumConfig {
     /// 关闭时最多等多久（秒）让手上的请求处理完，不写用 Registry 的默认值（15 秒）。
     /// 有长请求（大文件上传、长轮询）就配长一点
     pub shutdown_timeout_secs: Option<u64>,
-    #[serde(skip)]
-    pub router: Option<AxumRouterFn>,
-}
-
-/// router 是函数，只显示有没有配
-impl std::fmt::Debug for AxumConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AxumConfig")
-            .field("host", &self.host)
-            .field("port", &self.port)
-            .field("base_path", &self.base_path)
-            .field("timeout", &self.timeout)
-            .field("limits", &self.limits)
-            .field("shutdown_timeout_secs", &self.shutdown_timeout_secs)
-            .field("router", &self.router.as_ref().map(|_| ".."))
-            .finish()
-    }
 }
 
 impl Default for AxumConfig {
@@ -79,7 +65,6 @@ impl Default for AxumConfig {
             timeout: None,
             limits: None,
             shutdown_timeout_secs: None,
-            router: None,
         }
     }
 }
@@ -90,23 +75,32 @@ impl AxumConfig {
     }
 }
 
+/// [`AxumComponent`] 的配置：配置文件里的部分（[`AxumConfig`]）加上代码里给的 [`AxumRouterFn`]
+pub struct AxumComponentConfig {
+    pub config: AxumConfig,
+    pub router: AxumRouterFn,
+}
+
 // ---- component --------------------------------------------------------------
 
-/// HTTP 服务组件，Deferred：`prepare` 检查配置、绑定端口，`activate` 才开始接请求
+/// HTTP 服务组件，Deferred：`prepare` 绑定端口，`activate` 才开始接请求
 pub struct AxumComponent {
     config: AxumConfig,
-    /// `prepare` 绑好的端口和取出的 router 函数，`activate` 里建 router、交给后台任务
-    prepared: Option<(tokio::net::TcpListener, AxumRouterFn)>,
+    /// `activate` 里调用一次后取走
+    router: Option<AxumRouterFn>,
+    /// `prepare` 绑好的端口，`activate` 里交给后台任务
+    listener: Option<tokio::net::TcpListener>,
 }
 
 #[component]
 impl DeferredComponent for AxumComponent {
-    type Config = AxumConfig;
+    type Config = AxumComponentConfig;
 
     fn build(_name: Name, config: Self::Config) -> Self {
         Self {
-            config,
-            prepared: None,
+            config: config.config,
+            router: Some(config.router),
+            listener: None,
         }
     }
 
@@ -116,18 +110,12 @@ impl DeferredComponent for AxumComponent {
 
     async fn prepare(&mut self, _sink: &ResourceSink) -> Result<()> {
         let addr = self.config.addr();
-        let router = self
-            .config
-            .router
-            .take()
-            .ok_or_else(|| err!(AppErr::ConfigMissing, "AxumConfig.router"))?;
-
         let listener = tokio::net::TcpListener::bind(&addr)
             .await
             .wrap_err(|| err!(AppErr::BindFailed, &addr))?;
 
         tracing::info!("HTTP server listener bound to {}", addr);
-        self.prepared = Some((listener, router));
+        self.listener = Some(listener);
         Ok(())
     }
 
@@ -136,12 +124,12 @@ impl DeferredComponent for AxumComponent {
         resources: ReadyResources,
         shutdown: CancellationToken,
     ) -> Result<Option<tokio::task::JoinHandle<()>>> {
-        let (listener, router_fn) = self.prepared.take().ok_or_else(|| {
-            err!(
+        let (Some(listener), Some(router_fn)) = (self.listener.take(), self.router.take()) else {
+            return Err(err!(
                 AppErr::ComponentError,
                 "AxumComponent activated before prepare"
-            )
-        })?;
+            ));
+        };
         let router = build_router(router_fn(&resources)?, &self.config);
         let addr = self.config.addr();
 
@@ -407,7 +395,13 @@ mod tests {
     fn declares_no_resources() {
         use hygiea_core::app::{Component, Name};
 
-        let component = AxumComponent::build(Name::from(""), AxumConfig::default());
+        let component = AxumComponent::build(
+            Name::from(""),
+            AxumComponentConfig {
+                config: AxumConfig::default(),
+                router: Box::new(|_| Ok(axum::Router::new())),
+            },
+        );
         assert!(component.provides().is_empty());
         assert!(component.depends_on().is_empty());
     }
@@ -499,7 +493,6 @@ mod tests {
         assert!(config.timeout.is_none());
         assert!(config.limits.is_none());
         assert!(config.shutdown_timeout_secs.is_none());
-        assert!(config.router.is_none());
     }
 
     #[test]

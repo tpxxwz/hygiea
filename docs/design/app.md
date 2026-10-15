@@ -230,7 +230,7 @@ pub type RedisComponent = ImmediateResourceComponent<FredRedisPool>;
 不经过 Registry：`FredRedisPool::from_config(&config, &RegistryConfig::default())`，应用名是默认的 `hygiea`，和经过 Registry 不配时一样。
 
 一个配置建多个资源、要跑后台任务、Deferred 组件，照常手写组件。数据库组件就是一个配置按 `uses` 建多个资源（业务池、
-`DbLiveConfig`、`DbLock`）：6 种连接池共用一个手写的泛型组件 `DbComponent<C>`，不经过 Registry 用 `DbResources::from_config`
+`DbLiveConfig`、`DbLockClient`）：6 种连接池共用一个手写的泛型组件 `DbComponent<C>`，不经过 Registry 用 `DbResources::from_config`
 一次建出全部，规则一样（参数是配置和 `RegistryConfig`）。
 
 ---

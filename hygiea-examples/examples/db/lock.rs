@@ -1,4 +1,4 @@
-//! 分布式锁：PG 连接池组件 `uses` 带 4 时放进 Resources 的 `DbLock` 实现 `DistributedLock`。这里不经过 Registry，
+//! 分布式锁：PG 连接池组件 `uses` 带 4 时放进 Resources 的 `DbLockClient` 实现 `DistributedLock`。这里不经过 Registry，
 //! 用 `DbResources::from_config` 直接建两份（`uses = 5`：业务池 + 锁，锁和业务池共用连接），模拟两个实例抢同一把锁。
 //!
 //! 1. 注册锁类型（`#[derive(hy_lock_type)]`）和字符串 key 的模板（`#[derive(hy_lock_key)]`），
@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use hygiea::Result;
 use hygiea::app::RegistryConfig;
-use hygiea::db::{DbLock, DbResources, DbUses, PgConnectConfig, SqlxPgConfig, SqlxPgPool};
+use hygiea::db::{DbLockClient, DbResources, DbUses, PgConnectConfig, SqlxPgConfig, SqlxPgPool};
 use hygiea::lock::{DistributedLock, LockKeyI64, hy_lock_key, hy_lock_type, lock_key};
 use hygiea_test::container::{ContainerSpec, RunningContainer};
 
@@ -162,7 +162,7 @@ a 拿锁（哈希成 i64）：{:?}",
 }
 
 /// 一个实例的业务池和锁。应用名 example：锁表是 example_lock
-async fn instance(server: &RunningContainer) -> Result<(SqlxPgPool, DbLock)> {
+async fn instance(server: &RunningContainer) -> Result<(SqlxPgPool, DbLockClient)> {
     let config = SqlxPgConfig {
         uses: DbUses::try_from(DbUses::POOL | DbUses::LOCK)?,
         connect: PgConnectConfig {
@@ -178,8 +178,8 @@ async fn instance(server: &RunningContainer) -> Result<(SqlxPgPool, DbLock)> {
         ..Default::default()
     };
     let db = DbResources::from_config(&config, &registry_config).await?;
-    match (db.pool, db.lock) {
-        (Some(pool), Some(lock)) => Ok((pool, lock)),
+    match (db.pool, db.lock_client) {
+        (Some(pool), Some(lock_client)) => Ok((pool, lock_client)),
         // uses 带了 1、4，from_config 成功时两样都有
         _ => Err(hygiea::err!(hygiea::BaseErr::SysErr)),
     }

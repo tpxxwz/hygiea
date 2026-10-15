@@ -38,7 +38,7 @@ use hygiea::db::{
     DbLiveConfig, DbUses, LiveConfig, SqliteConnectConfig, SqlxSqliteComponent, SqlxSqliteConfig,
     SqlxSqlitePool,
 };
-use hygiea::http::{AxumComponent, AxumConfig, arity0_state, arity1_state};
+use hygiea::http::{AxumComponent, AxumComponentConfig, AxumConfig, arity0_state, arity1_state};
 use hygiea::redact::redact;
 use hygiea::{BaseErr, Result, ResultExt, err};
 use serde::{Deserialize, Serialize};
@@ -128,17 +128,19 @@ async fn main() -> Result<()> {
         uses: DbUses::try_from(DbUses::POOL | DbUses::LIVE_CONFIG)?,
         ..Default::default()
     };
-    let http = AxumConfig {
-        host: "127.0.0.1".to_string(),
-        port: 8082,
-        router: Some(Box::new(|resources| {
+    let http = AxumComponentConfig {
+        config: AxumConfig {
+            host: "127.0.0.1".to_string(),
+            port: 8082,
+            ..Default::default()
+        },
+        router: Box::new(|resources| {
             let state = resources.require::<Arc<AppState>>()?;
             Ok(Router::new()
                 .route("/greeting", get(arity0_state(greeting)))
                 .route("/admin/config", post(arity1_state(set_config)))
                 .with_state(state))
-        })),
-        ..Default::default()
+        }),
     };
 
     let (result, _log_guard) = Registry::new()

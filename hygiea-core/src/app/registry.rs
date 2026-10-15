@@ -121,7 +121,7 @@ impl Registry {
     /// ```ignore
     /// registry
     ///     .add::<SqlxPgComponent>(cfg.db)
-    ///     .add::<AxumComponent>(cfg.http)
+    ///     .add::<AxumComponent>(http)
     ///     .before_activate(|res| async move { AppState::setup(&res).await })
     ///     .run()
     ///     .await

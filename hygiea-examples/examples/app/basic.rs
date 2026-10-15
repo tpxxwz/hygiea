@@ -12,7 +12,7 @@ use axum::routing::get;
 use hygiea::Result;
 use hygiea::app::{ConfigArgs, IntoRegistryConfig, Registry, RegistryConfig};
 use hygiea::db::{SqlxSqliteComponent, SqlxSqliteConfig};
-use hygiea::http::{AxumComponent, AxumConfig};
+use hygiea::http::{AxumComponent, AxumComponentConfig, AxumConfig};
 use serde::Deserialize;
 
 /// 对应 config/app_basic/dev.toml：框架的配置在 [registry] 段，每个组件的配置各占一段
@@ -35,14 +35,15 @@ async fn main() -> Result<()> {
     // 配置目录用绝对路径，从哪里 cargo run 都能找到
     let args = ConfigArgs::from_cli()
         .default_config_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/config/app_basic"));
-    let (registry, mut config) = Registry::load_config::<AppConfig>(&args);
-    config.http.router = Some(Box::new(|_| {
-        Ok(Router::new().route("/hello", get(|| async { "hello\n" })))
-    }));
+    let (registry, config) = Registry::load_config::<AppConfig>(&args);
+    let http = AxumComponentConfig {
+        config: config.http,
+        router: Box::new(|_| Ok(Router::new().route("/hello", get(|| async { "hello\n" })))),
+    };
 
     let (result, _log_guard) = registry
         .add::<SqlxSqliteComponent>(config.db)
-        .add::<AxumComponent>(config.http)
+        .add::<AxumComponent>(http)
         .run()
         .await;
     result

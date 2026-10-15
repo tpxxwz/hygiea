@@ -12,7 +12,7 @@ use crate::config::{PG_POOL_SIZE, PgConnectConfig, PoolConfig};
 #[cfg(feature = "live-config")]
 use crate::live_config::{DbLiveConfig, PgLiveConfigConfig, Store};
 #[cfg(feature = "lock")]
-use crate::lock::{DbLock, PgLock, PgLockConfig};
+use crate::lock::{DbLockClient, PgLock, PgLockConfig};
 
 // ---- config -----------------------------------------------------------------
 
@@ -112,11 +112,11 @@ impl DbConfig for SeaOrmPgConfig {
     /// 和业务池共用时用 SeaORM 底下的 sqlx 池：`Database::connect` 按 postgres:// 建的，一定是 PG 连接池，
     /// `get_postgres_connection_pool` 不会 panic
     #[cfg(feature = "lock")]
-    async fn lock(
+    async fn lock_client(
         &self,
         pool: Option<&SeaOrmPgPool>,
         registry_config: &RegistryConfig,
-    ) -> Result<DbLock> {
+    ) -> Result<DbLockClient> {
         let lock = PgLock::new(
             pool.map(|p| p.inner.get_postgres_connection_pool()),
             &self.connect,
@@ -125,7 +125,7 @@ impl DbConfig for SeaOrmPgConfig {
             registry_config,
         )
         .await?;
-        Ok(DbLock::postgres(lock))
+        Ok(DbLockClient::postgres(lock))
     }
 }
 
@@ -147,7 +147,7 @@ impl std::ops::Deref for SeaOrmPgPool {
 
 // ---- component --------------------------------------------------------------
 
-/// PostgreSQL 连接组件（SeaORM），按 `uses` 放进 Resources 的是 [`SeaOrmPgPool`]、`DbLiveConfig`、`DbLock`，见 [`DbComponent`]
+/// PostgreSQL 连接组件（SeaORM），按 `uses` 放进 Resources 的是 [`SeaOrmPgPool`]、`DbLiveConfig`、`DbLockClient`，见 [`DbComponent`]
 pub type SeaOrmPgComponent = DbComponent<SeaOrmPgConfig>;
 
 #[cfg(test)]

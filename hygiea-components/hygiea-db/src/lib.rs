@@ -23,7 +23,7 @@
 //!
 //! 开了 `live-config`、`uses` 带 2 时组件按组件名放一个 `DbLiveConfig`：数据库配置表，改了表程序自动拿到新值，
 //! 配置在 `[db.live_config]`，见 [`live_config`] 模块文档。开了 `lock`、`uses` 带 4 时（PG、MySQL）组件匿名放一个
-//! `DbLock`，整个应用只能有一个，配置在 `[db.lock]`，见 [`lock`] 模块文档。
+//! `DbLockClient`，整个应用只能有一个，配置在 `[db.lock]`，见 [`lock`] 模块文档。
 //!
 //! 和框架无关、开 `sqlx` 或 `seaorm` 就有的：
 //! - UTC 时间列类型 [`HyUtcDateTime`]，两个框架同时开也是同一个类型
@@ -83,7 +83,7 @@
 //!
 //! ## 组件和 Resources
 //!
-//! 业务池、`DbLiveConfig` 按组件名放进 Resources，`DbLock` 匿名放。同一个组件可以用不同名字注册多次（主库、从库、
+//! 业务池、`DbLiveConfig` 按组件名放进 Resources，`DbLockClient` 匿名放。同一个组件可以用不同名字注册多次（主库、从库、
 //! 只给锁用的协调库、只给动态配置用的公共配置库），推荐都放在应用配置的 `[db.<名字>]` 下，注册时名字和字段名写成一样：
 //!
 //! ```ignore
@@ -96,7 +96,7 @@
 //!
 //! let pool = resources.require_named::<SeaOrmPgPool>("main")?;
 //! let sync = resources.require_named::<DbLiveConfig>("main")?.bind("markji_sync", MarkjiSync::default()).await?;
-//! let lock = resources.require::<DbLock>()?;                      // 里面是哪种数据库调用方不用管
+//! let lock_client = resources.require::<DbLockClient>()?;               // 里面是哪种数据库调用方不用管
 //! ```
 //!
 //! 依赖它的组件声明 `ResourceId::named::<SqlxPgPool>("primary")`，Registry 会把连接池排在前面启动。
@@ -162,7 +162,7 @@ pub use live_config::SqliteLiveConfigConfig;
 #[cfg(live_config_any)]
 pub use live_config::{DbLiveConfig, LiveConfig, LiveConfigConfig, LiveRef, LiveView};
 #[cfg(lock_any)]
-pub use lock::DbLock;
+pub use lock::DbLockClient;
 #[cfg(lock_mysql)]
 pub use lock::MySqlLockConfig;
 #[cfg(lock_pg)]
