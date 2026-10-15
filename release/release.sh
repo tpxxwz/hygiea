@@ -82,7 +82,7 @@ publish_remaining() {
         excludes=()
         while read -r arg; do excludes+=("$arg"); done < <(already_published_excludes "$v")
         echo "release: publishing $v, already on crates.io: $((${#excludes[@]} / 2)) crate(s)"
-        if cargo publish --workspace "${excludes[@]}" 2>&1 | tee "$log"; then
+        if cargo publish --workspace ${excludes[@]+"${excludes[@]}"} 2>&1 | tee "$log"; then
             rm -f "$log"
             return 0
         fi
