@@ -108,11 +108,21 @@ impl PgConnectConfig {
             .url(registry_config)?
             .parse()
             .wrap_err(|| err!(AppErr::InvalidConfig, "invalid postgres connection url"))?;
-        Ok(if self.schema_search_path.is_empty() {
-            options
-        } else {
-            options.options([("search_path", self.schema_search_path.as_str())])
-        })
+        Ok(with_search_path(options, &self.schema_search_path))
+    }
+}
+
+/// search_path 作为连接的启动参数（`-c search_path=..`）原样交给 PG 解析，空的不设、用数据库默认的。
+/// sqlx、SeaORM 的连接都经过这里，同一个值两边解析出来一样；经 PgBouncer 时要它的 `track_extra_parameters` 带上 `search_path`
+#[cfg(sqlx_pg)]
+pub(crate) fn with_search_path(
+    options: sqlx::postgres::PgConnectOptions,
+    search_path: &str,
+) -> sqlx::postgres::PgConnectOptions {
+    if search_path.is_empty() {
+        options
+    } else {
+        options.options([("search_path", search_path)])
     }
 }
 

@@ -8,7 +8,7 @@ use hygiea_core::{Result, ResultExt, err};
 
 use super::{SeaOrmLogConfig, close_connection, connect_options, pool_sections};
 use crate::component::{DbComponent, DbConfig, DbUses, Sections};
-use crate::config::{PG_POOL_SIZE, PgConnectConfig, PoolConfig};
+use crate::config::{PG_POOL_SIZE, PgConnectConfig, PoolConfig, with_search_path};
 #[cfg(feature = "live-config")]
 use crate::live_config::{DbLiveConfig, PgLiveConfigConfig, Store};
 #[cfg(feature = "lock")]
@@ -44,9 +44,9 @@ impl SeaOrmPgConfig {
             &self.log.clone().unwrap_or_default(),
             PG_POOL_SIZE,
         );
-        if !self.connect.schema_search_path.is_empty() {
-            opt.set_schema_search_path(&self.connect.schema_search_path);
-        }
+        // 不用 SeaORM 的 set_schema_search_path（连上后发 SET）：和 sqlx 的连接一样走启动参数
+        let search_path = self.connect.schema_search_path.clone();
+        opt.map_sqlx_postgres_opts(move |options| with_search_path(options, &search_path));
         Ok(opt)
     }
 }

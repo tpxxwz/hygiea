@@ -156,6 +156,27 @@ mod pool {
         );
     }
 
+    /// search_path 原样交给 PG 解析，和 sqlx 的连接一样：逗号后的空格不算进 schema 名
+    #[tokio::test]
+    async fn seaorm_schema_search_path_parsed_by_pg() {
+        let server = start().await;
+        create_schema(&server).await;
+
+        let mut config = seaorm_config(&server);
+        config.connect.schema_search_path = format!("{SCHEMA}, public");
+        let pool = open_pool(&config, &Default::default()).await;
+
+        let row = pool
+            .query_one_raw(sql("SELECT array_to_string(current_schemas(false), ',')"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            row.try_get_by_index::<String>(0).unwrap(),
+            format!("{SCHEMA},public")
+        );
+    }
+
     #[tokio::test]
     async fn seaorm_stop_closes_connection() {
         let server = start().await;
