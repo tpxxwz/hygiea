@@ -2559,7 +2559,7 @@ dependencies = [
 
 [[package]]
 name = "hygiea"
-version = "0.1.1-alpha.6"
+version = "0.1.1-alpha.7"
 dependencies = [
  "hygiea-aws",
  "hygiea-core",
@@ -2572,7 +2572,7 @@ dependencies = [
 
 [[package]]
 name = "hygiea-aws"
-version = "0.1.1-alpha.6"
+version = "0.1.1-alpha.7"
 dependencies = [
  "aws-config",
  "aws-credential-types",
@@ -2587,7 +2587,7 @@ dependencies = [
 
 [[package]]
 name = "hygiea-core"
-version = "0.1.1-alpha.6"
+version = "0.1.1-alpha.7"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2622,7 +2622,7 @@ dependencies = [
 
 [[package]]
 name = "hygiea-db"
-version = "0.1.1-alpha.6"
+version = "0.1.1-alpha.7"
 dependencies = [
  "hygiea-core",
  "hygiea-test",
@@ -2641,7 +2641,7 @@ dependencies = [
 
 [[package]]
 name = "hygiea-examples"
-version = "0.1.1-alpha.6"
+version = "0.1.1-alpha.7"
 dependencies = [
  "axum",
  "hygiea",
@@ -2655,7 +2655,7 @@ dependencies = [
 
 [[package]]
 name = "hygiea-grpc"
-version = "0.1.1-alpha.6"
+version = "0.1.1-alpha.7"
 dependencies = [
  "hygiea-core",
  "serde",
@@ -2667,7 +2667,7 @@ dependencies = [
 
 [[package]]
 name = "hygiea-http"
-version = "0.1.1-alpha.6"
+version = "0.1.1-alpha.7"
 dependencies = [
  "anyhow",
  "axum",
@@ -2685,7 +2685,7 @@ dependencies = [
 
 [[package]]
 name = "hygiea-http-client"
-version = "0.1.1-alpha.6"
+version = "0.1.1-alpha.7"
 dependencies = [
  "bytes",
  "encoding_rs",
@@ -2703,7 +2703,7 @@ dependencies = [
 
 [[package]]
 name = "hygiea-macros"
-version = "0.1.1-alpha.6"
+version = "0.1.1-alpha.7"
 dependencies = [
  "hygiea",
  "minijinja",
@@ -2720,7 +2720,7 @@ dependencies = [
 
 [[package]]
 name = "hygiea-redis"
-version = "0.1.1-alpha.6"
+version = "0.1.1-alpha.7"
 dependencies = [
  "fred",
  "hygiea-core",
@@ -2734,7 +2734,7 @@ dependencies = [
 
 [[package]]
 name = "hygiea-test"
-version = "0.1.1-alpha.6"
+version = "0.1.1-alpha.7"
 dependencies = [
  "encoding_rs",
  "form_urlencoded",
@@ -2756,7 +2756,7 @@ dependencies = [
 
 [[package]]
 name = "hygiea-test-macros"
-version = "0.1.1-alpha.6"
+version = "0.1.1-alpha.7"
 dependencies = [
  "hygiea-test",
  "proc-macro-crate",
@@ -5544,7 +5544,7 @@ dependencies = [
 
 [[package]]
 name = "test-support"
-version = "0.1.1-alpha.6"
+version = "0.1.1-alpha.7"
 dependencies = [
  "http 1.5.0",
  "serde",

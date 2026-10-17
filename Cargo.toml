@@ -19,7 +19,7 @@ members = [
 exclude = ["playground"]
 
 [workspace.package]
-version = "0.1.1-alpha.6"
+version = "0.1.1-alpha.7"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 authors = ["wjj"]
@@ -28,19 +28,19 @@ rust-version = "1.94.1"
 
 [workspace.dependencies]
 # 内部依赖，版本由 release/release.sh（cargo set-version）发版时自动对齐，无需手动修改
-hygiea = { path = "hygiea", version = "0.1.1-alpha.6" }
-hygiea-core = { path = "hygiea-core", version = "0.1.1-alpha.6", default-features = false }
-hygiea-macros = { path = "hygiea-macros", version = "0.1.1-alpha.6" }
+hygiea = { path = "hygiea", version = "0.1.1-alpha.7" }
+hygiea-core = { path = "hygiea-core", version = "0.1.1-alpha.7", default-features = false }
+hygiea-macros = { path = "hygiea-macros", version = "0.1.1-alpha.7" }
 # 组件 crate：按能力划分，框架 / 数据库用各自的 feature 选
-hygiea-db = { path = "hygiea-components/hygiea-db", version = "0.1.1-alpha.6" }
-hygiea-redis = { path = "hygiea-components/hygiea-redis", version = "0.1.1-alpha.6" }
-hygiea-http = { path = "hygiea-components/hygiea-http", version = "0.1.1-alpha.6" }
-hygiea-http-client = { path = "hygiea-components/hygiea-http-client", version = "0.1.1-alpha.6" }
-hygiea-grpc = { path = "hygiea-components/hygiea-grpc", version = "0.1.1-alpha.6" }
-hygiea-aws = { path = "hygiea-components/hygiea-aws", version = "0.1.1-alpha.6" }
+hygiea-db = { path = "hygiea-components/hygiea-db", version = "0.1.1-alpha.7" }
+hygiea-redis = { path = "hygiea-components/hygiea-redis", version = "0.1.1-alpha.7" }
+hygiea-http = { path = "hygiea-components/hygiea-http", version = "0.1.1-alpha.7" }
+hygiea-http-client = { path = "hygiea-components/hygiea-http-client", version = "0.1.1-alpha.7" }
+hygiea-grpc = { path = "hygiea-components/hygiea-grpc", version = "0.1.1-alpha.7" }
+hygiea-aws = { path = "hygiea-components/hygiea-aws", version = "0.1.1-alpha.7" }
 # 使用方写测试用，作为 dev-dependency 引入，随其他 crate 一起发布
-hygiea-test = { path = "hygiea-test", version = "0.1.1-alpha.6" }
-hygiea-test-macros = { path = "hygiea-test-macros", version = "0.1.1-alpha.6" }
+hygiea-test = { path = "hygiea-test", version = "0.1.1-alpha.7" }
+hygiea-test-macros = { path = "hygiea-test-macros", version = "0.1.1-alpha.7" }
 # 只做 dev-dependency、不发布，所以不带版本号（cargo publish 时会自动去掉没有版本号的 dev-dependency）
 test-support = { path = "test-support" }
 
