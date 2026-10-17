@@ -1,4 +1,4 @@
-error: `#[derive(Live)]` only supports structs with named fields, not unit structs
+error: `#[derive(hy_live_config)]` only supports structs with named fields, not unit structs
  --> tests/live_ui/fail/on_unit_struct.rs:5:8
   |
 5 | struct Empty;

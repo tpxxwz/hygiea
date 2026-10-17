@@ -1,5 +1,5 @@
-error: `#[live(nested)]` and `#[live(by_ref)]` cannot be used together: `nested` returns the field's own handle, `by_ref` returns a `LiveRef` snapshot
-  --> tests/live_ui/fail/nested_and_by_ref.rs:11:20
+error: `#[live_config(nested)]` and `#[live_config(by_ref)]` cannot be used together: `nested` returns the field's own handle, `by_ref` returns a `LiveRef` snapshot
+  --> tests/live_ui/fail/nested_and_by_ref.rs:11:27
    |
-11 |     #[live(nested, by_ref)]
-   |                    ^^^^^^
+11 |     #[live_config(nested, by_ref)]
+   |                           ^^^^^^

@@ -2,7 +2,7 @@
 //!
 //! 按调用方的 Cargo.toml 找它实际依赖的名字：依赖了 `hygiea`（包括改名）就用它，否则找 `hygiea-core`；
 //! 都找不到时退回 `::hygiea`。宏上显式写了 `crate = "path"` 时以它为准。
-//! `#[derive(Live)]` 引用的是 hygiea-db 的动态配置模块，规则见 [`resolve_live_config`]。
+//! `#[derive(hy_live_config)]` 引用的是 hygiea-db 的动态配置模块，规则见 [`resolve_live_config`]。
 //!
 //! 被找的就是当前 crate 自己时（比如 hygiea-core 内部），也生成 `::hygiea_core` 这样的绝对路径，
 //! 靠 crate 自己的 `extern crate self as ..` 解析：这样库本身、单元测试、集成测试、doctest 用的是同一个路径
@@ -22,10 +22,10 @@ pub(crate) fn resolve(explicit: Option<syn::Path>) -> syn::Path {
     syn::parse_quote!(::hygiea)
 }
 
-/// `#[derive(Live)]` 用：动态配置的模块（`Live`、`LiveView` 等所在的地方）。
+/// `#[derive(hy_live_config)]` 用：动态配置的模块（`LiveConfigFields`、`LiveView` 等所在的地方）。
 /// 依赖了 `hygiea` 是 `::hygiea::db::live_config`；没有 hygiea、依赖了 `hygiea-db`（hygiea-db 自己的测试）是
 /// `::hygiea_db::live_config`；都找不到退回 `::hygiea::db::live_config`。
-/// `explicit` 是 `#[live(crate = "..")]`，和别的宏一样写 facade 的路径，后面接 `::db::live_config`
+/// `explicit` 是 `#[hy_live_config(crate = "..")]`，和别的宏一样写 facade 的路径，后面接 `::db::live_config`
 #[cfg(feature = "live-config")]
 pub(crate) fn resolve_live_config(explicit: Option<syn::Path>) -> syn::Path {
     let (root, module): (syn::Path, syn::Path) = match explicit {
@@ -108,7 +108,7 @@ mod tests {
         assert!(out.is_none());
     }
 
-    /// `#[live(crate = "..")]` 写的是 facade 的路径，后面接 `::db::live_config`
+    /// `#[hy_live_config(crate = "..")]` 写的是 facade 的路径，后面接 `::db::live_config`
     #[cfg(feature = "live-config")]
     #[test]
     fn resolve_live_config_explicit() {

@@ -46,10 +46,10 @@ pub mod lock;
 #[cfg(feature = "ws-client")]
 pub mod net;
 
-// hygiea-db 动态配置的 #[derive(Live)]：由 hygiea-db 和同名的 trait 一起导出（hygiea::db::live_config::Live），
+// hygiea-db 动态配置的 #[derive(hy_live_config)]：由 hygiea-db 的 live_config 模块导出（hygiea::db::live_config::hy_live_config），
 // 过程宏经由 core 导出，这里只转一手；facade 的 glob 会带出去，文档里藏起来
 #[cfg(feature = "live-config")]
 #[doc(hidden)]
 pub mod __live_config {
-    pub use hygiea_macros::Live;
+    pub use hygiea_macros::hy_live_config;
 }

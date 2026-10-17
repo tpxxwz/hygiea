@@ -943,7 +943,7 @@ mod lock {
 #[container]
 mod live_config {
     use hygiea_core::app::RegistryConfig;
-    use hygiea_db::live_config::Live;
+    use hygiea_db::live_config::hy_live_config;
     use hygiea_db::{
         DbResources, PgConnectConfig, PgConnectOverride, PgLiveConfigConfig, RepoErr, SqlxPgConfig,
         SqlxPgPool,
@@ -956,10 +956,10 @@ mod live_config {
 
     type Inst = LiveInst<SqlxPgConfig>;
 
-    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Live)]
+    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, hy_live_config)]
     struct Job {
         enabled: bool,
-        #[live(by_ref)]
+        #[live_config(by_ref)]
         levels: Vec<i32>,
         start_time: String,
     }
@@ -994,10 +994,10 @@ mod live_config {
         cache: Cache,
     }
 
-    /// 和 [`All`] 一样，按字段读（`#[derive(Live)]`）
-    #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Live)]
+    /// 和 [`All`] 一样，按字段读（`#[derive(hy_live_config)]`）
+    #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, hy_live_config)]
     struct LiveAll {
-        #[live(nested)]
+        #[live_config(nested)]
         sync: Job,
         cache: Cache,
     }
@@ -1568,13 +1568,13 @@ mod live_config {
         assert_eq!(cache.get().ttl_secs, 8);
     }
 
-    /// `#[derive(Live)]` 的句柄：改表后字段方法读到新值，changed_by 只等盯的字段，on_change_by 回调拿到新值
+    /// `#[derive(hy_live_config)]` 的句柄：改表后字段方法读到新值，changed_by 只等盯的字段，on_change_by 回调拿到新值
     #[tokio::test]
     async fn live_handle_reads_updates() {
         let env = Env::new().await;
         let source = env.start().await;
         let runtime = source.bind_all(LiveAll::default()).await.unwrap();
-        let mut sync = runtime.live().sync();
+        let mut sync = runtime.fields().sync();
         let start_times = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let pushed = start_times.clone();
         let _guard = sync.on_change_by(
@@ -1601,7 +1601,7 @@ mod live_config {
             .unwrap()
             .unwrap();
         assert_eq!(sync.start_time(), "02:00");
-        assert_eq!(runtime.live().snapshot().sync.start_time, "02:00");
+        assert_eq!(runtime.fields().snapshot().sync.start_time, "02:00");
         eventually(5, || async {
             *start_times.lock().unwrap() == vec!["02:00".to_string()]
         })

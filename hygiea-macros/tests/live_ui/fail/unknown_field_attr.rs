@@ -1,9 +1,9 @@
-// 字段上未知的 live 属性
-use hygiea::db::live_config::Live;
+// 字段上未知的 live_config 属性
+use hygiea::db::live_config::hy_live_config;
 
-#[derive(Live)]
+#[derive(hy_live_config)]
 struct Job {
-    #[live(copy)]
+    #[live_config(copy)]
     times: u32,
 }
 

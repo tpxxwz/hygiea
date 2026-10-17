@@ -1,5 +1,5 @@
-error: `nested` / `by_ref` go on fields; on the struct `#[live(..)]` only takes `crate = "path"`
- --> tests/live_ui/fail/field_attr_on_struct.rs:5:8
+error: `#[live_config(..)]` goes on fields (`nested` / `by_ref`); on the struct use `#[hy_live_config(crate = "path")]`
+ --> tests/live_ui/fail/field_attr_on_struct.rs:5:1
   |
-5 | #[live(nested)]
-  |        ^^^^^^
+5 | #[live_config(nested)]
+  | ^^^^^^^^^^^^^^^^^^^^^^

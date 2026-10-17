@@ -1,8 +1,8 @@
 error[E0624]: method `secret` is private
   --> tests/live_ui/fail/private_field.rs:15:17
    |
- 5 |     #[derive(Live)]
-   |              ---- private method defined here
+ 5 |     #[derive(hy_live_config)]
+   |              -------------- private method defined here
 ...
 15 |     let _ = job.secret();
    |                 ^^^^^^ private method

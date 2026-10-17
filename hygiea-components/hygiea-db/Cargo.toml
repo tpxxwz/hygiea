@@ -32,7 +32,7 @@ sqlite = ["sqlx?/sqlite", "sea-orm?/sqlx-sqlite"]
 mysql = ["sqlx?/mysql", "sea-orm?/sqlx-mysql"]
 # ---- 功能 ----
 # 连接池的数据库配置表（动态配置），见 live_config 模块文档；日志里的值按 #[redact] 打码，带上 core 的 redact；
-# #[derive(Live)] 由 core 的 live-config 导出。
+# #[derive(hy_live_config)] 由 core 的 live-config 导出。
 # 实现：sqlx / seaorm + postgres / mysql / sqlite
 live-config = ["dep:serde_json", "tokio/time", "hygiea-core/redact", "hygiea-core/live-config"]
 # 连接池实现分布式锁（hygiea-core 的 DistributedLock），见 lock 模块文档。实现：sqlx / seaorm + postgres / mysql

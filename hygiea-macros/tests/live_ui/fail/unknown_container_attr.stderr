@@ -1,5 +1,5 @@
-error: unknown `live` attribute on the struct; expected `crate = "path"`
- --> tests/live_ui/fail/unknown_container_attr.rs:5:8
+error: unknown `hy_live_config` attribute; expected `crate = "path"`
+ --> tests/live_ui/fail/unknown_container_attr.rs:5:18
   |
-5 | #[live(rename_all = "snake_case")]
-  |        ^^^^^^^^^^
+5 | #[hy_live_config(rename_all = "snake_case")]
+  |                  ^^^^^^^^^^

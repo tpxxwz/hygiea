@@ -8,7 +8,7 @@
 基于组件的 Rust 应用框架（`hygiea::app`），附带错误、日志、日期、字符串等基础功能的封装和扩展。使用方只依赖 facade crate `hygiea`。
 
 - `hygiea`：facade，只有 `pub use hygiea_core::*;` 加上按 feature 导出的组件，不放逻辑
-- `hygiea-core`：全部核心实现；`hygiea-macros`：过程宏（`hy_err`、锁的两个 derive、`component`、`redact`、`Live`），经由 core 导出
+- `hygiea-core`：全部核心实现；`hygiea-macros`：过程宏（`hy_err`、锁的两个 derive、`component`、`redact`、`hy_live_config`），经由 core 导出
 - `hygiea-components/*`：组件（db / redis / http / http-client / grpc / aws），依赖 core 的 `app`，只能由 facade 导出（core 不能依赖组件）
 - `hygiea-test`：发布，给使用方写测试用（dev-dependency），只依赖 core（不经过 facade、不依赖组件），所以组件的测试能用它、core 自己的测试不能用；
   `hygiea-test-macros` 是它的过程宏，只改写代码结构，运行时逻辑在 `hygiea_test::tier`。hygiea 自己的测试工具不放这里
@@ -26,7 +26,7 @@
 | 应用框架（Registry、组件、Resources、配置加载、关闭） | `hygiea-core/src/app/mod.rs` | `docs/design/app.md` |
 | 错误和错误码 | `hygiea-core/src/error.rs`、`hygiea-macros/src/error.rs`；规则见 README「错误码体系」 | |
 | 分布式锁 | trait 和 key：`hygiea-core/src/lock/mod.rs`；PG / MySQL：`hygiea-db/src/lock/mod.rs` | `docs/design/lock.md` |
-| 动态配置 | `hygiea-db/src/live_config/mod.rs`、`hygiea-macros/src/live.rs` | `docs/design/live-config.md` |
+| 动态配置 | `hygiea-db/src/live_config/mod.rs`、`hygiea-macros/src/live_config.rs` | `docs/design/live-config.md` |
 | 数据库组件 | `hygiea-db/src/lib.rs`、`component.rs`（`uses`、建和关的顺序）、`build.rs`（feature 组合的 cfg 别名） | |
 | HTTP 客户端 | `hygiea-http-client/src/reqwest_client/mod.rs`，发送流程图在 `send.rs` 开头 | |
 | 宏生成的代码怎么引用 hygiea | `hygiea-macros/src/krate.rs` | |
@@ -39,8 +39,8 @@
 
 - 过程宏生成的代码经 facade 引用（`::hygiea::`，`hygiea-test-macros` 的是 `::hygiea_test::`）：按调用方 Cargo.toml 实际依赖的名字解析
   （`krate.rs`），宏上写 `crate = ".."` 时以它为准。hygiea-db 的 `lib.rs` 有 `extern crate self as hygiea_db`，让宏生成的路径在本 crate 里也能解析
-- `#[derive(Live)]` 定义在 hygiea-macros，经 core 的 `#[doc(hidden)]` 模块 `__live_config` 转出，由 hygiea-db 的 `live_config` 和同名 trait 一起导出
-  （`hygiea::db::live_config::Live`）
+- `#[derive(hy_live_config)]` 定义在 hygiea-macros，经 core 的 `#[doc(hidden)]` 模块 `__live_config` 转出，由 hygiea-db 的 `live_config` 导出
+  （`hygiea::db::live_config::hy_live_config`），它实现的 trait 是同一模块里的 `LiveConfigFields`
 - `hygiea_core::builtin`（常开、`#[doc(hidden)]`）：hygiea 自己的模块、组件用的保留编号，比如锁编号 999999999、hygiea-db 建表时串行化用的锁
 - 组件按能力分 crate，用哪个框架或数据库由 crate 自己的 feature 决定（`hygiea-db` 的 `sqlx`、`postgres`……），facade 的 `<能力>-<框架>` 一对一转发
 - hygiea-db：
@@ -84,7 +84,7 @@
 ## feature
 
 - feature 之间的依赖关系只写在 `hygiea-core/Cargo.toml`。facade 的 feature 一对一转发给 core，组件 feature 只引入对应的组件 crate。
-  例外：`db-live-config` 除了引入 hygiea-db 的 `live-config`，还带上 facade 的 `live-config`（→ core → hygiea-macros，`#[derive(Live)]`）。
+  例外：`db-live-config` 除了引入 hygiea-db 的 `live-config`，还带上 facade 的 `live-config`（→ core → hygiea-macros，`#[derive(hy_live_config)]`）。
 - 不常用的功能做成 feature（比如 `redact`），常开的只放错误、日期、环境变量、字符串这类基础功能。
 - 命名：reqwest 客户端用 `http-client-reqwest`，实现在 `hygiea-http-client::reqwest_client`；WebSocket 客户端在 `net::ws_client`；`hygiea::http`、`hygiea::grpc` 是服务端组件。
 

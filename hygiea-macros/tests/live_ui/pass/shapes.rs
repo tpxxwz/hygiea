@@ -1,24 +1,24 @@
 // 三层嵌套、by_ref、nested、带文档的字段、pub(crate)，句柄能 Clone
-use hygiea::db::live_config::{Live, LiveConfig, LiveRef};
+use hygiea::db::live_config::{hy_live_config, LiveConfigFields, LiveConfig, LiveRef};
 
-#[derive(Live)]
+#[derive(hy_live_config)]
 pub struct Root {
     /// 名字
     pub name: String,
-    #[live(nested)]
+    #[live_config(nested)]
     pub job: Job,
 }
 
-#[derive(Live)]
+#[derive(hy_live_config)]
 pub struct Job {
     pub enabled: bool,
-    #[live(by_ref)]
+    #[live_config(by_ref)]
     pub levels: Vec<i32>,
-    #[live(nested)]
+    #[live_config(nested)]
     pub(crate) retry: Retry,
 }
 
-#[derive(Live)]
+#[derive(hy_live_config)]
 pub(crate) struct Retry {
     pub times: u32,
 }
@@ -32,8 +32,8 @@ fn main() {
             retry: Retry { times: 0 },
         },
     });
-    let root: RootLive = config.live();
-    let job: JobLive = root.job().clone();
+    let root: RootLiveConfig = config.fields();
+    let job: JobLiveConfig = root.job().clone();
     let _: String = root.name();
     let _: bool = job.enabled();
     let _: LiveRef<Vec<i32>> = job.levels();

@@ -1,4 +1,4 @@
-error: `#[derive(Live)]` only supports structs with named fields
+error: `#[derive(hy_live_config)]` only supports structs with named fields
  --> tests/live_ui/fail/on_enum.rs:5:6
   |
 5 | enum Mode {

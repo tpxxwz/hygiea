@@ -30,32 +30,32 @@
 //!
 //! - **整块快照**：`LiveConfig::get()` 拿到 `Arc<T>`，[`LiveView::get`] 拿到 [`LiveRef`]（`Deref` 到这一块），
 //!   [`LiveRef::map`] 从快照里再取一个字段。拿着期间配置换了新值也不影响手上这份，一次处理里几个值要来自同一版就用它
-//! - **字段方法，每次最新**：struct 上标 [`#[derive(Live)]`](trait@Live)，生成 `FooLive` 句柄，每个字段一个同名方法，
+//! - **字段方法，每次最新**：struct 上标 [`#[derive(hy_live_config)]`](trait@LiveConfigFields)，生成 `FooLiveConfig` 句柄，每个字段一个同名方法，
 //!   每次调都读当时最新的值。取一次句柄存起来（比如放进 service），之后直接 `cfg.start_time()`。连续调几个字段方法，
 //!   中间配置可能换了版本，拿到的值可能来自不同版本，要一致用句柄的 `snapshot()`
 //!
 //! ```ignore
-//! #[derive(Serialize, Deserialize, Default, Live)]
+//! #[derive(Serialize, Deserialize, Default, hy_live_config)]
 //! pub struct RuntimeConfig {
-//!     #[live(nested)]                  // 字段方法返回 MarkjiSyncLive
+//!     #[live_config(nested)]                  // 字段方法返回 MarkjiSyncLiveConfig
 //!     pub markji_sync: MarkjiSync,
 //! }
 //!
-//! #[derive(Serialize, Deserialize, Default, Live)]
+//! #[derive(Serialize, Deserialize, Default, hy_live_config)]
 //! pub struct MarkjiSync {
 //!     pub start_time: String,          // 默认：返回字段值的 clone
-//!     #[live(by_ref)]                  // 不复制：返回 LiveRef<Vec<i32>>
+//!     #[live_config(by_ref)]                  // 不复制：返回 LiveRef<Vec<i32>>
 //!     pub levels: Vec<i32>,
-//!     #[live(nested)]                  // 第三层
+//!     #[live_config(nested)]                  // 第三层
 //!     pub retry: Retry,
 //! }
 //!
-//! #[derive(Serialize, Deserialize, Default, Live)]
+//! #[derive(Serialize, Deserialize, Default, hy_live_config)]
 //! pub struct Retry {
 //!     pub times: u32,
 //! }
 //!
-//! let markji = runtime.live().markji_sync();          // MarkjiSyncLive，Clone 后交给 service
+//! let markji = runtime.fields().markji_sync();          // MarkjiSyncLiveConfig，Clone 后交给 service
 //! let start = markji.start_time();                    // String，每次最新
 //! let times = markji.retry().times();                 // 往下一层
 //! let levels = markji.levels();                       // LiveRef<Vec<i32>>
@@ -74,7 +74,7 @@
 //!   返回 [`OnChangeGuard`]，drop 掉就停；后台任务、panic 的处理见 [`LiveView::on_change`]
 //!
 //! ```ignore
-//! let mut markji = runtime.live().markji_sync();
+//! let mut markji = runtime.fields().markji_sync();
 //! markji.changed_by(|c| &c.start_time).await?;        // 等 start_time 变
 //! let guard = markji.on_change_by(|c| &c.start_time, |t| tracing::info!(%t, "start_time changed"));
 //! // guard 存进 AppState，drop 了就不再回调
@@ -85,7 +85,7 @@
 //! ## 观察过的版本（`changed` / `changed_by` 的基准）
 //!
 //! 每个句柄记着自己上一次观察到的那一版，和 tokio `watch` 的 `Receiver` 记 seen 版本一样：
-//! - 句柄建出来时（`bind` / `bind_all`、[`LiveConfig::fixed`]）是当时那一版；`clone()`、`view()`、`live()` 拿到的新句柄
+//! - 句柄建出来时（`bind` / `bind_all`、[`LiveConfig::fixed`]）是当时那一版；`clone()`、`view()`、`fields()` 拿到的新句柄
 //!   从原句柄当时观察到的那一版接着算，之后各记各的
 //! - `changed()` / `changed_by()` 返回时更新成返回时的那一版；`changed_by()` 等的过程中每比过一版就推进到那一版
 //!   （比过的这几版盯的字段都没变），中途被取消（比如外面套了超时）也不回退；`get()`、`read()` 不算观察，不更新
@@ -172,11 +172,11 @@ use crate::config::PgConnectOverride;
 #[cfg(live_config_sqlite)]
 use crate::config::SqliteConnectOverride;
 
-pub use handle::{Live, LiveConfig, LiveRef, LiveView, OnChangeGuard};
-/// 生成按字段读的句柄，见 [`Live`](trait@Live)
-pub use hygiea_core::__live_config::Live;
+pub use handle::{LiveConfig, LiveConfigFields, LiveRef, LiveView, OnChangeGuard};
+/// 生成按字段读的句柄，见 [`LiveConfigFields`](trait@LiveConfigFields)
+pub use hygiea_core::__live_config::hy_live_config;
 
-/// `#[derive(Live)]` 生成的代码引用的路径，不是给业务用的
+/// `#[derive(hy_live_config)]` 生成的代码引用的路径，不是给业务用的
 #[doc(hidden)]
 pub mod __private {
     pub use hygiea_core::Result;

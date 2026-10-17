@@ -30,7 +30,7 @@ app = ["hygiea-core/app"]
 log = ["hygiea-core/log"]
 ws-client = ["hygiea-core/ws-client"]
 redact = ["hygiea-core/redact"]
-# 动态配置的 #[derive(Live)]，单开没用，经 db-live-config 打开
+# 动态配置的 #[derive(hy_live_config)]，单开没用，经 db-live-config 打开
 live-config = ["hygiea-core/live-config"]
 lock = ["hygiea-core/lock"]
 lock-tokio = ["hygiea-core/lock-tokio"]

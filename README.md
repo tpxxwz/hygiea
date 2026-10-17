@@ -48,7 +48,7 @@
 | `log` | tracing 初始化：控制台和按时间滚动的文件输出、过滤，可以脱离 `app` 单独用（会带上 `datetime-iana`） |
 | `lock` | 分布式锁的 trait（`hygiea::lock::DistributedLock`）和 key 的注册（`#[derive(hy_lock_type)]`、`#[derive(hy_lock_key)]`、`lock_key!`），后端由组件实现（见 `db-lock`），见下文「分布式锁」 |
 | `lock-tokio` | 进程内的锁 `hygiea::lock::TokioLock`：tokio 的 Mutex 实现 `DistributedLock`，不跨进程（会带上 `lock`） |
-| `live-config` | 动态配置的 `#[derive(Live)]`（`hygiea::db::live_config::Live`），单开没用，经 `db-live-config` 打开，不在 `full` 里 |
+| `live-config` | 动态配置的 `#[derive(hy_live_config)]`（`hygiea::db::live_config::hy_live_config`），单开没用，经 `db-live-config` 打开，不在 `full` 里 |
 | `redact` | 日志打码：`#[redact]` 属性，标了 `#[redact(mask)]` / `#[redact(skip)]` 的字段只在序列化进日志时打码（任意嵌套层级都生效），正常序列化不受影响 |
 | `datetime-iana` | IANA 时区和系统本地时间（`*_local` 方法） |
 | `datetime-chrono` | 和 chrono 互相转换 |
@@ -286,7 +286,7 @@ async fn run(db: &impl DistributedLock, order_id: u32, day: &str) -> hygiea::Res
 ### 动态配置
 
 需要 `db-live-config` 和一个数据库组件（比如 `db-sqlx` + `db-postgres`），组件的 `uses` 带 2：配置存在库里，改了表，运行中的程序自动拿到新值，
-`#[derive(Live)]` 生成按字段读的句柄。用法见 [`hygiea::db::live_config`](https://docs.rs/hygiea/latest/hygiea/db/live_config/index.html) 的模块文档，
+`#[derive(hy_live_config)]` 生成按字段读的句柄。用法见 [`hygiea::db::live_config`](https://docs.rs/hygiea/latest/hygiea/db/live_config/index.html) 的模块文档，
 内部流程见 [docs/design/live-config.md](docs/design/live-config.md)。
 
 ### HTTP 客户端与日志打码
@@ -309,7 +309,7 @@ hygiea                         facade：重新导出全部内容，按 feature �
 |---|---|---|
 | `hygiea` | 是 | 使用方唯一需要依赖的 crate。重新导出 core 和各组件，由 feature 决定编译哪些 |
 | `hygiea-core` | 是 | 应用框架；错误处理、日志、打码、分布式锁的 trait、日期时间、环境变量、字符串、WebSocket 客户端 |
-| `hygiea-macros` | 是 | `#[derive(hy_err)]`、`#[derive(hy_lock_type)]` / `#[derive(hy_lock_key)]`、`#[component]`、`#[redact]` 和动态配置的 `#[derive(Live)]` |
+| `hygiea-macros` | 是 | `#[derive(hy_err)]`、`#[derive(hy_lock_type)]` / `#[derive(hy_lock_key)]`、`#[component]`、`#[redact]` 和动态配置的 `#[derive(hy_live_config)]` |
 | `hygiea-db` | 是 | 数据库组件（PostgreSQL、MySQL、SQLite，sqlx / SeaORM），按配置的 `uses` 提供业务池、数据库配置表（动态配置，[设计说明](docs/design/live-config.md)）、分布式锁（PG、MySQL，[设计说明](docs/design/lock.md)）；SeaORM 的错误转换（`db!`）、事务、分页。用法见 crate 文档 |
 | `hygiea-redis` | 是 | Redis 连接池组件 |
 | `hygiea-http` | 是 | HTTP 服务组件 |
@@ -319,7 +319,7 @@ hygiea                         facade：重新导出全部内容，按 feature �
 | `hygiea-test` | 是 | 给使用方写测试用，作为 dev-dependency：测试日志、mock HTTP 服务（httpmock + TOML cassette + Rhai）、测试分层宏（`#[container]` / `#[live]`）、启动容器 |
 | `hygiea-test-macros` | 是 | `hygiea-test` 的过程宏（`#[container]` / `#[live]`），经 `hygiea-test` 使用 |
 
-使用方不需要额外依赖（比如 `linkme`、`serde_json`）。宏生成的代码跟随你依赖时用的名字：依赖 `hygiea`、给它改名、或者只依赖 `hygiea-core` 都可以。需要覆盖时用 `#[hy_err(crate = "path")]` / `#[hy_lock_type(crate = "path")]` / `#[hy_lock_key(crate = "path")]` / `#[redact(crate = "path")]` / `#[live(crate = "path")]`（`live` 写 facade 的路径，后面接 `::db::live_config`）。
+使用方不需要额外依赖（比如 `linkme`、`serde_json`）。宏生成的代码跟随你依赖时用的名字：依赖 `hygiea`、给它改名、或者只依赖 `hygiea-core` 都可以。需要覆盖时用 `#[hy_err(crate = "path")]` / `#[hy_lock_type(crate = "path")]` / `#[hy_lock_key(crate = "path")]` / `#[redact(crate = "path")]` / `#[hy_live_config(crate = "path")]`（`hy_live_config` 写 facade 的路径，后面接 `::db::live_config`）。
 
 ## 错误码体系
 

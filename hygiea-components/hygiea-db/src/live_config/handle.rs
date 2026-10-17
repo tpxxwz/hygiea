@@ -1,5 +1,5 @@
 //! 对外的句柄：[`LiveConfig`]（绑定拿到的整份配置）、[`LiveView`]（其中一块）、[`LiveRef`]（`LiveView::get` 的快照）、
-//! [`Live`]（`#[derive(Live)]` 生成按字段读的句柄）、[`OnChangeGuard`]（`on_change` 回调的后台任务）
+//! [`LiveConfigFields`]（`#[derive(hy_live_config)]` 生成按字段读的句柄）、[`OnChangeGuard`]（`on_change` 回调的后台任务）
 
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
@@ -137,10 +137,10 @@ impl<T: Send + Sync + 'static> LiveConfig<T> {
         }
     }
 
-    /// `#[derive(Live)]` 生成的句柄（`T` 是 `Foo` 就是 `FooLive`），按字段读，每次读到最新的值，见 [`Live`]
-    pub fn live(&self) -> T::Handle
+    /// `#[derive(hy_live_config)]` 生成的句柄（`T` 是 `Foo` 就是 `FooLiveConfig`），按字段读，每次读到最新的值，见 [`LiveConfigFields`]
+    pub fn fields(&self) -> T::Handle
     where
-        T: Live,
+        T: LiveConfigFields,
     {
         T::handle(self.view(|c| c))
     }
@@ -235,10 +235,10 @@ impl<U: 'static> LiveView<U> {
         }
     }
 
-    /// `#[derive(Live)]` 生成的句柄，见 [`LiveConfig::live`]
-    pub fn live(&self) -> U::Handle
+    /// `#[derive(hy_live_config)]` 生成的句柄，见 [`LiveConfig::fields`]
+    pub fn fields(&self) -> U::Handle
     where
-        U: Live,
+        U: LiveConfigFields,
     {
         U::handle(self.clone())
     }
@@ -316,34 +316,34 @@ impl<U: 'static> LiveRef<U> {
     }
 }
 
-/// `#[derive(Live)]` 实现它：`Handle` 是生成的按字段读的句柄（`Foo` 生成 `FooLive`）。
-/// 从 [`LiveConfig::live`]、[`LiveView::live`] 拿到，不用直接调 [`handle`](Self::handle)。
+/// `#[derive(hy_live_config)]` 实现它：`Handle` 是生成的按字段读的句柄（`Foo` 生成 `FooLiveConfig`）。
+/// 从 [`LiveConfig::fields`]、[`LiveView::fields`] 拿到，不用直接调 [`handle`](Self::handle)。
 ///
 /// ```ignore
-/// use hygiea::db::live_config::Live;
+/// use hygiea::db::live_config::hy_live_config;
 ///
-/// #[derive(Serialize, Deserialize, Default, Live)]
+/// #[derive(Serialize, Deserialize, Default, hy_live_config)]
 /// pub struct RuntimeConfig {
-///     #[live(nested)]                    // 字段方法返回 MarkjiSyncLive，可以接着按字段读
+///     #[live_config(nested)]                    // 字段方法返回 MarkjiSyncLiveConfig，可以接着按字段读
 ///     pub markji_sync: MarkjiSync,
 /// }
 ///
-/// #[derive(Serialize, Deserialize, Default, Live)]
+/// #[derive(Serialize, Deserialize, Default, hy_live_config)]
 /// pub struct MarkjiSync {
 ///     pub auto_sync: bool,               // 默认：返回字段值的 clone
-///     #[live(by_ref)]                    // 不复制：返回 LiveRef<Vec<i32>>
+///     #[live_config(by_ref)]                    // 不复制：返回 LiveRef<Vec<i32>>
 ///     pub levels: Vec<i32>,
-///     #[live(nested)]
+///     #[live_config(nested)]
 ///     pub retry: Retry,
 /// }
 ///
-/// #[derive(Serialize, Deserialize, Default, Live)]
+/// #[derive(Serialize, Deserialize, Default, hy_live_config)]
 /// pub struct Retry {
 ///     pub times: u32,
 /// }
 ///
 /// let runtime = source.bind_all(RuntimeConfig::default()).await?;
-/// let markji = runtime.live().markji_sync();   // MarkjiSyncLive，交给 service 存着
+/// let markji = runtime.fields().markji_sync();   // MarkjiSyncLiveConfig，交给 service 存着
 /// // service 里：每次调都读到最新的值
 /// if markji.auto_sync() { .. }
 /// let times = markji.retry().times();
@@ -353,7 +353,7 @@ impl<U: 'static> LiveRef<U> {
 ///
 /// 生成的句柄（`Clone`，可见性和 struct 相同）的方法：
 /// - 每个具名字段一个同名方法，可见性和字段相同：默认返回字段值的 clone（要求字段实现 `Clone`）；
-///   `#[live(by_ref)]` 返回 [`LiveRef`]，不复制；`#[live(nested)]` 返回字段类型的句柄（字段类型也要 `#[derive(Live)]`）
+///   `#[live_config(by_ref)]` 返回 [`LiveRef`]，不复制；`#[live_config(nested)]` 返回字段类型的句柄（字段类型也要 `#[derive(hy_live_config)]`）
 /// - `snapshot()`：整块的快照 [`LiveRef`]
 /// - `changed()`、`changed_by()`、`on_change()`、`on_change_by()`：同 [`LiveView`] 的同名方法
 ///
@@ -362,8 +362,8 @@ impl<U: 'static> LiveRef<U> {
 ///
 /// 宏只支持具名字段、不带泛型的 struct；字段名不能和上面这几个方法（以及 `clone`）重名。
 /// 生成的代码默认引用 `::hygiea::db::live_config`，hygiea 改过名或者经别的 crate 转导出时用
-/// `#[live(crate = "path")]` 写 facade 的路径（后面接 `::db::live_config`）
-pub trait Live: Sized + 'static {
+/// `#[hy_live_config(crate = "path")]` 写 facade 的路径（后面接 `::db::live_config`）
+pub trait LiveConfigFields: Sized + 'static {
     /// 生成的句柄类型
     type Handle;
 
@@ -782,33 +782,33 @@ mod tests {
         eventually(|| guard.task.is_finished() && guard_by.task.is_finished()).await;
     }
 
-    #[derive(Clone, Debug, Default, PartialEq, crate::live_config::Live)]
+    #[derive(Clone, Debug, Default, PartialEq, crate::live_config::hy_live_config)]
     struct DerivedRoot {
         name: String,
-        #[live(nested)]
+        #[live_config(nested)]
         job: DerivedJob,
     }
 
-    #[derive(Clone, Debug, Default, PartialEq, crate::live_config::Live)]
+    #[derive(Clone, Debug, Default, PartialEq, crate::live_config::hy_live_config)]
     struct DerivedJob {
         enabled: bool,
-        #[live(by_ref)]
+        #[live_config(by_ref)]
         levels: Vec<i32>,
-        #[live(nested)]
+        #[live_config(nested)]
         retry: DerivedRetry,
     }
 
-    #[derive(Clone, Debug, Default, PartialEq, crate::live_config::Live)]
+    #[derive(Clone, Debug, Default, PartialEq, crate::live_config::hy_live_config)]
     struct DerivedRetry {
         times: u32,
     }
 
-    /// `#[derive(Live)]`：字段方法每次读到最新的值，nested 接着往下，by_ref 和 snapshot 是快照；
+    /// `#[derive(hy_live_config)]`：字段方法每次读到最新的值，nested 接着往下，by_ref 和 snapshot 是快照；
     /// 生成的 changed_by、on_change_by 委托给 LiveView
     #[tokio::test]
     async fn derive_reads_latest() {
         let (sender, config) = channel(DerivedRoot::default());
-        let root = config.live();
+        let root = config.fields();
         let mut job = root.job();
         let retry = job.retry();
         let levels = job.levels();

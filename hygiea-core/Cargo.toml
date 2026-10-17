@@ -42,7 +42,7 @@ lock-tokio = ["lock", "dep:dashmap", "tokio/sync"]
 # 日志打码：#[redact] 和 to_redacted_json
 redact = ["hygiea-macros/redact"]
 
-# hygiea-db 动态配置的 #[derive(Live)]：hygiea-db 的 live-config 打开，core 只转一手，由 hygiea-db 和同名 trait 一起导出
+# hygiea-db 动态配置的 #[derive(hy_live_config)]：hygiea-db 的 live-config 打开，core 只转一手，由 hygiea-db 导出
 live-config = ["hygiea-macros/live-config"]
 
 json = []

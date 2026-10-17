@@ -1,4 +1,4 @@
-//! hygiea 的过程宏：`hy_err`、锁的两个 derive、`component`、`redact`、`Live`。经由 hygiea-core 导出，使用方不直接依赖它。
+//! hygiea 的过程宏：`hy_err`、锁的两个 derive、`component`、`redact`、`hy_live_config`。经由 hygiea-core 导出，使用方不直接依赖它。
 
 use proc_macro::TokenStream;
 
@@ -7,7 +7,7 @@ mod component;
 mod error;
 mod krate;
 #[cfg(feature = "live-config")]
-mod live;
+mod live_config;
 #[cfg(feature = "lock")]
 mod lock;
 mod prefix;
@@ -64,10 +64,10 @@ pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     component::expand(attr, item)
 }
 
-/// 给动态配置的 struct 生成按字段读的句柄 `<名字>Live`，字段上可以标 `#[live(nested)]` / `#[live(by_ref)]`，
-/// 见 `hygiea::db::live_config::Live`
+/// 给动态配置的 struct 生成按字段读的句柄 `<名字>LiveConfig`，字段上可以标 `#[live_config(nested)]` / `#[live_config(by_ref)]`，
+/// struct 上可以写 `#[hy_live_config(crate = "..")]`，见 `hygiea::db::live_config::LiveConfigFields`
 #[cfg(feature = "live-config")]
-#[proc_macro_derive(Live, attributes(live))]
-pub fn derive_live(input: TokenStream) -> TokenStream {
-    live::derive(input)
+#[proc_macro_derive(hy_live_config, attributes(live_config, hy_live_config))]
+pub fn derive_live_config(input: TokenStream) -> TokenStream {
+    live_config::derive(input)
 }
