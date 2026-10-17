@@ -61,3 +61,12 @@ http-client-reqwest = ["dep:hygiea-http-client", "hygiea-http-client/reqwest"]
 http-client-reqwest-debug-log = ["http-client-reqwest", "hygiea-http-client/debug-log"]
 grpc-tonic = ["dep:hygiea-grpc", "hygiea-grpc/tonic"]
 aws-s3 = ["dep:hygiea-aws", "hygiea-aws/s3"]
+
+# docs.rs 按全部 feature 构建，组件和可选模块的文档才显示得出来
+[package.metadata.docs.rs]
+all-features = true
+
+# README 的错误码表：组件的错误要开了 feature 才会链接进来，所以只在全开时编译
+[[test]]
+name = "err_code_table"
+required-features = ["full", "db-sqlx", "db-seaorm", "db-postgres", "db-sqlite", "db-mysql", "db-live-config", "db-lock-row", "redis-fred", "http-axum", "http-client-reqwest", "grpc-tonic", "aws-s3"]

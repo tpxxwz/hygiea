@@ -1,3 +1,5 @@
+//! 错误体系：统一的错误类型 `HyErr`、`err!` / `bail!`、内置错误 `BaseErr`，以及错误码的注册（`#[derive(hy_err)]` 生成）和进程启动时的查重。
+
 use linkme::distributed_slice;
 use minijinja::{Environment, UndefinedBehavior};
 use std::backtrace::{Backtrace, BacktraceStatus};
@@ -11,6 +13,8 @@ static ERROR_TEMPLATES: OnceLock<Environment<'static>> = OnceLock::new();
 #[doc(hidden)]
 pub struct ErrRegistration {
     pub err_code: &'static str,
+    /// `Enum::Variant`，只给生成文档里的错误码表用
+    pub err_name: &'static str,
     pub err_tpl: &'static str,
 }
 
@@ -669,10 +673,12 @@ mod tests {
         let regs = [
             ErrRegistration {
                 err_code: "1",
+                err_name: "E::A",
                 err_tpl: "a",
             },
             ErrRegistration {
                 err_code: "1",
+                err_name: "E::B",
                 err_tpl: "b",
             },
         ];

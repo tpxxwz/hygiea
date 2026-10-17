@@ -15,7 +15,8 @@
 //! | [`try_lock_i32`](DistributedLock::try_lock_i32) / [`lock_i32`](DistributedLock::lock_i32) | 锁类型 [`LockType`] + 一个 `i32` | 高 32 位锁类型、低 32 位 `key2` 合成 `i64` 调 `*_i64` | `pg_try_advisory_xact_lock(int, int)` |
 //!
 //! 字符串 key 和锁类型都要注册（`#[derive(hy_lock_key)]` / `#[derive(hy_lock_type)]`），编号的组成和查重和错误码一样：
-//! 项目前缀 3 位（和错误码共用 `err_code_project_prefix`）+ 模块前缀 + `code`，共 9 位，两个 derive 共用一套编号，全局唯一。
+//! 项目前缀 3 位（和错误码共用 `err_code_project_prefix`）+ 模块前缀 + `code`，共 9 位，两个 derive 共用一套编号，全局唯一：
+//! `#[lock_module_prefix = "02"]` 时 `code` 4 位，不写模块前缀时 6 位；项目前缀 `999` 和 `999999999` 留给 hygiea 自己。
 //! 整数 key 的参数是 [`LockKeyI32`] / [`LockKeyI64`]，有符号、无符号的整数都能直接传：无符号的按位转，
 //! 一一对应、不会撞，大的值在后端里看到的是负数。
 //!

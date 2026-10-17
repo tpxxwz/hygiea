@@ -1,63 +1,21 @@
-# 分布式锁：trait、key 的注册、PG / MySQL 实现、进程内的锁
+# 分布式锁：内部实现和取舍
 
-trait 和 key 在 hygiea-core 的 `lock` 模块（feature `lock`），后端在组件里实现：目前是 hygiea-db 的
-PostgreSQL、MySQL（feature `lock`，PG 的字符串 key 另要 `lock-row`）。Redis 还没有实现。
-不需要跨进程时用 core 的 `TokioLock`（feature `lock-tokio`），见第 5 节。
+用法、行为和配置都在模块文档里，这里不重复：
+
+- trait、key、编号、`TokioLock`：`hygiea-core/src/lock/mod.rs`（docs.rs 上是 `hygiea::lock`）
+- PG / MySQL 的行为、限制、`lock-row`：`hygiea-components/hygiea-db/src/lock/mod.rs`（`hygiea::db::lock`），配置见 `PgLockConfig` / `MySqlLockConfig`
+
+这里只讲内部怎么做、为什么这样做。还没做的、没定的在 [docs/todo/lock.md](../todo/lock.md)。
 
 ---
 
-## 1. trait
+## 1. key 和编号
 
-```rust
-#[async_trait]
-pub trait DistributedLock: Send + Sync {
-    // 后端必须实现
-    async fn try_lock(&self, key: LockKey) -> Result<Option<LockGuard>>;
-    // 默认：转成字符串 key 999999999:<数字> 调 try_lock
-    async fn try_lock_i64(&self, key: impl Into<LockKeyI64> + Send) -> Result<Option<LockGuard>>;
-    // 默认：高 32 位锁类型、低 32 位 key2 合成 i64 调 try_lock_i64
-    async fn try_lock_i32(&self, key1: impl Into<LockType> + Send, key2: impl Into<LockKeyI32> + Send) -> Result<Option<LockGuard>>;
-    // 默认：轮询 try_lock（最多 100ms 一次）
-    async fn lock(&self, key: LockKey, timeout: Duration) -> Result<Option<LockGuard>>;
-    // 默认：和上面的 try_lock_i64 / try_lock_i32 一样一层调一层
-    async fn lock_i64(&self, key: impl Into<LockKeyI64> + Send, timeout: Duration) -> Result<Option<LockGuard>>;
-    async fn lock_i32(&self, key1: impl Into<LockType> + Send, key2: impl Into<LockKeyI32> + Send, timeout: Duration) -> Result<Option<LockGuard>>;
-}
-```
-
-- 拿不到返回 `Ok(None)`，后端出错才是 `Err`。锁不可重入：自己持有的 key 再拿也拿不到
-- 阻塞版最多等 `timeout`，超时 `Ok(None)`；`timeout` 为 0 等于 `try_*`
-- `LockGuard`：`release().await` 释放并拿到结果；没调就 drop 的话 spawn 到后台释放，失败只打 WARN
-- 每个方法都能覆盖。后端不想提供的方法照常实现，返回 `LockErr::Unsupported`
-- 方法带 `impl Into<..>` 参数，不能 `dyn DistributedLock`，持有具体类型或者用泛型
-
-## 2. key
-
-| 方法 | key | 要不要注册 |
-|---|---|---|
-| `try_lock` / `lock` | `LockKey`：`lock_key!` 生成，`<9 位编号>:<模板渲染结果>` | `#[derive(hy_lock_key)]` |
-| `try_lock_i64` / `lock_i64` | `LockKeyI64`：标准库能 `Into<i64>` 的类型，加上 `u64`（按位转） | 不用 |
-| `try_lock_i32` / `lock_i32` | `LockType`（锁类型）+ `LockKeyI32`（运行时的 id，标准库能 `Into<i32>` 的类型加上 `u32`） | 锁类型要 `#[derive(hy_lock_type)]` |
-
-`LockType`、`LockKey` 的字段私有，只能由宏生成，随手写的数字、字符串编译不过。
-
-`LockKeyI64::xxh3_64(&key)?` 是使用方显式选的降级：把字符串 key 哈希成 i64 走 `*_i64`（PG 上是 advisory lock，不用锁表）。
-算法是 `hygiea::string::xxh3_64`（xxh3-64，seed 0），跨进程、跨版本一致；有损：n 个 key 里至少一对碰撞的概率约 n² / 2⁶⁵（100 万个约 3 × 10⁻⁸），
-撞上的两个 key 互相多锁，不会少锁；和直接传数字的 `try_lock_i64` 共用同一个空间。放在 `LockKeyI64` 上而不是 `LockKey` 上，
-也不做 `Into<LockKeyI64>`，免得 `try_lock_i64(lock_key!(..))` 悄悄哈希：调用方写出 `xxh3_64` 才算选了降级。
-
-后端可以限制 key 的长度（MySQL 的锁名最长 64 个字符），超长时加锁返回 `LockErr::InvalidKey`，不截断、不哈希、不发给后端。
-开头的 `<9 位编号>:` 固定占 10 个字符，模板渲染结果要按最长的情况算。
-
-### 编号
-
-规则和错误码一样，代码也共用（hygiea-macros 的 `prefix.rs`、`template.rs`）：
-
-- 9 位 = 项目前缀 3 位（Cargo.toml 的 `err_code_project_prefix`，和错误码共用）+ 模块前缀 + 编号
-  - `#[lock_module_prefix = "02"]`：2 位，编号 4 位，给使用 hygiea 的项目
-  - `#[lock_internal_module_prefix = "003"]`：3 位，编号 3 位，只给 hygiea 自己（项目前缀 999）
-  - 都不写：编号 6 位
-- `hy_lock_type` 和 `hy_lock_key` 共用一套编号、一个注册表（`LOCK_REGISTRATIONS`），和错误码是两套
+- `LockType`、`LockKey` 的字段私有，只能由宏生成，随手写的数字、字符串编译不过。
+- `LockKeyI64::xxh3_64(&key)?` 放在 `LockKeyI64` 上而不是 `LockKey` 上，也不做 `Into<LockKeyI64>`，免得 `try_lock_i64(lock_key!(..))` 悄悄哈希：
+  调用方写出 `xxh3_64` 才算选了降级。碰撞概率：n 个 key 里至少一对碰撞约 n² / 2⁶⁵（100 万个约 3 × 10⁻⁸）
+- 编号的规则和错误码一样，代码也共用（hygiea-macros 的 `prefix.rs`、`template.rs`）；`hy_lock_type` 和 `hy_lock_key` 共用一套编号、
+  一个注册表（`LOCK_REGISTRATIONS`），和错误码是两套
 - 查重：同一个 enum 里宏报错；同模块靠常量 `HYGIEA_LOCK_<9 位>` 重名（E0428）；跨 crate 靠导出符号
   `__hygiea_lock_<9 位>`（Linux 链接期），都没拦住的由 core 的 ctor 启动时查重，打一行报错后退出
 - `999999999` 是 hygiea 内置保留的（`hygiea_core::builtin::LOCK_TYPE` / `LOCK_CODE`，常开、文档里隐藏），注册表里手动占着一条，
@@ -65,22 +23,8 @@ pub trait DistributedLock: Send + Sync {
   `builtin::Lock`，比如 hygiea-db 建表时串行化的 `pg_advisory_xact_lock(999999999, Lock::LiveConfigDdl / LockTableDdl)`
   （`(int, int)` 空间，和业务 `try_lock_i64` 的 bigint 空间分开，业务的锁类型又注册不到 999 段，所以不会撞）。
   `builtin` 不跟 `lock` feature，只开 `db-live-config` 不会带上锁
-
-### 字符串 key 的模板
-
-和 `err_tpl` / `err!` 一样（`lock_key!` 和 `err!` 共用 `__hygiea_tpl_args!`）：
-
-```rust
-lock_key!(K::Fixed)                          // 模板没有变量
-lock_key!(K::One, user_id)                   // 正好一个变量
-lock_key!(K::Two, { "shop": s, "day": d })   // 多个变量
-```
-
-模板语法、写法和变量个数、`{ .. }` 里的字面量 key 在编译期检查；key 用了表达式时查不了，运行时缺变量
-`LockKey::as_str()` 返回 `LockErr::InvalidKey`。
-
-最终的 key 带着编号，不同模板渲染出来不会撞；同一个模板有多个变量时，值里带分隔符会有歧义
-（`{{ a }}:{{ b }}` 下 `"x:y"` + `"z"` 和 `"x"` + `"y:z"` 一样），只能靠使用方别这么传。
+- `lock_key!` 和 `err!` 共用 `__hygiea_tpl_args!`：模板语法、写法和变量个数、`{ .. }` 里的字面量 key 在编译期检查；
+  key 用了表达式时查不了，运行时缺变量由 `LockKey::as_str()` 报错
 
 ### 拦不住的
 
@@ -88,35 +32,12 @@ lock_key!(K::Two, { "shop": s, "day": d })   // 多个变量
   和 `HyErr::new` 一样只靠"不用 `__private`"的约定
 - 绕过 hygiea 直接操作库（手写 `pg_advisory_lock`、改锁表）
 
-## 3. hygiea-db 里的锁：`DbLockClient`
+## 2. hygiea-db 的 `DbLockClient`
 
-PG、MySQL 的连接池组件（sqlx、SeaORM 各一个）配置的 `uses` 带 4 时，把 `DbLockClient` **匿名**放进 Resources，整个应用只能有一个：
-两个组件都开锁（哪种数据库都算）时 Registry 启动前报 `DuplicateProvider`。`DbLockClient` 实现 `DistributedLock`，里面是哪种数据库
-由建它的组件决定（`Pg(PgLock)` / `MySql(MySqlLock)`），调用方 `resources.require::<DbLockClient>()` 拿到就用，不用管。
+`DbLockClient` 里面是哪种数据库由建它的组件决定（`Pg(PgLock)` / `MySql(MySqlLock)`），按数据库分发。
 实现每种数据库只有一份（`lock/sqlx/postgres.rs`、`lock/sqlx/mysql.rs`），sqlx、SeaORM 的组件共用（SeaORM 交出底层的 sqlx 池）。
-不经过 Registry 时用 `DbResources::from_config` 建。
 
-### 配置：`[db.lock]`（`PgLockConfig` / `MySqlLockConfig`）
-
-```toml
-[db]
-uses = 5                   # 1 业务池 + 4 锁；只给锁用写 4
-[db.lock]
-# table_prefix = "foo"     # PG 锁表前缀：不写用应用名；"foo" 或 "foo_" 都是 foo_lock；"" 时表名是 lock。没开 lock-row 时不用，MySQL 没有这项
-# max_connections = 20     # 锁用的池最多几条连接，不写沿用 [db.pool] 的
-[db.lock.connect]          # 换几项连接参数：只写和 [db.connect] 不一样的项，不写的沿用（有业务池时才能写）
-# username = "locker"
-```
-
-- 有业务池（`uses` 带 1）、`connect`、`max_connections` 都不写：锁和业务池共用连接，同时持有的锁加上业务查询要在业务池的 `max_connections` 以内
-- 写了任意一项，或者没有业务池（`uses = 4`）：单独建一个锁用的池，不和业务抢连接。连接参数是 `connect` 逐项盖到 `[db.connect]` 上，
-  PG 的 `application_name` 是 `<应用名>-lock`；池参数只有 `max_connections` 能配（没有 `[db.pool]` 时用业务池的默认值），其余固定
-  （不预建连接、空闲 10 分钟回收、最长存活 30 分钟、拿之前先检查，acquire 超时跟 `[db.pool]` 走）。空闲回收、到期替换只作用于还回池里的连接，
-  不会断开持锁的那条。不是 `connect_lazy` 时启动时连上确认能用；组件关闭时一起关
-- 连别的库：只差几项（用户、schema）写 `[db.lock.connect]`；整个库都不一样的另起一个 `uses = 4` 的组件（没有业务池时不能写覆盖段，
-  连接参数直接写在 `[db.connect]` 里）
-
-## 4. PostgreSQL 实现
+## 3. PostgreSQL
 
 ```text
 try_lock_i64(k)  ── 锁的池取连接 ──> BEGIN; SET LOCAL ..(lock_timeout = 0) ──> SELECT pg_try_advisory_xact_lock(k)
@@ -130,28 +51,18 @@ lock_i64(k, t)   ── 校验 t ──> BEGIN; SET LOCAL ..(lock_timeout = t) �
   `lock_timeout` 按方法设，`statement_timeout`、`idle_in_transaction_session_timeout`、`transaction_timeout` 设 0。
   只在锁事务里生效，DBA 在库、用户上设的超时既打断不了等锁、也断不开持锁，业务查询照旧受保护；经 PgBouncer transaction 模式也一样。
   READ COMMITTED 让 advisory lock 不挡同库的 vacuum。只支持最新的 PG（`transaction_timeout` 是 PG 17 加的）
+- 为什么是每个事务里 `SET LOCAL`，不是锁专用池的启动参数、单独的锁用户、要求 DBA 设成 0 或启动时校验（实测见 git 历史里的
+  `docs/todo/lock.md` 调查记录二）：启动参数经 PgBouncer transaction 模式会被拒或悄悄丢掉，而框架检测不出中间有没有 PgBouncer；
+  单独用户要 DBA 多一套账号；要求库里是 0 会让业务查询失去保护。`SET LOCAL` 直连、PgBouncer 都生效，回滚后恢复原值、不泄漏给下一个客户端，
+  和 BEGIN 合在一条消息里不增加往返
+- READ COMMITTED 是固定的（不跟着库的 `default_transaction_isolation` 走）：REPEATABLE READ / SERIALIZABLE 的快照留着 xmin，会挡住同库的 vacuum
 - 不用 sqlx 的 `Transaction`，自己取连接、发 BEGIN / ROLLBACK：BEGIN 那条消息中途报错、加锁出错、等锁时被取消、回滚失败，
   连接都直接关掉不还回池（sqlx 的自定义 BEGIN 中途报错时会把处于失败事务的连接还回池，下一个使用者收到 25P02）
+- `try_lock_i32` 用原生的 `(int, int)` 形式，`pg_locks` 里看到的是 `classid = 锁类型, objid = key2, objsubid = 2`
 
-- 阻塞版的 `timeout` 必须是整数毫秒（`lock_timeout` 的单位）。0 分流到 `try_*`；带不足 1 毫秒零头的、不足 1 毫秒的（转成 0 在 PG 里是不限时）、
-  超过 `i32::MAX` 毫秒的（`lock_timeout` 的上限，约 24.8 天）开事务之前就返回 `LockErr::InvalidTimeout`，不发 SQL
+### 字符串 key：锁表（`lock-row`）
 
-- 每把锁占一条连接（事务一直开着），持锁时间就是事务时间；连接数的预算见上面的配置
-- 进程崩溃、连接断开，PG 中止事务，锁跟着释放，不需要租约
-- `try_lock_i32` 用原生的 `pg_try_advisory_xact_lock(int, int)`：PG 上和 `try_lock_i64` 是两个 key 空间，
-  和 core 的默认实现（合成一个 i64）不同。`pg_locks` 里看到的是 `classid = 锁类型, objid = key2, objsubid = 2`
-- 字符串 key（feature `lock-row`）：BEGIN（同上）──> `INSERT INTO {p}lock (key) VALUES ($1)`，不提交
-  - 别人持有（插了没提交）时撞主键，等它的事务结束：对方回滚就插入成功、拿到锁；多个人在等时只有一个插入成功，其余的接着等新的持有者
-  - 55P03 ──> `Ok(None)`。INSERT 没有 `NOWAIT` / `SKIP LOCKED`，`try_lock` 用最小的 1 毫秒（0 是不限时），
-    没人持有时不等，有人持有时约 1 毫秒后返回；没拿到时 PG 服务端日志记一条 lock timeout 的 ERROR
-  - 释放是回滚，行跟着撤掉，表一直是空的。不用"行先提交、再 `FOR UPDATE`"：那样每个用过的 key 留一行，
-    按订单号这类 key 加锁时表一直增长，而且行一旦被删，`FOR UPDATE` 查不到行也会被当成拿到锁
-- 没开 `lock-row` 时字符串 key 返回 `LockErr::Unsupported`，不发 SQL、不建表，不会悄悄换成别的实现：字符串 key 在 PG 上只有锁表这一种语义。
-  不想建表的调用方自己 `LockKeyI64::xxh3_64(&key)?` 转成 i64 走 `try_lock_i64`（取舍见第 2 节）
-  - 哈希出来的那把锁和锁表里同一个字符串 key 的那把是两样东西，互不互斥：同一个 key 不要两种方式混用
-  - feature 在整个依赖图里合并，任何一个依赖开了 `hygiea-db/lock-row` 就有锁表实现，用 `cargo tree -e features` 确认
-
-### 锁表
+BEGIN（同上）──> `INSERT INTO {p}lock (key) VALUES ($1)`，不提交：
 
 ```sql
 CREATE UNLOGGED TABLE {p}lock (
@@ -159,17 +70,20 @@ CREATE UNLOGGED TABLE {p}lock (
 )
 ```
 
-- `{p}` 是 `table_prefix`（不写用应用名加 `_`，可以是空的）。建在锁的连接 search_path 的第一个 schema（`[db.lock.connect]` 可以换）。建表规则和动态配置一样（共用 `sql/` 的规则）：表在、列对上且是 UNLOGGED 就用；不在就在事务里
-  加 advisory lock `(builtin::LOCK_TYPE, Lock::LockTableDdl)`、再查一遍后建；列对不上或不是 UNLOGGED 不动它，拒绝启动（`RepoErr::LockTableSchemaMismatch`），DDL 打在日志里
-- 建锁的时候建（组件启动、`DbResources::from_config`）；`connect_lazy` 时第一次用字符串 key 时建
-- 行永远不提交，表一直是空的。UNLOGGED：插入不写 WAL；崩溃后清空、不复制到从库，对空表没有影响
-- 持有中的行别的会话看不到，查"谁持有某个 key"只能从 `pg_locks` 的 transactionid 等待关系反推
-- 不要手动往表里插入并提交：撞上已提交的行时 INSERT 立即报唯一约束冲突，这个 key 一直拿不到（`LockErr::AcquireFailed`）
-- 已建好的表不会自动升级，改结构要同时改 `sql/postgres/lock.sql` 和 `sql/postgres/lock.rs` 的 `TABLE_COLUMNS`，已有的库手动改
+- 别人持有（插了没提交）时撞主键，等它的事务结束：对方回滚就插入成功、拿到锁；多个人在等时只有一个插入成功，其余的接着等新的持有者
+- INSERT 没有 `NOWAIT` / `SKIP LOCKED`，所以 `try_lock` 用最小的 1 毫秒 `lock_timeout`（0 是不限时）
+- 不用"行先提交、再 `FOR UPDATE`"：那样每个用过的 key 留一行，按订单号这类 key 加锁时表一直增长，而且行一旦被删，
+  `FOR UPDATE` 查不到行也会被当成拿到锁。选现在的写法是为了已提交的行数不随 key 的个数增长，不是为了写得少：
+  `FOR UPDATE` 每次只写一条行锁记录、不留死元组；现在的写法每次留一个死元组和死索引项给 vacuum，UNLOGGED 后只剩 abort 记录写 WAL。
+  两种写法持锁期间都分到 xid、都挡同库的 vacuum
+- `DEFERRABLE` 唯一约束不行：插入时不等、提交时才检查，而锁永远回滚，等于不互斥
+- 建表：在事务里加 advisory lock `(builtin::LOCK_TYPE, Lock::LockTableDdl)`、再查一遍后建；规则和动态配置共用 `sql/` 的检查。
+  已建好的表不会自动升级，改结构要同时改 `sql/postgres/lock.sql` 和 `sql/postgres/lock.rs` 的 `TABLE_COLUMNS`，已有的库手动改
+- 没开 `lock-row` 时字符串 key 返回 `Unsupported`，不悄悄换成别的实现：字符串 key 在 PG 上只有锁表这一种语义
 
-## 5. MySQL 实现：`GET_LOCK`
+## 4. MySQL：`GET_LOCK`
 
-会话级的命名锁，三种 key 都用它，不开事务、不建表，和 `lock-row` 无关（`lock/sqlx/mysql.rs` 的 `MySqlLock`，SQL 在 `sql/mysql/lock.rs`）。
+`lock/sqlx/mysql.rs` 的 `MySqlLock`，SQL 在 `sql/mysql/lock.rs`。
 
 ```text
 try_lock(k)     ── 锁的池取连接 ──> SET SESSION wait_timeout = 上限, @hygiea_lock = GET_LOCK(name, 0) ──> SELECT @hygiea_lock
@@ -178,26 +92,9 @@ try_lock(k)     ── 锁的池取连接 ──> SET SESSION wait_timeout = 上
 lock(k, t)      ── 校验 t ──> 同上，GET_LOCK(name, 秒数)：原生等待，对方一释放马上拿到
 ```
 
-- 锁名：字符串 key 原样（最长 64 个字符，超了返回 `LockErr::InvalidKey`，不截断、不哈希、不发 SQL）；整数 key 是 `i64:<数字>`、
-  `i32:<锁类型>:<id>`，两个 key 空间，和字符串 key（以 9 位编号开头）也不会撞
-- `timeout` 必须是整数秒（`GET_LOCK` 按秒四舍五入），至少 1 秒（0 分流到 try），否则返回 `LockErr::InvalidTimeout`，不发 SQL
-- DBA 设的超时打断不了：等锁用 `SET @v = GET_LOCK(..)`（`max_execution_time` 只打断 SELECT）；拿锁的同一条语句把会话的
-  `wait_timeout` 调到上限，持锁期间连接空闲也不会被断开
-- 加锁、释放中途出错或被取消（连接上可能还挂着锁、`wait_timeout` 没恢复）时，连接从池里摘下来直接断开，不还回池；
-  不用 `close_on_drop`：sqlx 的 MySQL 连接要先读完上一条结果才发关闭，等锁时被取消会一直占着池的名额。断开即释放锁
-- 每把锁各占一条连接（一个会话），MySQL 的死锁检测管不到：A 持有 1 等 2、B 持有 2 等 1 时两边等到各自的超时返回 `Ok(None)`
-  （PG 每把锁一个事务，也一样）
+- 加锁、释放中途出错或被取消时，连接从池里摘下来直接断开，不还回池。不用 `close_on_drop`：sqlx 的 MySQL 连接要先读完上一条结果
+  才发关闭，等锁时被取消会一直占着池的名额。断开即释放锁
 
-## 6. 进程内的锁：`TokioLock`（hygiea-core，feature `lock-tokio`）
+## 5. 进程内的锁：`TokioLock`
 
-- `TokioLock::default()` 建，clone 出来的共用一张 key → `tokio::sync::Mutex` 的表（`DashMap`），key 精确匹配；
-  别的进程、另外建的 `TokioLock` 看不到
-- 只实现 `try_lock` / `lock`，整数 key 走默认实现转成字符串 key
-- 阻塞版直接等 Mutex（先到先得），不轮询
-- key 没人持有、没人在等时从表里删掉，表不会随 key 的个数一直长
-
-## 7. 还没做的
-
-- 方法分组和命名（`lock` 一直等、`try_lock_*_timeout`）、`WaitInterrupted`：讨论记录和实测数据见 [docs/todo/lock.md](../todo/lock.md)
-- Redis：`SET NX PX` + token，释放用 Lua 校验 token；要不要看门狗续期待定
-- 阻塞版的默认实现是轮询（最多 100ms 一次）：释放后最多 100ms 才发现、不公平、频繁打后端。有原生等待的后端覆盖它（PG、MySQL、`TokioLock` 已覆盖）
+key 没人持有、没人在等时从表里删掉（drop guard、等锁结束时检查），表不会随 key 的个数一直长。

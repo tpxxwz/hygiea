@@ -1,4 +1,5 @@
-//! 分布式锁（feature `lock`）：PG、MySQL 的连接池组件 `uses` 带 4 时，把 [`DbLockClient`] 匿名放进 Resources（整个应用只能有一个组件开），
+//! 分布式锁（feature `lock`）：PG、MySQL 的连接池组件 `uses` 带 4 时，把 [`DbLockClient`] 匿名放进 Resources（整个应用只能有一个组件开，
+//! 两个都开时 Registry 启动前报 `DuplicateProvider`），
 //! 它实现 hygiea-core 的 [`DistributedLock`](hygiea_core::lock::DistributedLock)，用法和 key 的规则见 `hygiea::lock`。
 //!
 //! ```ignore
@@ -24,7 +25,24 @@
 //! - 阻塞版用 `lock_timeout` 原生等待，超时返回 `Ok(None)`；`timeout` 为 0 等于 `try_*`。`timeout` 精度是毫秒，
 //!   必须是整数毫秒（`1.9ms` 这种带零头的报错），在 1 毫秒到 `i32::MAX` 毫秒（约 24.8 天，`lock_timeout` 的上限）之间（0 除外），
 //!   否则返回 `LockErr::InvalidTimeout`，开事务之前就报错，不发任何 SQL
+//! - DBA 在库、用户上设的超时（`lock_timeout`、`statement_timeout`、`idle_in_transaction_session_timeout`、`transaction_timeout`）
+//!   打断不了等锁、也断不开持锁：锁的事务里把它们单独设好，业务查询照旧受保护，经 PgBouncer transaction 模式也一样。
+//!   因此要 PG 17 以上（`transaction_timeout` 是 17 加的）
 //! - 锁表的建表规则和动态配置一样：表在、列对上且是 UNLOGGED 就用，不在就建，对不上拒绝启动。启动时建（`connect_lazy` 时第一次用字符串 key 时建）
+//!
+//! # 限制（PG、MySQL 都是）
+//!
+//! - **只保证连接正常时互斥**：`pg_terminate_backend`、网络断开、重启、主库切换时锁跟着连接放掉，但持有 guard 的业务不会停，
+//!   另一个实例这时能拿到锁，两边同时执行；`release()` 报错只说明释放没确认，撤销不了之前的副作用。
+//!   不可重复的写入要靠业务幂等、条件更新或 fencing token（现在的接口不提供 token）
+//! - **连接预算要算上等锁的**：持有的和正在等的锁各占一条连接。拿着锁再用同一个池做业务查询，池小时会等自己占着的连接；
+//!   两个任务分别持有 A、B 再互相等 B、A 时数据库的死锁检测看不到，只能等各自的超时。多把锁约定全局的获取顺序
+//! - **不保证先来先得**：多个人在等时谁先拿到不确定（`TokioLock` 是先到先得）
+//! - **调用方取消等待**（外层 `timeout`、`select!`、任务 abort）：客户端这边把连接关掉、池里马上空出位置；但 PG 后端等锁时不读客户端连接，
+//!   照样挂在锁队列里占一个服务端连接，直到拿到锁才发现断了
+//! - **整数 key 是库级共享的**：advisory lock 按库区分，不按 schema、用户、应用。几个项目共用一个库（比如单独的协调库）时，
+//!   `try_lock_i64(n)` 的裸数字互相冲突；`try_lock_i32` 的锁类型带项目前缀，各项目的 `err_code_project_prefix` 不重复就不冲突，
+//!   但同一个项目部署多份（prod / staging 共用一个库）会冲突。要跨部署隔离用 `lock-row` 的字符串 key（按应用的表区分）或各用各的库
 //!
 //! # MySQL：`GET_LOCK`
 //!
@@ -34,13 +52,10 @@
 //! - try 是 `GET_LOCK(name, 0)`，立刻返回；阻塞版是原生等待，对方一释放马上拿到。`timeout` 必须是整数秒
 //!   （`GET_LOCK` 按秒四舍五入，0.4 秒等于不等），至少 1 秒（0 除外），否则返回 `LockErr::InvalidTimeout`，不发 SQL
 //! - **锁名最长 64 个字符**：字符串 key 开头的 `<9 位编号>:` 占 10 个，模板渲染结果最多 54 个字符。超过了返回
-//!   `LockErr::InvalidKey`，不截断、不哈希、不发 SQL。模板里有长度不固定的变量（名字、路径）时按最长的情况算。整数 key 是 `i64:<数字>`、
-//!   `i32:<类型>:<id>`，两个 key 空间，和字符串 key（以 9 位编号开头）也不会撞
+//!   `LockErr::InvalidKey`，不截断、不哈希、不发 SQL。模板里有长度不固定的变量（名字、路径）时按最长的情况算
 //! - DBA 设的超时打断不了：等锁用 `SET @v = GET_LOCK(..)`（`max_execution_time` 只打断 SELECT）；拿锁的同一条语句把会话的
 //!   `wait_timeout` 调到上限，持锁期间连接空闲也不会被断开，释放（或没拿到）时恢复成全局值再还回池。
 //!   加锁、释放中途出错或被取消（连接上可能还挂着锁、`wait_timeout` 没恢复）时把连接关掉，不还回池
-//! - 每把锁各占一条连接（一个会话），MySQL 的死锁检测管不到：调用方 A 持有 1 等 2、B 持有 2 等 1 时，
-//!   两边等到各自的超时返回 `Ok(None)`（PG 每把锁一个事务，也一样）
 //!
 //! # 开了 `lock-row` 时的字符串 key：锁表
 //!
@@ -53,7 +68,9 @@
 //!   没拿到时 PG 服务端日志会记一条 `ERROR: canceling statement due to lock timeout`（默认 `log_min_error_statement`
 //!   还会带上语句），高频 try 时注意日志量
 //! - 持有中的行没提交，别的会话查表看不到，查"谁持有某个 key"只能从 `pg_locks` 的 transactionid 等待关系反推
-//! - 每次加锁留下一个回滚掉的元组和索引项，由 autovacuum 清理
+//! - 每次加锁留下一个回滚掉的元组和索引项，由 autovacuum 清理；回收跟不上（高频加锁、长持锁）时表文件照样会膨胀
+//! - **持锁期间挡住同库的 vacuum**：插入的行让持锁的事务分到了 xid，持锁越久，这个库里所有表的死元组越清不掉。
+//!   持锁时间要短；持锁久的场景用单独的库给锁（`[db.lock.connect]` 或 `uses = 4` 的组件），或者用整数 key（advisory lock 不挡）
 //! - 不要手动往表里插入并提交：撞上已提交的行时 INSERT 立即报唯一约束冲突，这个 key 一直拿不到锁，返回 `LockErr::AcquireFailed`
 //!
 //! # 没开 `lock-row` 时的字符串 key：不支持
@@ -61,13 +78,11 @@
 //! `try_lock` / `lock` 返回 [`LockErr::Unsupported`](hygiea_core::lock::LockErr::Unsupported)，不发任何 SQL、不建表，
 //! 不会悄悄换成别的实现：字符串 key 只有锁表这一种语义。
 //!
-//! 想用字符串又不想建表的，调用方自己显式哈希：[`LockKeyI64::xxh3_64`](hygiea_core::lock::LockKeyI64::xxh3_64)`(&key)?`
-//! 转成 i64 交给 `try_lock_i64`。不要自己换别的哈希（尤其是 `DefaultHasher`，每个进程种子不同，锁会失效）。
-//! 这是调用方的取舍，要清楚：
+//! 想用字符串又不想建表的，调用方自己显式哈希成 i64 交给 `try_lock_i64`：
+//! [`LockKeyI64::xxh3_64`](hygiea_core::lock::LockKeyI64::xxh3_64)`(&key)?`，有损，取舍见它的文档。
 //!
-//! - 有损：不同 key 可能撞到同一个数，撞上的两个 key 互相多锁（不会少锁）。100 万个 key 里有一对碰撞的概率约 3 × 10⁻⁸
-//! - 和直接传数字的 `try_lock_i64` 共用一个空间：哈希值正好等于别处传的数字时也是同一把锁
-//! - 和锁表里同一个字符串 key 的那把锁是两样东西，互不互斥
+//! feature 在整个依赖图里合并：任何一个依赖开了 `hygiea-db/lock-row` 就有锁表实现，开不开要所有实例一致，
+//! 用 `cargo tree -e features` 确认。
 
 use std::time::Duration;
 
@@ -81,7 +96,11 @@ use crate::config::MySqlConnectOverride;
 #[cfg(lock_pg)]
 use crate::config::PgConnectOverride;
 
-/// 连接池配置里的 `lock` 段（PG 连接池，sqlx、SeaORM），`uses` 带 4 时才能写。有业务池、各项都不写时锁和业务池共用连接
+/// 连接池配置里的 `lock` 段（PG 连接池，sqlx、SeaORM），`uses` 带 4 时才能写。有业务池、各项都不写时锁和业务池共用连接。
+///
+/// 写了任意一项、或者没有业务池时单独建一个锁用的池：连接参数是 `connect` 逐项盖到 `[db.connect]` 上，`application_name` 是 `<应用名>-lock`；
+/// 池参数只有 `max_connections` 能配，其余固定（不预先建连接、空闲 10 分钟回收、最长存活 30 分钟、拿之前先检查，acquire 超时跟 `[db.pool]` 走）。
+/// 空闲回收、到期替换只作用于还回池里的连接，不会断开持锁的那条。不是 `connect_lazy` 时启动时连上确认能用，组件关闭时一起关
 #[cfg(lock_pg)]
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -97,7 +116,11 @@ pub struct PgLockConfig {
     pub connect: PgConnectOverride,
 }
 
-/// 连接池配置里的 `lock` 段（MySQL 连接池，sqlx、SeaORM），`uses` 带 4 时才能写。有业务池、各项都不写时锁和业务池共用连接
+/// 连接池配置里的 `lock` 段（MySQL 连接池，sqlx、SeaORM），`uses` 带 4 时才能写。有业务池、各项都不写时锁和业务池共用连接。
+///
+/// 写了任意一项、或者没有业务池时单独建一个锁用的池：连接参数是 `connect` 逐项盖到 `[db.connect]` 上；
+/// 池参数只有 `max_connections` 能配，其余固定（不预先建连接、空闲 10 分钟回收、最长存活 30 分钟、拿之前先检查，acquire 超时跟 `[db.pool]` 走）。
+/// 空闲回收、到期替换只作用于还回池里的连接，不会断开持锁的那条。不是 `connect_lazy` 时启动时连上确认能用，组件关闭时一起关
 #[cfg(lock_mysql)]
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]

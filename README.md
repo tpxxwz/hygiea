@@ -26,7 +26,7 @@
 | 配置加载 | 环境配置文件 → 额外配置文件 → 环境变量 → 命令行，后面的覆盖前面的；环境用 `--env` 或 `HYGIEA_ENV` 选 |
 | 优雅关闭 | 收到 Ctrl+C / SIGTERM 后先关 Deferred 组件（停止接请求），再按启动的逆序关其余组件，每个组件单独计时，超时强制结束；支持关闭前延迟，方便 k8s 摘流量 |
 | 日志 | 启动时按配置初始化 tracing（控制台、按时间滚动的文件） |
-| 现成组件 | 数据库连接池（sqlx / SeaORM × PostgreSQL / SQLite）、Redis 连接池、HTTP 服务（axum）、gRPC 服务（tonic）、AWS S3 客户端，见下文「组件」 |
+| 现成组件 | 数据库连接池（sqlx / SeaORM × PostgreSQL / MySQL / SQLite）、Redis 连接池、HTTP 服务（axum）、gRPC 服务（tonic）、AWS S3 客户端，见下文「组件」 |
 
 ### 基础能力（常开）
 
@@ -39,6 +39,7 @@
 | 环境变量（`hygiea::env`） | 环境变量读取 |
 | 字符串（`hygiea::string`） | 带缓存的正则，模板渲染（`fmt_tpl!`、`fmt_tpl_once!`），字符串固定地映射成整数（`xxh3_64` / `xxh32`，跨进程结果一样，不是解析数字） |
 
+<!-- check:features -->
 ### 其他可选 feature
 
 | Feature | 开启什么 |
@@ -47,6 +48,7 @@
 | `log` | tracing 初始化：控制台和按时间滚动的文件输出、过滤，可以脱离 `app` 单独用（会带上 `datetime-iana`） |
 | `lock` | 分布式锁的 trait（`hygiea::lock::DistributedLock`）和 key 的注册（`#[derive(hy_lock_type)]`、`#[derive(hy_lock_key)]`、`lock_key!`），后端由组件实现（见 `db-lock`），见下文「分布式锁」 |
 | `lock-tokio` | 进程内的锁 `hygiea::lock::TokioLock`：tokio 的 Mutex 实现 `DistributedLock`，不跨进程（会带上 `lock`） |
+| `live-config` | 动态配置的 `#[derive(Live)]`（`hygiea::db::live_config::Live`），单开没用，经 `db-live-config` 打开，不在 `full` 里 |
 | `redact` | 日志打码：`#[redact]` 属性，标了 `#[redact(mask)]` / `#[redact(skip)]` 的字段只在序列化进日志时打码（任意嵌套层级都生效），正常序列化不受影响 |
 | `datetime-iana` | IANA 时区和系统本地时间（`*_local` 方法） |
 | `datetime-chrono` | 和 chrono 互相转换 |
@@ -62,13 +64,13 @@
 |---|---|---|
 | `db-sqlx` / `db-seaorm` | `hygiea-db`（`sqlx` / `seaorm`） | 选框架，和下面的数据库组合出连接池组件；开 `db-sqlx` 或 `db-seaorm` 就有 `hygiea::db::HyUtcDateTime` |
 | `db-postgres` / `db-sqlite` / `db-mysql` | `hygiea-db`（`postgres` / `sqlite` / `mysql`） | 选数据库，对开了的框架都生效。MySQL 要 8.0 以上 |
-| `db-live-config` | `hygiea-db`（`live-config`） | 数据库配置表（动态配置）：组件的 `uses` 带 2 时按组件名提供 `hygiea::db::DbLiveConfig`（`bind` / `bind_all` 绑到 struct），改了表程序自动拿到新值。PG 靠 NOTIFY 推送，MySQL、SQLite 轮询；`[db.live_config]` 可以改表名前缀、轮询间隔，覆盖段换 schema / 用户 |
-| `db-lock` | `hygiea-db`（`lock`），带上 `lock` | 分布式锁：PG、MySQL 组件的 `uses` 带 4 时匿名提供 `hygiea::db::DbLockClient`（实现 `DistributedLock`，整个应用只能有一个）。PG 整数 key 用原生 advisory lock，字符串 key 要开 `db-lock-row`（不开返回 `LockErr::Unsupported`，想不建表的自己 `LockKeyI64::xxh3_64` 后走 i64）；MySQL 全部用 `GET_LOCK`、不建表，锁名最长 64 个字符；`[db.lock]` 可以给锁单独的池、覆盖连接参数 |
-| `db-lock-row` | `hygiea-db`（`lock-row`），带上 `db-lock` | PG 的字符串 key 用 `{前缀}lock` 表（前缀默认应用名加 `_`，`[db.lock] table_prefix` 可改）（UNLOGGED，插入不提交的行、靠主键冲突互斥），精确；开不开要所有实例一致，见设计说明。和 MySQL 无关 |
+| `db-live-config` | `hygiea-db`（`live-config`） | 数据库配置表（动态配置）：组件的 `uses` 带 2 时按组件名提供 `hygiea::db::DbLiveConfig`，改了表程序自动拿到新值，见下文「动态配置」 |
+| `db-lock` | `hygiea-db`（`lock`），带上 `lock` | 分布式锁：PG、MySQL 组件的 `uses` 带 4 时匿名提供 `hygiea::db::DbLockClient`（实现 `DistributedLock`），见下文「分布式锁」 |
+| `db-lock-row` | `hygiea-db`（`lock-row`），带上 `db-lock` | PG 的字符串 key 用锁表实现；不开时 PG 不支持字符串 key。和 MySQL 无关 |
 | `redis-fred` | `hygiea-redis`（`fred`） | `hygiea::redis::RedisComponent` / `FredRedisPool` |
 | `http-axum` | `hygiea-http`（`axum`） | `hygiea::http::AxumComponent` |
-| `http-client-reqwest` | `hygiea-http-client`（`reqwest`） | `hygiea::http_client::reqwest_client::ReqwestComponent` / `ReqwestConfig`，请求 API 也在这个模块；在 `Resources` 中提供 `ReqwestClient` |
-| `http-client-reqwest-debug-log` | `hygiea-http-client`（`debug-log`，带上 `reqwest`） | `ReqwestConfig::debug`：日志带原文和请求头、响应头，只在 dev-dependencies 里开 |
+| `http-client-reqwest` | `hygiea-http-client`（`reqwest`） | `hygiea::http_client::reqwest_client`：`ReqwestComponent`，在 `Resources` 中提供 `ReqwestClient`，见下文「HTTP 客户端与日志打码」 |
+| `http-client-reqwest-debug-log` | `hygiea-http-client`（`debug-log`，带上 `reqwest`） | 带原文和请求头、响应头的 debug 日志，只在 dev-dependencies 里开 |
 | `grpc-tonic` | `hygiea-grpc`（`tonic`） | `hygiea::grpc::TonicComponent` |
 | `aws-s3` | `hygiea-aws`（`s3`） | `hygiea::aws::AwsS3Component` / `AwsConfig`；在 `Resources` 中提供 `AwsS3Client`（`Deref` 到 `aws_sdk_s3::Client`） |
 
@@ -82,32 +84,10 @@ db 的三个维度各自独立、只增加功能，同时打开的组合才有�
 | `db-seaorm` | `db-postgres` | `SeaOrmPgComponent` / `SeaOrmPgPool` | 支持（NOTIFY） | 支持 |
 | `db-seaorm` | `db-mysql` | `SeaOrmMySqlComponent` / `SeaOrmMySqlPool` | 支持（轮询） | 支持（`GET_LOCK`，`db-lock-row` 不影响） |
 | `db-seaorm` | `db-sqlite` | `SeaOrmSqliteComponent` / `SeaOrmSqlitePool` | 支持（轮询） | — |
+<!-- /check:features -->
 
 6 个组件都是同一个泛型组件 `DbComponent` 的别名，提供什么由配置的 `uses` 决定，按位加：1 业务池、2 动态配置、4 锁，不写是 1。
-没带的位对应的段（`[db.pool]`、`[db.live_config]`、`[db.lock]` ..）写了启动报错。几个库推荐都放在应用配置的 `[db.<名字>]` 下，注册时组件名和字段名写成一样：
-
-```toml
-[db.main]                     # PG 主库：业务池 + 动态配置
-uses = 3
-[db.main.connect]
-host = "pg-main"
-[db.main.live_config.connect] # 动态配置同一个库，换个用户、schema
-username = "app_config"
-schema_search_path = "config"
-
-[db.coord]                    # MySQL：只给锁用，没有业务池
-uses = 4
-[db.coord.connect]
-host = "mysql-coord"
-```
-
-```rust
-let pool = resources.require_named::<SqlxPgPool>("main")?;
-let sync = resources.require_named::<DbLiveConfig>("main")?.bind("sync", Sync::default()).await?;
-let lock_client = resources.require::<DbLockClient>()?; // 里面是哪种数据库调用方不用管
-```
-
-不经过 Registry（测试、脚本）用 `DbResources::from_config` 直接建。完整的规则见 `hygiea-db` 的 crate 文档
+配置分段、多个库怎么注册、不经过 Registry 怎么建，见 [`hygiea::db`](https://docs.rs/hygiea/latest/hygiea/db/index.html) 的 crate 文档。
 
 ## 快速开始
 
@@ -300,119 +280,23 @@ async fn run(db: &impl DistributedLock, order_id: u32, day: &str) -> hygiea::Res
 }
 ```
 
-- 不写模块前缀时编号 6 位；`999` 段给 hygiea 自己（3 位内部模块前缀 + 3 位编号），`999999999` 是 hygiea 内置保留的（`hygiea_core::builtin::LOCK_TYPE`：`try_lock_i64` 默认实现转成的字符串 key 的前缀、hygiea 组件自己用的锁）
-- 模板有多个变量时，值里不要带模板里的分隔符（`{{ a }}:{{ b }}` 下 `"x:y"` + `"z"` 和 `"x"` + `"y:z"` 是同一把锁）
-- 后端可以限制 key 的长度（MySQL 的锁名最长 64 个字符，去掉开头 10 个字符的编号，模板渲染结果最多 54 个），超长返回 `LockErr::InvalidKey`，不截断
-- 后端不提供的方法返回 `LockErr::Unsupported`；设计说明见 [docs/design/lock.md](docs/design/lock.md)
+编号规则、key 的限制、各后端的差异见 [`hygiea::lock`](https://docs.rs/hygiea/latest/hygiea/lock/index.html) 的模块文档，PG / MySQL 的实现见
+[`hygiea::db::lock`](https://docs.rs/hygiea/latest/hygiea/db/lock/index.html)，设计说明见 [docs/design/lock.md](docs/design/lock.md)。
 
-### HTTP 与日志打码
+### 动态配置
 
-需要 `http-client-reqwest` feature。每次请求在 INFO 级别打 `http call start` / `http call success`，失败打 WARN（可配置）。标了 `#[redact(mask)]` 的字段在这些日志里显示为 `"***"`（包括 params、请求体、URL，以及 `send` 解码出的响应体），实际发送和接收的仍是真实值。非 2xx 和解码失败的响应原样记录，因为排查问题需要看原文。
+需要 `db-live-config` 和一个数据库组件（比如 `db-sqlx` + `db-postgres`），组件的 `uses` 带 2：配置存在库里，改了表，运行中的程序自动拿到新值，
+`#[derive(Live)]` 生成按字段读的句柄。用法见 [`hygiea::db::live_config`](https://docs.rs/hygiea/latest/hygiea/db/live_config/index.html) 的模块文档，
+内部流程见 [docs/design/live-config.md](docs/design/live-config.md)。
 
-```rust
-use hygiea::Result;
-use hygiea::http_client::reqwest_client::{Json, Method, ReqwestClient, ReqwestConfig, RequestConfig};
-use hygiea::redact::redact;
-use serde::{Deserialize, Serialize};
+### HTTP 客户端与日志打码
 
-// #[redact] 必须写在 #[derive(Serialize)] 上面
-#[redact]
-#[derive(Serialize)]
-struct LoginReq {
-    user: String,
-    #[redact(mask)]
-    password: String,
-}
-
-#[redact]
-#[derive(Serialize, Deserialize)]
-struct LoginResp {
-    #[redact(mask)]
-    token: String,
-}
-
-async fn login(client: &ReqwestClient) -> Result<String> {
-    let req = LoginReq { user: "alice".into(), password: "p@ss".into() };
-    // 请求体 Json(..) 表示按 JSON 编码；send::<Json<LoginResp>> 表示按 JSON 解码，resp.body 是 LoginResp
-    let resp = RequestConfig::with_body(Method::POST, "https://api.example.com/login", Json(req))
-        .send::<Json<LoginResp>>(client)
-        .await?;
-    Ok(resp.body.token)
-}
-
-// client 只建一次并共享：连接池在它里面
-// let client = ReqwestClient::from_config(&ReqwestConfig::default(), &RegistryConfig::default()).await?; // from_config 来自 hygiea::app::ConfigResource
-```
-
-`send::<Decoder>` 的 `Decoder` 是解码器：`Json<T>` 解出 `T`，`String` / `Bytes` / `()` / `BodyStream` 解出它们自己。`resp.body` 的类型是解码器的输出，所以解码器要写在 turbofish 里，不能靠接收处的类型标注推断。自定义解码（拆 `{code, msg, data}` 外壳、解密……）实现 `FromBytes`，`Output` 可以是拆出来的业务数据。
-
-请求发出去之后失败（传输失败、非 2xx、响应解码失败）时，错误的 err_args 统一带 `method`、`url`、`status`（还没收到响应时是 `null`）；读完了 body 的，还带 `body` 原文，不渲染进对外消息。
-
-#### 重试
-
-`send` 的参数换成 `(&client, RetryCtx::new(次数, 策略))` 就带重试：没拿到解码成功的响应时，把这次的配置和失败信息（`SendFailure`：错误，以及传输失败的超时 / 建连标记，或者原始的 status、headers、body）交给策略。策略可以按这些信息改配置，返回 `RetryDecision`：
-
-- `Retry(cfg)`：确认可以重试，用这个配置再发；
-- `Stop(err)`：立即结束，不管还剩几次；
-- `Unknown(cfg)`：判断不了，原样再发，直到次数用完。
-
-`Retry` 和 `Unknown` 共用同一个次数上限。发出之前的错误（URL、params、header）不重试，直接返回。
-
-**只在两种情况下重试**：对方接口幂等（GET / PUT / DELETE，或者带了幂等键），或者根据错误调整请求后再发（401 换 token、签名过期重签……）。超时、读 body 中断时请求可能已经被对方执行了，不幂等的请求（下单、转账）不要原样重发。
-
-重试要求请求体整个在内存里（`Json`、`Form`、`Raw`、`Multipart`，也就是实现了 `Clone` 的），解码器实现 `FromBytes`（body 读完再解码）；流式的 `RawStream`、reqwest 原生的 `multipart::Form`、`BodyStream` 开不了重试，编译期报错。
-
-```rust
-use std::time::Duration;
-use hygiea::http_client::reqwest_client::{Auth, FailStage, RequestConfig, RetryCtx, RetryDecision, SendFailure};
-
-type Cfg = RequestConfig<(), ()>;
-
-let resp = RequestConfig::plain(Method::GET, url)
-    .auth(Auth::Bearer(token))
-    .send::<Json<Profile>>((&client, RetryCtx::new(3, |attempt: usize, cfg: Cfg, f: SendFailure| async move {
-        match &f.stage {
-            // 401：刷新 token 后再发
-            FailStage::Status(resp) if resp.status == 401 => match refresh_token().await {
-                Ok(token) => RetryDecision::Retry(cfg.auth(Auth::Bearer(token))),
-                Err(e) => RetryDecision::Stop(e),
-            },
-            // 4xx 是请求本身的问题，重试也没用
-            FailStage::Status(resp) if resp.status.is_client_error() => RetryDecision::Stop(f.err),
-            // 其他（超时、5xx……）：GET 幂等，退避后原样再发，直到次数用完
-            _ => {
-                tokio::time::sleep(Duration::from_millis(100 << attempt)).await;
-                RetryDecision::Unknown(cfg)
-            }
-        }
-    })))
-    .await?;
-```
-
-#### debug 日志
-
-测试里排查问题时，开 `http-client-reqwest-debug-log` feature（只放在 dev-dependencies 里），给 client 打开 `debug`：
-
-```rust
-let client = ReqwestClient::debug().await?; // 默认配置加 debug，等于 ReqwestClient::from_config(&ReqwestConfig::default().debug(true), &RegistryConfig::default()).await
-let client = ReqwestClient::from_config(&ReqwestConfig { timeout: Some(t), ..Default::default() }.debug(true), &RegistryConfig::default()).await?; // 要改别的配置时
-// 配置文件里是 debug = true
-
-// 建好之后也能改，原地生效，这个 client 的所有 clone（包括 Resources 里那份）一起变，下一次请求起按新值打
-client.set_debug(false);
-client.set_pretty(true); // JSON 缩进成多行，默认关（一行）
-```
-
-打开后不再打平时的单行日志，每次请求打两条，消息后面接一段 JSON（默认一行，`set_pretty(true)` 后另起一行缩进），无视 `enable_logging`，不打码：
-
-- `http call start`：`{method, url, request: {headers, params, body}}`
-- 结束（`http call success` / `non-2xx` / `decode failed` / `failed`）：`{method, url, status, elapsed_ms, request, response: {headers, body}, error}`，带上完整的请求，单独一条就能看懂
-
-`url` 是真正发出去的地址；请求头是请求自己的头补上 client 默认头，敏感头也是原值；JSON 的 params、body、响应 body 嵌套成对象，别的是字符串。级别和平时一样（成功 INFO，失败按 `failed_log_level`）。返回给调用方的错误和 `HttpResponse.url` 仍是打码的。请求头是照 reqwest 的规则算的，发送时才加的 `Host`、`Content-Length`、`Accept-Encoding`、cookie、代理认证头不在里面；传输失败没有 `response`；`BodyStream` 成功时 `response.body` 为 null。
+`http-client-reqwest` 提供 reqwest 客户端组件和请求 API：每次请求打一条开始、一条结束的日志，标了 `#[redact(mask)]` 的字段在日志里显示为 `"***"`，实际发送和接收的仍是真实值；可以带重试，测试里可以打开带原文的 debug 日志。
+用法见 [`hygiea::http_client::reqwest_client`](https://docs.rs/hygiea/latest/hygiea/http_client/reqwest_client/index.html) 的模块文档。
 
 ## 架构
 
-采用 facade 模式。使用方只依赖 `hygiea` 并选择 feature，其余 crate 都是内部实现。
+采用 facade 模式。使用方只依赖 `hygiea` 并选择 feature（写测试时另加 dev-dependency `hygiea-test`），其余 crate 都是内部实现。
 
 ```
 hygiea                         facade：重新导出全部内容，按 feature 开关
@@ -425,7 +309,7 @@ hygiea                         facade：重新导出全部内容，按 feature �
 |---|---|---|
 | `hygiea` | 是 | 使用方唯一需要依赖的 crate。重新导出 core 和各组件，由 feature 决定编译哪些 |
 | `hygiea-core` | 是 | 应用框架；错误处理、日志、打码、分布式锁的 trait、日期时间、环境变量、字符串、WebSocket 客户端 |
-| `hygiea-macros` | 是 | `#[derive(hy_err)]`、`#[derive(hy_lock_type)]` / `#[derive(hy_lock_key)]`、`#[component]` 和 `#[redact]` |
+| `hygiea-macros` | 是 | `#[derive(hy_err)]`、`#[derive(hy_lock_type)]` / `#[derive(hy_lock_key)]`、`#[component]`、`#[redact]` 和动态配置的 `#[derive(Live)]` |
 | `hygiea-db` | 是 | 数据库组件（PostgreSQL、MySQL、SQLite，sqlx / SeaORM），按配置的 `uses` 提供业务池、数据库配置表（动态配置，[设计说明](docs/design/live-config.md)）、分布式锁（PG、MySQL，[设计说明](docs/design/lock.md)）；SeaORM 的错误转换（`db!`）、事务、分页。用法见 crate 文档 |
 | `hygiea-redis` | 是 | Redis 连接池组件 |
 | `hygiea-http` | 是 | HTTP 服务组件 |
@@ -434,13 +318,8 @@ hygiea                         facade：重新导出全部内容，按 feature �
 | `hygiea-aws` | 是 | AWS SDK 组件（公共配置 + S3 客户端） |
 | `hygiea-test` | 是 | 给使用方写测试用，作为 dev-dependency：测试日志、mock HTTP 服务（httpmock + TOML cassette + Rhai）、测试分层宏（`#[container]` / `#[live]`）、启动容器 |
 | `hygiea-test-macros` | 是 | `hygiea-test` 的过程宏（`#[container]` / `#[live]`），经 `hygiea-test` 使用 |
-| `test-support` | 否 | hygiea 自己各 crate 的测试共用工具，只作为 dev-dependency |
-| `hygiea-examples` | 否 | 可运行的使用示例 |
-| `playground` | 否 | 临时调查和暂存代码 |
 
-各 crate 的模块说明，以及测试和示例放在哪：[docs/architecture.md](docs/architecture.md)。
-
-使用方不需要额外依赖（比如 `linkme`、`serde_json`）。宏生成的代码跟随你依赖时用的名字：依赖 `hygiea`、给它改名、或者只依赖 `hygiea-core` 都可以。需要覆盖时用 `#[hy_err(crate = "path")]` / `#[hy_lock_type(crate = "path")]` / `#[hy_lock_key(crate = "path")]` / `#[redact(crate = "path")]`。
+使用方不需要额外依赖（比如 `linkme`、`serde_json`）。宏生成的代码跟随你依赖时用的名字：依赖 `hygiea`、给它改名、或者只依赖 `hygiea-core` 都可以。需要覆盖时用 `#[hy_err(crate = "path")]` / `#[hy_lock_type(crate = "path")]` / `#[hy_lock_key(crate = "path")]` / `#[redact(crate = "path")]` / `#[live(crate = "path")]`（`live` 写 facade 的路径，后面接 `::db::live_config`）。
 
 ## 错误码体系
 
@@ -497,6 +376,8 @@ pub enum LegacyErrors {
 - 分布式锁的编号（锁类型、字符串 key）用同样的分段和查重规则，但是另一套编号，和错误码互不影响；hygiea 自己的锁编号也按上面内部模块前缀的区间分（core 的测试用 `090`～`099`，db 的测试用 `100`）。
 - HTTP 组件（`hygiea::http`）的错误响应：状态码一律 200，错误放在 body 的 `code` / `msg`。业务错误原样返回模板渲染出的消息；`999` 开头的框架内置错误模板参数里可能有内部信息，对外统一换成 `SysErr`（"System Error"），原错误只记在服务端日志里。输入校验这类要给用户看的错误，用项目自己前缀的错误码定义。
 
+<!-- 由 hygiea/tests/err_code_table.rs 生成，不要手改：tools/docs.py gen -->
+<!-- gen:err-codes -->
 | 错误码 | 变体 | 模板 |
 |---|---|---|
 | `99900001` | `BaseErr::DateError` | Date error: {{ cause }} |
@@ -505,6 +386,24 @@ pub enum LegacyErrors {
 | `99900004` | `BaseErr::TemplateError` | Template error: {{ cause }} |
 | `99900005` | `BaseErr::EnvError` | Environment variable not set: {{ name }} |
 | `99900006` | `BaseErr::NotPositive` | {{ param }} must be greater than 0: {{ op }} |
+| `99900101` | `AppErr::ComponentStartFailed` | component[{{ index }}] {{ type_name }}({{ name }}) failed to start |
+| `99900102` | `AppErr::TaskExited` | {{ type_name }}({{ name }}) background task {{ reason }} while running |
+| `99900103` | `AppErr::ComponentActivateFailed` | component[{{ index }}] {{ type_name }}({{ name }}) failed to activate |
+| `99900111` | `AppErr::ConfigMissing` | Config not set: {{ field }} |
+| `99900112` | `AppErr::InvalidConfig` | Invalid config: {{ cause }} |
+| `99900113` | `AppErr::ResourceMissing` | Resource missing: {{ resource }} |
+| `99900114` | `AppErr::DependencyCycle` | Component dependency cycle: {{ cycle }} |
+| `99900115` | `AppErr::DuplicateProvider` | Resource {{ resource }} provided by both {{ first }} and {{ second }} |
+| `99900121` | `AppErr::BindFailed` | Bind failed: {{ addr }} |
+| `99900122` | `AppErr::ConnectFailed` | Connect failed: {{ target }} |
+| `99900123` | `AppErr::InitFailed` | Component init failed: {{ cause }} |
+| `99900131` | `AppErr::StopFailed` | Component stop failed: {{ cause }} |
+| `99900199` | `AppErr::ComponentError` | Component error: {{ cause }} |
+| `99900202` | `BaseLogErr::AppenderFailed` | Create log file appender failed: {{ dir }} |
+| `99900203` | `BaseLogErr::InstallFailed` | Install global logger failed |
+| `99900204` | `BaseLogErr::FileNameOverlap` | Log layers {{ a }} and {{ b }} have overlapping file names in the same dir |
+| `99900205` | `BaseLogErr::InvalidFilter` | Invalid log filter: {{ filter }} |
+| `99900206` | `BaseLogErr::NoOutput` | No log output: console is disabled and no file layer is enabled |
 | `99900301` | `LockErr::AcquireFailed` | Acquire lock failed: {{ key }} |
 | `99900302` | `LockErr::ReleaseFailed` | Release lock failed: {{ key }} |
 | `99900303` | `LockErr::InvalidKey` | Invalid lock key: {{ cause }} |
@@ -535,65 +434,19 @@ pub enum LegacyErrors {
 | `99910123` | `HttpClientErr::WriteFailed` | Write response body failed |
 | `99910124` | `HttpClientErr::DecodeFailed` | Http response decode failed: {{ method }} {{ url }} |
 | `99999999` | `BaseErr::SysErr` | System Error |
+<!-- /gen:err-codes -->
 
 ## 示例
 
-示例在 `hygiea-examples/examples/` 下，按主题分目录，每个示例只讲一件事。除了 `db_lock` 要 Docker（自动起一个临时的 postgres），都不需要装数据库等外部服务：
-
-| 示例 | 讲什么 |
-|---|---|
-| `app_basic` | 最小的应用：现成的 SQLite 和 HTTP 组件，配置从 `config/app_basic/dev.toml` 加载 |
-| `app_dependencies` | 自己实现组件；`provides` / `depends_on` 决定启动顺序，缺依赖时启动前就报错 |
-| `app_named_instances` | 同一种组件注册多个实例（主库、从库），按名字取 |
-| `app_global_state` | 启动后把资源收进全局 `AppState`，业务代码直接取 |
-| `app_two_phase` | 两阶段启动：`before_activate` 在 HTTP 开始接请求之前建表、把 `AppState` 放进 Resources，router 函数取出它交给 `with_state`，handler 用 `arity0_state` 拿到连接池 |
-| `app_background_task` | 后台任务、优雅关闭、超时强制结束、`stop` 收尾 |
-| `app_config` | 配置文件、`-f`、环境变量、`--set` 的合并，框架参数合进自己的命令行 |
-| `db_live_config` | 数据库配置表：SQLite 组件 `uses = 3` 提供的 `DbLiveConfig` 绑定到 struct、改表后程序自动拿到新值（SQLite 文件库） |
-| `db_lock` | PG 的分布式锁 `DbLockClient`：注册锁类型和字符串 key，`DbResources` 直接建两个实例抢同一把锁，不可重入、release / drop 释放、阻塞版等待和超时；字符串 key 用锁表（`db-lock-row`）和哈希成 i64 两种方式对比（Docker 起临时 postgres） |
-| `lock_tokio` | 进程内的锁 `TokioLock`：业务代码只依赖 `DistributedLock`，多个任务抢同一个 key、阻塞版先到先得、整数 key 转成字符串 key |
-| `error_basic` | 错误 enum、`err!` 的写法、错误码 |
-| `string_template` | `fmt_tpl!`、`fmt_tpl_once!`、`fmt_pos!` |
-| `log_basic` | 控制台 + 文件双输出、按 layer 设置 filter、日志时间用 UTC |
-| `datetime_basic` | 格式化和解析、日 / 周 / 月边界、系统本地时区 |
-| `env_basic` | `BuiltinKey`、自定义 `EnvKey`、`env_get` / `env_get_opt` / `env_get_or` / `env_get_or_else` |
-| `redact_basic` | `#[redact(mask/skip)]`、`to_redacted_json`，对比普通 `serde_json` 序列化 |
-| `http_client_basic` | 请求本进程里起的 axum 服务，演示打码后的日志 |
-| `http_axum_response` | `AxumHttpResponse` / `AxumHttpError`、请求体大小限制 |
+可运行的示例在 [hygiea-examples](hygiea-examples/README.md)，按主题分目录，每个示例只讲一件事：
 
 ```bash
 cargo run -p hygiea-examples --example app_basic
 ```
 
-app 的示例启动后按 Ctrl+C 退出，可以看到组件的关闭顺序：先关 HTTP 这类 Deferred 组件，再按启动的逆序关其余组件。
-
 ## 开发
 
-### 构建
-
-```bash
-# 构建所有 crate
-cargo build
-
-# 开启全部 feature 构建
-cargo build --all-features
-
-# 测试用 cargo-nextest（每个测试一个进程、二进制之间并行），配置在 .config/nextest.toml
-brew install cargo-nextest
-
-# 跑全部测试：单元、mock、container 层（要 Docker）；默认不跑 trybuild 和 live 层
-cargo nextest run --workspace --all-features --run-ignored all
-
-# 改了宏时跑 trybuild（编译期报错测试）；改了报错信息后重新生成快照并检查 diff
-cargo nextest run --workspace --all-features --ignore-default-filter -E 'binary(/_ui$/)'
-TRYBUILD=overwrite cargo test -p hygiea-macros --test hy_err_ui --test redact_ui
-
-# doc test（nextest 不跑）
-cargo test --workspace --all-features --doc
-
-# 查看文档
-cargo doc --open
-```
+构建、测试的命令和仓库里的约定见 [AGENTS.md](AGENTS.md)。
 
 ## 设计原则
 

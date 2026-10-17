@@ -2,9 +2,10 @@
 
 hygiea 应用框架的核心：程序按"组件"组织，Registry 负责读配置、按依赖排序启动组件、
 等退出信号、按顺序关闭。具体组件（db、redis、http、grpc ……）怎么实现不在这里，
-这里只讲它们都要遵守的那套机制。
+这里只讲它们都要遵守的那套机制在内部怎么实现、为什么这样设计。
 
-代码在 `hygiea-core/src/app/`，`#[component]` 宏在 `hygiea-macros/src/component.rs`。
+怎么用（配置从哪来、两阶段启动、组件依赖、优雅关闭）见 `hygiea-core/src/app/mod.rs` 的模块文档（docs.rs 上是 `hygiea::app`），
+各类型、方法的行为（重复插入会 panic、回调只能设一次、超时会 abort……）在它们自己的文档。代码在 `hygiea-core/src/app/`，`#[component]` 宏在 `hygiea-macros/src/component.rs`。
 
 ---
 
@@ -52,54 +53,23 @@ flowchart TD
 
 ## 3. 配置和 app_name
 
-- `Registry::load_config::<T>(&ConfigArgs)`：读配置、校验、建 Registry，返回 `(registry, config)`。
-  应用配置 `T` 实现 `IntoRegistryConfig`，交出 `[registry]` 那一段。
-- 配置来源和优先级、环境变量写法见 `hygiea-core/src/app/mod.rs` 的模块文档。
-- 配置读不到、解析失败、校验不过都是启动期错误：这时日志还没装，把读了哪些来源（不含值）和错误打到 stderr，然后 panic。
+配置来源和优先级、`app_name` 的格式和它与环境变量前缀的关系，见 `app/mod.rs` 和 `RegistryConfig::app_name` 的文档。设计上：
 
-`app_name` 是整个进程的身份：
-
-- 格式是 `[a-z][a-z0-9_]*`：组件会拿它当 SQL 标识符（比如 live config 的表名前缀）。
-- 环境变量前缀必须是它的大写：`app_name = "dict_jp"` 对应 `ConfigArgs::env_prefix("DICT_JP")`，对不上就报错。
-- 默认是 `hygiea`，和默认的环境变量前缀 `HYGIEA` 对得上，什么都不配也能启动。
-- 组件里不允许另外配置覆盖它（比如 PG 的 `application_name` 只能来自它）。
+- `app_name` 是整个进程的身份，组件会拿它当 SQL 标识符（live config、锁表的表名前缀）、连接名（PG 的 `application_name`），
+  所以格式限定成 `[a-z][a-z0-9_]*`，组件里不允许另外配置覆盖它
+- 默认是 `hygiea`，和默认的环境变量前缀 `HYGIEA` 对得上，什么都不配也能启动
+- 配置读不到、解析失败、校验不过时日志还没装，所以打到 stderr 后 panic（启动期错误）
 
 ---
 
 ## 4. 组件
 
-### 公共部分：`Component`
+两种启动方式（Immediate / Deferred）和各阶段拿到什么见 `app/mod.rs`「组件和两阶段启动」。
 
-```rust
-pub trait Component: Sized + Send + 'static {
-    type Config;
-    type Kind: sealed::Kind<Self>;            // Immediate 或 Deferred
-    fn build(name: Name, config: Self::Config) -> Self;
-    fn provides(&self) -> Vec<ResourceId>;    // 默认空
-    fn depends_on(&self) -> Vec<ResourceId>;  // 默认空
-    async fn stop(&mut self) -> Result<()>;   // 默认什么都不做
-    fn shutdown_timeout(&self) -> Option<Duration>;  // 默认用 RegistryConfig 的
-}
-```
-
-- `build` 不做 IO、不会失败，只是存下名字和配置；可能失败的事都放到启动方法里。
-- `provides` / `depends_on` 在 `add` 时就取出来存好，之后不再变。
-- 同一个组件类型可以用不同名字 `add_named` 多次（主库、从库），类型 + 名字重复会 panic。
-
-### 两种启动方式
-
-| | Immediate | Deferred |
-|---|---|---|
-| 典型 | 数据库、Redis、HTTP 客户端 | HTTP / gRPC 服务、MQ 消费者、定时任务 |
-| 第一阶段 | `startup(&mut self, &Resources, shutdown)`：完成启动，可读可写 | `prepare(&mut self, &ResourceSink)`：只做准备（绑端口、校验），只能写 |
-| 第二阶段 | 没有 | `activate(&mut self, ReadyResources, shutdown)`：开始工作，只能读 |
-| 后台任务 | `startup` 返回 `Option<JoinHandle>` | `activate` 返回 `Option<JoinHandle>` |
-
-分两阶段的目的是：**所有组件都准备好了，才有组件开始对外服务**。
-比如端口被占用这种错误在 `prepare` 里就会暴露，这时还没有任何服务在接请求。
-
-阶段视图让"在第一阶段读资源"编译不过（`ResourceSink` 没有 `get`），不用靠约定。
-宏的 UI 测试 `hygiea-macros/tests/component_ui/fail/prepare_reads_resources.rs` 守着这一条。
+- 分两阶段的目的是：**所有组件都准备好了，才有组件开始对外服务**。比如端口被占用这种错误在 `prepare` 里就会暴露，这时还没有任何服务在接请求
+- 阶段视图让"在第一阶段读资源"编译不过（`ResourceSink` 没有 `get`），不用靠约定。
+  宏的 UI 测试 `hygiea-macros/tests/component_ui/fail/prepare_reads_resources.rs` 守着这一条
+- `provides` / `depends_on` 在 `add` 时就取出来存好，之后不再变
 
 ### `#[component]` 宏
 
@@ -143,47 +113,19 @@ pub struct Resources {
 }
 ```
 
-- 按"类型 + 名字"存取：`insert` / `get` / `require`（匿名，名字是 `""`）和 `insert_named` / `get_named` / `require_named`。
-- 任何 `Send + Sync + Clone + 'static` 都是 `Resource`。取出来的是克隆，所以资源本身应该是便宜克隆的句柄（内部 `Arc`）。
-- 同一类型 + 名字重复 `insert` 会 panic：基本都是两个组件用了同一个名字。
-- `require*` 取不到返回 `AppErr::ResourceMissing`，带上类型和名字。
-- `Resources` 本身克隆很便宜（内部 `Arc`），`ResourceSink` / `ReadyResources` 都只是包了一份。
+- 取出来的是克隆，所以资源本身应该是便宜克隆的句柄（内部 `Arc`）；`Resources` 本身克隆也很便宜，`ResourceSink` / `ReadyResources` 都只是包了一份
 
 ### provides / depends_on
 
 组件声明自己提供哪些、依赖哪些 `ResourceId`，Registry 在 `run` 一开始就排好第一阶段的启动顺序：
 
 - Kahn 拓扑排序：依赖都已排好的组件里挑 `add` 最早的，所以没有依赖关系的组件保持 `add` 的顺序。
-- Deferred 组件的依赖只在第二阶段读（那时第一阶段都完成了），所以只检查有没有组件提供，不参与排序。
-- 下面这些都在启动任何组件**之前**报错：
-  - 依赖的资源没有组件提供：`ResourceMissing`
-  - 同一个资源两个组件都提供：`DuplicateProvider`
-  - 依赖成环：`DependencyCycle`，报出环上的组件，比如 `A(a) -> B(b) -> A(a)`
-- 第一阶段每个组件启动完，检查它声明的 `provides` 真的放进去了，没放算启动失败。
-- `before_activate` 里放进去的东西不属于任何组件，不能写进 `depends_on`，Deferred 组件在 `activate` 里直接取。
+- Deferred 组件的依赖只在第二阶段读（那时第一阶段都完成了），所以只检查有没有组件提供，不参与排序
+- 缺依赖、重复提供、成环在启动任何组件之前就报错，报错的种类见 `app/mod.rs`「组件依赖」
 
 ### 两个回调
 
-| 回调 | 时机 | 拿到 | 适合做 |
-|---|---|---|---|
-| `before_activate` | 第一阶段全部完成后、`activate` 之前 | `Resources`（可读可写） | 建表、预热、把资源装配成应用的全局状态放回去 |
-| `on_ready` | 所有组件 `activate` 完，已在接请求 | `Resources` | 注册到注册中心、打"已就绪"的点、自检 |
-
-各只能设置一次，返回 `Err` 和组件启动失败一样处理。
-
-典型用法（应用把需要的资源收进自己的状态，HTTP 的 router 函数在 `activate` 时取出来）：
-
-```rust
-registry
-    .add::<SqlxPgComponent>(cfg.db)
-    .before_activate(|res| async move {
-        res.insert(AppState::build(&res)?);
-        Ok(())
-    })
-    .add::<AxumComponent>(http_config)   // router 函数里 res.require::<Arc<AppState>>()
-    .run()
-    .await
-```
+时机和适合做什么见 `app/mod.rs`，示例见 `app_two_phase`。返回 `Err` 和组件启动失败一样处理。
 
 ---
 
@@ -237,31 +179,7 @@ pub type RedisComponent = ImmediateResourceComponent<FredRedisPool>;
 
 ## 7. 关闭
 
-收到 Ctrl+C / SIGTERM（Windows 上还有 Ctrl+Break、关窗口、关机）后：
+顺序、超时、k8s 的配置见 `Registry::run` 和 `app/mod.rs`「优雅关闭」。内部：
 
-1. 先照常服务 `shutdown_delay_secs`（默认 0），让负载均衡器把流量切走；
-2. 关闭顺序：先按启动的逆序关 Deferred（HTTP / gRPC 先停止接活），再按启动的逆序关 Immediate（被依赖的数据库最后关）；
-3. 每个组件：触发它自己的 `CancellationToken` → 等它的后台任务结束 → 调 `stop`；
-4. 每个组件单独计时（`shutdown_timeout`，默认 15 秒），超时的 abort 任务、打 WARN，接着关下一个，一个卡住的组件不会占掉后面组件的时间；
-5. 关闭中再收到一次信号，直接退出进程。
-
-启动成功后会打一行 `Max shutdown time`（delay + 各组件超时之和），部署时 k8s 的
-`terminationGracePeriodSeconds` 要比它大。
-
-信号监听在 `run` 一开始就装好：组件启动期间收到的信号会留着，启动完成后马上走优雅关闭，不会被系统默认行为直接杀掉。
-
----
-
-## 8. 错误
-
-`AppErr`（`hygiea-core/src/app/error.rs`）按阶段分段：
-
-| 码 | 内容 |
-|---|---|
-| `01`–`03` | Registry 包装组件的失败：`ComponentStartFailed`、`TaskExited`、`ComponentActivateFailed`，组件自己的错误挂在 source 上 |
-| `11`–`15` | 启动前检查：`ConfigMissing`、`InvalidConfig`、`ResourceMissing`、`DependencyCycle`、`DuplicateProvider` |
-| `21`–`23` | 占用外部资源：`BindFailed`、`ConnectFailed`、`InitFailed` |
-| `31` | 关闭：`StopFailed` |
-| `99` | `ComponentError`：现有变体都不合适时的通用错误 |
-
-组件直接用这些变体，底层原因 `wrap_err` / `with_source` 挂上。
+- 每个组件：触发它自己的 `CancellationToken` → 等它的后台任务结束 → 调 `stop`；单独计时，超时的 abort 任务，一个卡住的组件不会占掉后面组件的时间
+- 信号监听在 `run` 一开始就装好：组件启动期间收到的信号会留着，启动完成后马上走优雅关闭，不会被系统默认行为直接杀掉

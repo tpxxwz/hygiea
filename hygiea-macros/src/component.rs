@@ -1,3 +1,5 @@
+//! `#[component]`：把 `impl ImmediateComponent` / `impl DeferredComponent` 块拆成 `impl Component` 和启动 trait 两个 impl，按 trait 填 `Kind`。
+
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::spanned::Spanned;

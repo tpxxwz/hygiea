@@ -1,3 +1,5 @@
+//! `#[container]` / `#[live]`：标在模块上，给里面的测试加 `#[ignore]`、把内容挪进层名子模块，默认 `cargo test` 不跑、按层过滤能选中。
+
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::punctuated::Punctuated;

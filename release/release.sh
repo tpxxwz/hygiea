@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 发版：升版本号 → 改 README 里的版本号 → 提交 → 发布到 crates.io → 打 tag → push
+# 发版：检查文档（tools/docs.py check）→ 升版本号 → 改 README 里的版本号 → 提交 → 发布到 crates.io → 打 tag → push
 #
 # 用法（在哪个目录执行都行）：
 #   release/release.sh 0.1.1-alpha.6        指定版本号
@@ -16,7 +16,7 @@
 # 发布用的 target 目录放在项目外（RELEASE_TARGET_DIR，默认 $TMPDIR/hygiea-release-target，下次发版复用，
 # 不用每次从头编译）：cargo publish 验证时会检查 target/package/ 下解压出来的源码有没有被改动，
 # 放在项目里的话，Finder / IDE 浏览目录时生成的 .DS_Store 会让验证失败。
-# 需要：cargo-edit（提供 cargo set-version）、Cargo 1.90+（cargo publish --workspace）、jq、perl
+# 需要：cargo-edit（提供 cargo set-version）、Cargo 1.90+（cargo publish --workspace）、jq、perl、python3（tools/docs.py）
 #
 # 发布顺序由 cargo publish --workspace 按依赖关系排，dev-dependency 也算在内，
 # 所以组件可以带版本号依赖 hygiea-test。publish = false 的成员（test-support、hygiea-examples）不发布。
@@ -118,6 +118,9 @@ if [ -z "$bump" ] && [ -z "$version" ]; then
     die "missing version, see the usage at the top of release/release.sh"
 fi
 [ -z "$(git status --porcelain)" ] || die "working tree is not clean"
+
+# 文档检查：生成的部分是不是最新的、//! 齐不齐、feature 表、路径和链接、配置模板表、trybuild 命令，见 tools/docs.py
+tools/docs.py check || die "docs check failed, fix it (tools/docs.py gen regenerates the generated parts) and commit"
 
 set_version_args=(--workspace)
 if [ -n "$bump" ]; then

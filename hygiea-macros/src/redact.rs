@@ -1,3 +1,5 @@
+//! `#[redact]`：把字段上的 `#[redact(mask)]` / `#[redact(skip)]` 换成 serde 属性，只在序列化进日志时打码或跳过，平时照常序列化。
+
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::punctuated::Punctuated;

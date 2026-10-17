@@ -44,7 +44,8 @@ ctor 已经收集了所有 crate 的注册（`ERR_REGISTRATIONS`：码 + 模板�
 
 - 按 code 查它属于哪个 crate、哪个 enum、哪个变体、模板是什么
 - 导出全量错误码表，给文档、前端、i18n 用；或者做个管理接口列出系统的全部错误码
-- 做法：`ErrRegistration` 加上 crate 名、enum 名、变体名（宏里都拿得到），提供 `hygiea::error::catalog()` 之类的只读访问
+- 已有：`ErrRegistration` 带 `err_name`（`Enum::Variant`），README 的内置错误码表由它生成（`hygiea/tests/err_code_table.rs`）
+- 还缺：crate 名（宏里拿得到），以及 `hygiea::error::catalog()` 之类的只读访问
 
 ### 数据库错误看不到 SQL 和 PG 的 detail
 

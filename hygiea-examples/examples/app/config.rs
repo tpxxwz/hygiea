@@ -1,11 +1,13 @@
-//! 配置加载：`Registry::load_config` 按下面的顺序合并，后面的覆盖前面的同名字段：
+//! 配置加载：配置文件、`-f`、环境变量、`--set` 的合并，以及把框架参数合进应用自己的命令行。
+//!
+//! `Registry::load_config` 按下面的顺序合并，后面的覆盖前面的同名字段：
 //!
 //! 1. `<配置目录>/<env>.toml`：环境名取 `--env`，没有就取 `HYGIEA_ENV`，再没有就是 `dev`
 //! 2. `-f` 指定的额外文件，按顺序
 //! 3. 环境变量 `HYGIEA__<层级>__<字段>`，比如 `HYGIEA__GREETING=hi`
 //! 4. `--set key=value`，可以写多次
 //!
-//! 同时演示把框架的参数（`ConfigArgs`）合进应用自己的命令行。配置文件在 `hygiea-examples/config/app_config/`，用 `ConfigArgs::default_config_dir` 指定，也可以用 `-d` 换。
+//! 框架的参数是 `ConfigArgs`。配置文件在 `hygiea-examples/config/app_config/`，用 `ConfigArgs::default_config_dir` 指定，也可以用 `-d` 换。
 //!
 //! ```bash
 //! cargo run -p hygiea-examples --example app_config

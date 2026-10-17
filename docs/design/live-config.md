@@ -1,125 +1,15 @@
-# live config（数据库配置表）：用法和内部流程
+# live config（数据库配置表）：内部流程
 
-配置存在库里，改了表，运行中的程序自动拿到新值，不用重启。开了 feature `live-config`，各连接池组件（sqlx、SeaORM 的
-PG、MySQL、SQLite）配置的 `uses` 带 2 时，按组件名把一个源 `DbLiveConfig` 放进 Resources，用它的 `bind` / `bind_all` 绑到 struct。
-几个组件都开就是几个源（比如应用自己的库一个、平台公共配置库一个），各管各的 namespace。PG 靠 NOTIFY 推送，MySQL、SQLite 轮询。
-
-代码在 `hygiea-components/hygiea-db/src/live_config/`，跑起来看效果：
-`cargo run -p hygiea-examples --example db_live_config`。
+怎么用、配置、读法、表结构、出了问题会怎样（对使用方而言）、用的时候要注意，都在模块文档里：
+`hygiea-components/hygiea-db/src/live_config/mod.rs`（docs.rs 上是 `hygiea::db::live_config`），各类型、方法的细节在它们自己的文档。
+这里只讲内部怎么做、为什么这样做。代码在 `hygiea-components/hygiea-db/src/live_config/`，
+跑起来看效果：`cargo run -p hygiea-examples --example db_live_config`。
 
 下面的例子里应用名是 `dict_jp`、没配 `table_prefix`，所以表名是 `dict_jp_config` 这一套，schema 是 `dict_jp`。
 
 ---
 
-## 1. 怎么用
-
-### 配置
-
-```toml
-[db]
-uses = 3                         # 1 业务池 + 2 动态配置；只给动态配置用写 2
-
-[db.connect]
-host = ".."
-schema_search_path = "dict_jp"   # 表建在 search_path 的第一个 schema 里（MySQL 是连接的库）
-
-[registry]
-app_name = "dict_jp"             # 应用名（小写下划线），不写 table_prefix 时也是表名前缀：dict_jp_config、dict_jp_config_revision、dict_jp_config_history
-
-[db.live_config]                  # uses 带 2 时才能写，整段不写用默认值
-# poll_interval_secs = 60        # 不写：PG 60 秒（兜底），MySQL、SQLite 1 秒（主要靠它）
-# history_keep_rows = 10000      # 变更历史只留最新的多少行、隔多少分钟清一次（启动时先清一次）；
-# history_trim_interval_mins = 60 # 两项要么都写要么都不写，都不写不删
-# table_prefix = "foo"           # 表名前缀：不写用应用名；"foo" 或 "foo_" 都是 foo_config；"" 不加前缀（config）
-
-[db.live_config.connect]         # 换几项连接参数：只写和 [db.connect] 不一样的项，不写的沿用（有业务池时才能写）
-# username = "app_config"
-# password = ".."
-# schema_search_path = "config"
-```
-
-- **表名前缀**：`table_prefix` 比应用名优先。几个应用要共用一套表，就把前缀、库、schema 配成一样；
-  共用时同一个 namespace 的结构要兼容（升级时新旧版本都能读），默认值先启动的那个写进表，历史保留按配得最少的那个删
-- **换连接参数**：`[db.live_config.connect]` 逐项盖到 `[db.connect]` 上（SQLite 是换库文件等），live config 本来就走自己的
-  独立小池，换的只是它的连接参数。比如配置放在单独的 schema、用只有这几张表权限的用户。整个库都不一样的（平台公共配置库），
-  另起一个 `uses = 2` 的组件，没有业务池，连接参数直接写在它的 `[db.connect]` 里
-- **多个源**：每个 `uses` 带 2 的组件是一个源，按组件名取，各自的表、后台任务、小池，同名的 namespace 在不同的源里互不相干
-- **MySQL 的权限**：没有 `SUPER` 的用户建不了触发器（binlog 开着时报 1419），DBA 打开 `log_bin_trust_function_creators`
-  或者先用有权限的账号建好表，见 `live_config/mod.rs` 的「用的时候要注意」
-- **PgBouncer**：transaction 模式下不能 `LISTEN`，连接池走 PgBouncer 时，用 `connect` 把 live config 指到直连地址
-
-### 代码
-
-```rust
-/// 应用自己的配置：第一层字段是 namespace，第二层是 key
-#[derive(Serialize, Deserialize, Default)]
-pub struct RuntimeConfig {
-    pub markji_sync: MarkjiSync,
-    pub moji_cache: MojiCache,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct MarkjiSync {
-    pub auto_sync: bool,      // 业务字段：要不要自动同步
-    pub levels: Vec<i32>,
-}
-impl Default for MarkjiSync {
-    fn default() -> Self { Self { auto_sync: false, levels: vec![1, 2] } }   // 表里没有时用这个
-}
-
-// before_activate（建 AppState）里绑一次
-let source = resources.require_named::<DbLiveConfig>("main")?;     // 组件名
-let runtime: LiveConfig<RuntimeConfig> = source.bind_all(RuntimeConfig::default()).await?;
-// 只要一个 namespace 也行：source.bind("markji_sync", MarkjiSync::default())
-
-// 业务里每次用都 get()，拿到的是当前最新的
-let cfg = runtime.get();                 // Arc<RuntimeConfig>：当前快照，用的时候不持有锁
-if cfg.markji_sync.auto_sync { .. }           // namespace markji_sync 的 key auto_sync
-
-// service 只挂自己那一块：数据源还是上面那一个 runtime，取到的是它当前最新的
-let markji = MarkjiService::new(runtime.view(|c| &c.markji_sync));   // LiveView<MarkjiSync>
-// MarkjiService 里：if self.config.get().auto_sync { .. }
-
-// 配置一变就要做点什么（比如定时任务重新排期）
-let mut watcher = runtime.clone();
-tokio::spawn(async move {
-    while watcher.changed().await.is_ok() {
-        let cfg = watcher.get();
-        // ..
-    }
-});
-```
-
-### 改配置
-
-直接改表就行，用 SQL 或者以后的管理页面：
-
-```sql
-UPDATE dict_jp_config SET value = '[1, 2, 3]' WHERE namespace = 'markji_sync' AND key = 'levels';
-```
-
-PG 几乎立刻生效，MySQL、SQLite 最多等 1 秒（MySQL 的 `key` 是保留字，写成 `` `key` ``）。
-
-### 表里长什么样
-
-| namespace | key | value |
-|---|---|---|
-| markji_sync | auto_sync | `false` |
-| markji_sync | levels | `[1, 2, 3]` |
-| moji_cache | ttl_secs | `60` |
-
-一行一个 key，值存 JSON。和代码的对应：
-
-| 绑定方式 | namespace 从哪来 | 读 `markji_sync` 的 `auto_sync` |
-|---|---|---|
-| `bind_all(RuntimeConfig::default())` | 总 struct 的第一层字段名 | `runtime.get().markji_sync.auto_sync` |
-| `bind("markji_sync", MarkjiSync::default())` | 参数传的字符串 | `sync.get().auto_sync` |
-
-两种读的是表里同一行。
-
----
-
-## 2. 由哪些东西组成
+## 1. 由哪些东西组成
 
 ```mermaid
 flowchart LR
@@ -145,20 +35,12 @@ flowchart LR
     main <--> db
 ```
 
-| 文件 | 负责 | 跟框架有关吗 |
-|---|---|---|
-| `mod.rs` | 对外：`LiveConfigConfig`、`LiveConfig<T>`、源 `DbLiveConfig`（`bind` / `bind_all`）；`source.rs` 一个源的后台任务和绑定，默认值 + 表里的值合并成 struct | 无关 |
-| `worker.rs` | 后台任务：处理 bind、收通知、轮询、比版本号、重新加载、出错重建 | 无关 |
-| `schema.rs` | 表名、第一次 bind 时的检查规则、各库语句的集合 `Sql` | 无关 |
-| `src/sql/<数据库>/live_config.rs` | 期望的列、函数和触发器名、加载 / 查版本号 / 补默认值 / 清历史的语句，通知 payload 的格式 | 无关 |
-| `store.rs` | `Store`：worker 和驱动之间的接口，按驱动分发 | 无关 |
-| `sqlx/mod.rs` | `SqlxStore`：按数据库分发、转错误，独立小池的固定参数 | sqlx |
-| `sqlx/{postgres,mysql,sqlite}.rs` | 各数据库在小池上做的事：建连接、加载、查版本号、补默认值、收通知（只有 PG），以及第一次 bind 时检查和建表 | sqlx |
-| `src/sql/<数据库>/live_config.sql` | PG、MySQL、SQLite 的建表和触发器 | 无关 |
+各部分在哪个文件见 `tools/docs.py tree hygiea-components/hygiea-db/src/live_config`：和驱动无关的（源、句柄、worker、表的规则）
+在 `live_config/` 下，SQL 在 `src/sql/<数据库>/live_config.*`，执行在 `live_config/sqlx/`（一种数据库一个文件）。
 
 ---
 
-## 3. 启动：组件建资源的时候
+## 2. 启动：组件建资源的时候
 
 这一步不连库、不建表，只看配置。
 
@@ -174,7 +56,7 @@ flowchart TD
 
 ---
 
-## 4. 第一次 bind：连库、建表、起后台任务
+## 3. 第一次 bind：连库、建表、起后台任务
 
 ```mermaid
 sequenceDiagram
@@ -221,7 +103,7 @@ sequenceDiagram
 
 ---
 
-## 5. 运行中改了表：怎么传到程序
+## 4. 运行中改了表：怎么传到程序
 
 ### 数据库那一侧（触发器）
 
@@ -273,7 +155,7 @@ sequenceDiagram
 
 ---
 
-## 6. Worker 主循环
+## 5. Worker 主循环
 
 worker 是一个 tokio 任务，所有数据库操作都在它手里、在一条连接上串行执行。
 
@@ -304,7 +186,7 @@ flowchart TD
 
 ---
 
-## 7. 出了问题会怎样
+## 6. 出了问题会怎样
 
 | 情况 | 谁处理 | 结果 |
 |---|---|---|
@@ -317,7 +199,7 @@ flowchart TD
 
 ---
 
-## 8. 关闭
+## 7. 关闭
 
 ```mermaid
 sequenceDiagram
@@ -333,21 +215,15 @@ sequenceDiagram
     W->>W: 退出循环，放掉 listener，关小池
     Src->>Src: 等 worker 结束（没 bind 过的话，这里关小池）
     P->>P: 再关锁单独的池、业务池
-    Note over W: 之后 get() 还是最后的值，<br/>changed() / 再 bind 报 LiveConfigClosed
+    Note over W: 之后 get() 还是最后的值，<br/>changed() / 再 bind 报 LiveConfigClosed，<br/>on_change 的任务退出
 ```
 
 ---
 
-## 9. 几个规则一句话总结
+## 8. 为什么这样做
 
-- **一个源一条连接**：PG 是 listener 占着，MySQL、SQLite 是轮询用；不占业务池的名额，第一次 bind 才连。
-  池参数固定，连接参数可以用 `[db.live_config.connect]` 逐项换
-- **表名、channel**：表名前缀默认是应用名，`table_prefix` 可以改、可以不加；PG 的 channel 是 `<schema>.<配置表名>`，
-  不同 schema 里同名的表互不收到对方的通知
-- **表结构**：要么全对上直接用，要么一个都没有全建，有一个对不上就报错不启动；以后改结构手动执行 DDL
-- **默认值**：表里没有的 key 才写进去，表里有的永远以表为准
-- **版本号**：每个 namespace 一个，增删改都 +1，程序只接受更大的
-- **namespace 粒度**：变了只重新读那一个 namespace
-- **变更历史**：只给人查，程序不读它（版本号在 `_config_revision` 里），随便删不影响生效的值；配了 `history_keep_rows` + `history_trim_interval_mins`（两项一起配）时后台任务定时删到只剩最新的 N 行，不配不删
-- **日志**：第一次 bind 后按 namespace 打出生效的值，之后每次生效的变更打 `key: 旧值 -> 新值`；值是 struct 里生效的值，`#[redact(mask)]` 的字段打成 `***`
-- 更多注意事项（字段改名、改类型、从库、`:memory:` 等）见 `live_config/mod.rs` 的「用的时候要注意」
+- **字段方法每次读最新**：思路和 .NET 的 `IOptionsMonitor<T>.CurrentValue`、Netflix Archaius 的 `Property<T>.get()` 一样，
+  持有的是句柄不是值。代价是连续调几个字段方法时中间可能换了版本，所以另外留了整块快照（`get()` / `snapshot()`）
+- **版本号每个 namespace 一个、只接受更大的**：变了只重新读那一个 namespace；重复的通知、多实例、乱序都不会把新值换回旧的
+- **变更历史程序不读**：版本号单独放在 `_config_revision`，历史只给人查，随便删不影响生效的值
+- **表结构不迁移**：要么全对上直接用，要么一个都没有全建，有一个对不上就报错不启动，以后改结构手动执行 DDL

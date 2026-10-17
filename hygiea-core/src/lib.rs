@@ -1,3 +1,5 @@
+//! hygiea 的核心实现：应用框架、错误、日志、日期时间、环境变量、字符串、分布式锁的抽象等。使用方经 facade crate `hygiea` 使用，不直接依赖它。
+
 // 宏生成的代码按调用方依赖的名字引用本 crate（见 hygiea-macros 的 krate.rs），
 // 在 hygiea-core 自己内部就是 ::hygiea_core
 extern crate self as hygiea_core;

@@ -1,12 +1,6 @@
 # 事务隔离级别待办
 
-## 现状
-
-- `seaorm::transaction_with_config(db, isolation_level, access_mode, op, f)`：开事务时指定隔离级别和读写模式，
-  参数直接用 SeaORM 的 `IsolationLevel` / `AccessMode`；`seaorm::transaction` 是它传两个 `None`
-- `seaorm::transaction_snapshot(db, op, f)`：一致性只读的预设组合，REPEATABLE READ + READ ONLY。
-  一次读多张表拼一个完整对象时用
-- `sqlx::transaction` 只调 `pool.begin()`，不能指定隔离级别
+现在的事务函数见 `hygiea-db` 的 `seaorm::transaction*`、`sqlx::transaction`。
 
 ## 定下来的做法：不做跨框架、跨数据库的统一枚举
 
@@ -21,7 +15,7 @@ SeaORM 2.0 的处理（看源码确认的）：
 
 - PostgreSQL：先 `BEGIN`，再在事务里 `SET TRANSACTION ...`
 - MySQL：先 `SET TRANSACTION ...`，再 `BEGIN`
-- SQLite：`driver/sqlx_sqlite.rs` 的 `set_transaction_config` 只打 `warn!` 然后忽略，不报错；
+- SQLite：SeaORM 源码 driver/sqlx_sqlite.rs 的 `set_transaction_config` 只打 `warn!` 然后忽略，不报错；
   SQLite 的 BEGIN 模式另走 `SqliteTransactionMode`，不在 `begin_with_config` 里
 
 所以每个框架的封装各用自己的类型，语义和限制以框架文档为准。
@@ -32,7 +26,8 @@ SeaORM 2.0 的处理（看源码确认的）：
       调用方传对应数据库的 `BEGIN ...` 原生语句（比如 PostgreSQL 的 `BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY`、
       SQLite 的 `BEGIN IMMEDIATE`）。用原生 SQL，用的是哪个库的语义一眼看得出来。提交、回滚、错误处理和 `transaction` 一样
 - [ ] `seaorm::transaction_with_config` 的文档补一句：SQLite 下 SeaORM 只警告不生效，要控制加锁时机用 `SqliteTransactionMode`
-- [ ] 两个框架各加一个容器测试：事务里 `SHOW transaction_isolation` / `SHOW transaction_read_only`，确认真开出了指定的级别
+- [ ] sqlx 的 `transaction_with` 加容器测试：事务里 `SHOW transaction_isolation` / `SHOW transaction_read_only`，确认真开出了指定的级别
+      （SeaORM 的已经有了，`tests/seaorm_postgres.rs`）
 - [ ] 嵌套事务的传播方式：`db` 已经是事务时 SeaORM 开 savepoint（相当于 Spring 的 `NESTED`），内层出错只回滚到 savepoint。
       Spring 默认是 `REQUIRED`（加入外层，内层出错整个回滚）。`ConnectionTrait` 分不出连接池和事务，要做 `REQUIRED`
       得 hygiea 自己定一个 trait：连接池上开新事务再提交，事务上直接复用

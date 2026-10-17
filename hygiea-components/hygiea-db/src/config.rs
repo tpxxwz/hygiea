@@ -30,7 +30,8 @@ pub struct PgConnectConfig {
     pub database: String,
     /// 连接 URL 的参数，不带开头的 `?`，比如 `sslmode=require`
     pub params: String,
-    /// search_path，多个用逗号分隔；空的用数据库默认的
+    /// search_path，多个用逗号分隔；空的用数据库默认的。用连接的启动参数传：经 PgBouncer transaction 模式时，
+    /// PgBouncer 要在 `track_extra_parameters` 里带上 `search_path`，否则连不上（`unsupported startup parameter`）
     pub schema_search_path: String,
 }
 

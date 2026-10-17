@@ -2,7 +2,7 @@
 
 为只依赖数据库、不额外部署 Redis、Kafka 等基础设施的服务，考虑提供基于数据库辅助表的事件监听能力。目标是给 PostgreSQL、MySQL、SQLite 提供尽量一致的上层接口，同时明确各数据库原生能力和可靠性差异。
 
-分布式锁已经做了（PG），见 `docs/design/lock.md`。
+分布式锁已经做了（PG、MySQL），见 `docs/design/lock.md`。
 
 ## 事件辅助表
 

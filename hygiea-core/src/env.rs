@@ -1,3 +1,5 @@
+//! 环境变量：按 key 读取，key 是实现了 `EnvKey` 的类型（内置的 `BuiltinKey` 或自定义的），取值用 `env_get` / `env_get_opt` / `env_get_or` / `env_get_or_else`。
+
 use crate::{BaseErr, Result, err};
 
 pub trait EnvKey {

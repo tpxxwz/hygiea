@@ -1,3 +1,5 @@
+//! `#[derive(hy_err)]` 和 `err!` 用到的展开：校验错误码和模板，生成构造 `HyErr` 的方法、错误码注册和重复码的保护。
+
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use std::collections::HashMap;
@@ -65,7 +67,11 @@ pub(crate) trait VariantBuilder: Sized {
     fn match_arm(&self, enum_name: &syn::Ident, krate: &syn::Path) -> proc_macro2::TokenStream;
     fn code_arm(&self, enum_name: &syn::Ident) -> proc_macro2::TokenStream;
     fn vars_arm(&self, enum_name: &syn::Ident) -> proc_macro2::TokenStream;
-    fn generated_items(&self, krate: &syn::Path) -> Vec<proc_macro2::TokenStream>;
+    fn generated_items(
+        &self,
+        enum_name: &syn::Ident,
+        krate: &syn::Path,
+    ) -> Vec<proc_macro2::TokenStream>;
     fn build_impl(
         enum_name: &syn::Ident,
         krate: &syn::Path,
@@ -113,7 +119,7 @@ impl<V: VariantBuilder> ErrContext<V> {
         self.code_arms.push(variant.code_arm(enum_name));
         self.vars_arms.push(variant.vars_arm(enum_name));
         self.generated_items
-            .extend(variant.generated_items(&self.krate));
+            .extend(variant.generated_items(enum_name, &self.krate));
     }
 
     fn build(self, enum_name: &syn::Ident) -> proc_macro2::TokenStream {
@@ -310,8 +316,13 @@ impl VariantBuilder for HyVariant {
         quote! { #enum_name::#var_name => &[#(#vars),*] }
     }
 
-    fn generated_items(&self, krate: &syn::Path) -> Vec<proc_macro2::TokenStream> {
+    fn generated_items(
+        &self,
+        enum_name: &syn::Ident,
+        krate: &syn::Path,
+    ) -> Vec<proc_macro2::TokenStream> {
         let err_code = &self.err_code;
+        let err_name = format!("{enum_name}::{}", self.var_name);
         let err_code_span = self.err_code_span();
         // validate 已确认 err_tpl 存在
         let err_tpl = self.err_tpl.as_deref().unwrap_or_default();
@@ -319,7 +330,7 @@ impl VariantBuilder for HyVariant {
         // 生成重复错误码保护和 linkme 注册项。
         // linkme 注册项会被 hygiea-core 收集到 ERR_REGISTRATIONS。
         let guard = build_err_code_guard(err_code, err_code_span);
-        let registration = build_template_registration(err_code, err_tpl, krate);
+        let registration = build_template_registration(err_code, &err_name, err_tpl, krate);
         // 链接保护符号和注册项放进匿名 const 块，名字不会和别的变体撞，
         // 同模块重复码只由 guard 报一次
         vec![quote! {
@@ -393,12 +404,13 @@ fn build_err_code_guard(err_code: &str, span: proc_macro2::Span) -> proc_macro2:
 /// 构建模板错误注册项，外加跨模块重复码的链接保护。
 ///
 /// HyErr 的 Display 会用 err_code 从 minijinja Environment 里取模板，
-/// 所以这里必须把 err_code 和 err_tpl 注册进去。
+/// 所以这里必须把 err_code 和 err_tpl 注册进去。`err_name`（`Enum::Variant`）只给生成错误码表用。
 ///
 /// 链接保护：导出固定符号名 `__hygiea_err_code_<code>`，不同模块用了同一个错误码时，
 /// Linux 上链接期报重复符号；macOS 的 ld64 只给警告，由 hygiea-core 启动时的查重兜底
 fn build_template_registration(
     err_code: &str,
+    err_name: &str,
     err_tpl: &str,
     krate: &syn::Path,
 ) -> proc_macro2::TokenStream {
@@ -414,6 +426,7 @@ fn build_template_registration(
         static REGISTRATION: #krate::__private::ErrRegistration =
             #krate::__private::ErrRegistration {
                 err_code: #err_code,
+                err_name: #err_name,
                 err_tpl: #err_tpl,
             };
     }

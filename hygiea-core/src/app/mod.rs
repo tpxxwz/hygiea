@@ -137,15 +137,10 @@
 //!
 //! # 优雅关闭
 //!
-//! 收到 Ctrl+C / SIGTERM（Windows 上还有 Ctrl+Break、关窗口、关机）后，[`Registry::run`]：
+//! 收到 Ctrl+C / SIGTERM 后先照常服务 `shutdown_delay_secs`，再先关 Deferred 组件（不接新请求）、按启动的逆序关其余组件，
+//! 每个组件单独计时、超时强制结束。完整的步骤和信号见 [`Registry::run`]。
 //!
-//! 1. 先照常服务 `shutdown_delay_secs`（默认 0），让负载均衡器把流量切走；
-//! 2. 逐个关组件：先按启动的逆序关 Deferred 组件（HTTP / gRPC 不接新请求，处理完手上的），
-//!    再按启动的逆序关 Immediate 组件（数据库最后关，提交完数据）；
-//! 3. 每个组件单独计时（默认 15 秒，组件可以自己指定），超时的强制结束，接着关下一个；
-//! 4. 关闭中再收到一次信号，直接退出（本地开发时再按一次 Ctrl+C）。
-//!
-//! 部署到 k8s 时的配置（启动日志里的 `Max shutdown time` 就是第 3 行要超过的值）：
+//! 部署到 k8s 时的配置（`Max shutdown time` 打在启动日志里）：
 //!
 //! ```text
 //! registry.shutdown_delay_secs = 5            # 应用配置：等 endpoints 摘除生效

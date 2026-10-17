@@ -1,3 +1,5 @@
+//! WebSocket 客户端（feature `ws-client`），开发中，目前为空。
+
 // TODO: ws 内容暂时全部注释掉，先不看
 /*
 pub use tokio_tungstenite::{

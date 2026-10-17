@@ -43,7 +43,7 @@ pub trait Component: Sized + Send + 'static {
     /// [`DeferredComponent`]），对不上编译不过。用 `#[component]` 时由宏按 impl 的 trait 填
     type Kind: sealed::Kind<Self>;
 
-    /// 用名字和配置构建组件。
+    /// 用名字和配置构建组件。不做 IO、不会失败，只存下名字和配置，可能失败的事放到启动方法里。
     ///
     /// 启动时要用到 `name` 的话存进结构体（比如 `state.insert_named(self.name.clone(), pool)`）。
     fn build(name: Name, config: Self::Config) -> Self;

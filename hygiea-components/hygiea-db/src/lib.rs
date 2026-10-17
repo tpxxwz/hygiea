@@ -28,7 +28,7 @@
 //! 和框架无关、开 `sqlx` 或 `seaorm` 就有的：
 //! - UTC 时间列类型 [`HyUtcDateTime`]，两个框架同时开也是同一个类型
 //! - 分页的请求和结果 [`PageRequest`]、[`Page`]
-//! - 数据库错误 [`RepoErr`]，按操作分：0x 事务、1x 执行语句（10 兜底，11-14 增删改查）、2x 动态配置、9x 参数
+//! - 数据库错误 [`RepoErr`]，按操作分：0x 事务、1x 执行语句（10 兜底，11-14 增删改查）、2x 动态配置、3x 锁表、9x 参数
 //!
 //! 各框架专用的在 [`sqlx`](mod@sqlx) / [`seaorm`] 模块里，比如事务函数 `sqlx::transaction`、`seaorm::transaction`；
 //! 连接池组件也在里面，再导出到 crate 根。
@@ -84,7 +84,23 @@
 //! ## 组件和 Resources
 //!
 //! 业务池、`DbLiveConfig` 按组件名放进 Resources，`DbLockClient` 匿名放。同一个组件可以用不同名字注册多次（主库、从库、
-//! 只给锁用的协调库、只给动态配置用的公共配置库），推荐都放在应用配置的 `[db.<名字>]` 下，注册时名字和字段名写成一样：
+//! 只给锁用的协调库、只给动态配置用的公共配置库），推荐都放在应用配置的 `[db.<名字>]` 下，注册时名字和字段名写成一样。
+//! `uses` 里没带的位对应的段（`[db.pool]`、`[db.live_config]`、`[db.lock]` ..）写了启动报错：
+//!
+//! ```toml
+//! [db.main]                     # PG 主库：业务池 + 动态配置
+//! uses = 3
+//! [db.main.connect]
+//! host = "pg-main"
+//! [db.main.live_config.connect] # 动态配置同一个库，换个用户、schema
+//! username = "app_config"
+//! schema_search_path = "config"
+//!
+//! [db.coord]                    # MySQL：只给锁用，没有业务池
+//! uses = 4
+//! [db.coord.connect]
+//! host = "mysql-coord"
+//! ```
 //!
 //! ```ignore
 //! struct AppConfig { registry: RegistryConfig, db: Dbs }
