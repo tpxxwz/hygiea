@@ -1,0 +1,5 @@
+error: `nested` / `by_ref` go on fields; on the struct `#[live(..)]` only takes `crate = "path"`
+ --> tests/live_ui/fail/field_attr_on_struct.rs:5:8
+  |
+5 | #[live(nested)]
+  |        ^^^^^^

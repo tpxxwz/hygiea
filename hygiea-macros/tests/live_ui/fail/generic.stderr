@@ -1,0 +1,5 @@
+error: `#[derive(Live)]` does not support generic structs
+ --> tests/live_ui/fail/generic.rs:5:15
+  |
+5 | struct Wrapper<T> {
+  |               ^^^

@@ -1,0 +1,5 @@
+error: unknown `live` attribute on the struct; expected `crate = "path"`
+ --> tests/live_ui/fail/unknown_container_attr.rs:5:8
+  |
+5 | #[live(rename_all = "snake_case")]
+  |        ^^^^^^^^^^

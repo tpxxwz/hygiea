@@ -1,0 +1,5 @@
+error: unknown `live` attribute on a field; expected `nested` or `by_ref`
+ --> tests/live_ui/fail/unknown_field_attr.rs:6:12
+  |
+6 |     #[live(copy)]
+  |            ^^^^

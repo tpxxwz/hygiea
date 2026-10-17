@@ -1,9 +1,13 @@
+//! hygiea 的过程宏：`hy_err`、锁的两个 derive、`component`、`redact`、`Live`。经由 hygiea-core 导出，使用方不直接依赖它。
+
 use proc_macro::TokenStream;
 
 #[cfg(feature = "component")]
 mod component;
 mod error;
 mod krate;
+#[cfg(feature = "live-config")]
+mod live;
 #[cfg(feature = "lock")]
 mod lock;
 mod prefix;
@@ -58,4 +62,12 @@ pub fn redact(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn component(attr: TokenStream, item: TokenStream) -> TokenStream {
     component::expand(attr, item)
+}
+
+/// 给动态配置的 struct 生成按字段读的句柄 `<名字>Live`，字段上可以标 `#[live(nested)]` / `#[live(by_ref)]`，
+/// 见 `hygiea::db::live_config::Live`
+#[cfg(feature = "live-config")]
+#[proc_macro_derive(Live, attributes(live))]
+pub fn derive_live(input: TokenStream) -> TokenStream {
+    live::derive(input)
 }

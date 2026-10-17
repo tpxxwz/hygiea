@@ -24,10 +24,79 @@
 //!
 //! 配置在连接池配置的 `live_config` 段（[`LiveConfigConfig`]），比如 `[db.live_config]`，`uses` 带 2 时才能写，不写用默认值。
 //!
+//! # 读配置
 //!
-//! # 原理
+//! 两种读法：
 //!
-//! 详细的流程图见仓库里的 `docs/design/live-config.md`，这里是要点：
+//! - **整块快照**：`LiveConfig::get()` 拿到 `Arc<T>`，[`LiveView::get`] 拿到 [`LiveRef`]（`Deref` 到这一块），
+//!   [`LiveRef::map`] 从快照里再取一个字段。拿着期间配置换了新值也不影响手上这份，一次处理里几个值要来自同一版就用它
+//! - **字段方法，每次最新**：struct 上标 [`#[derive(Live)]`](trait@Live)，生成 `FooLive` 句柄，每个字段一个同名方法，
+//!   每次调都读当时最新的值。取一次句柄存起来（比如放进 service），之后直接 `cfg.start_time()`。连续调几个字段方法，
+//!   中间配置可能换了版本，拿到的值可能来自不同版本，要一致用句柄的 `snapshot()`
+//!
+//! ```ignore
+//! #[derive(Serialize, Deserialize, Default, Live)]
+//! pub struct RuntimeConfig {
+//!     #[live(nested)]                  // 字段方法返回 MarkjiSyncLive
+//!     pub markji_sync: MarkjiSync,
+//! }
+//!
+//! #[derive(Serialize, Deserialize, Default, Live)]
+//! pub struct MarkjiSync {
+//!     pub start_time: String,          // 默认：返回字段值的 clone
+//!     #[live(by_ref)]                  // 不复制：返回 LiveRef<Vec<i32>>
+//!     pub levels: Vec<i32>,
+//!     #[live(nested)]                  // 第三层
+//!     pub retry: Retry,
+//! }
+//!
+//! #[derive(Serialize, Deserialize, Default, Live)]
+//! pub struct Retry {
+//!     pub times: u32,
+//! }
+//!
+//! let markji = runtime.live().markji_sync();          // MarkjiSyncLive，Clone 后交给 service
+//! let start = markji.start_time();                    // String，每次最新
+//! let times = markji.retry().times();                 // 往下一层
+//! let levels = markji.levels();                       // LiveRef<Vec<i32>>
+//! let snapshot = markji.snapshot();                   // LiveRef<MarkjiSync>，整块同一版
+//!
+//! // 不用 derive 时：view 一层层往下截，read 借当前那一版读一下（不分配）
+//! let retry = runtime.view(|c| &c.markji_sync).view(|c| &c.retry);   // LiveView<Retry>
+//! let times = retry.read(|c| c.times);
+//! ```
+//!
+//! # 等变化、回调
+//!
+//! - `changed()`：整份配置变了就返回；`changed_by(|c| &c.start_time)`：只有这个字段的值变了才返回，别的字段变了接着等。
+//!   基准是句柄上一次观察到的那一版，调用之前已经发生的变化不会漏，见下面的「观察过的版本」
+//! - `on_change(f)`：整份配置变了就调 `f`；`on_change_by(|c| &c.start_time, f)`：这个字段变了才调，参数是新值。
+//!   返回 [`OnChangeGuard`]，drop 掉就停；后台任务、panic 的处理见 [`LiveView::on_change`]
+//!
+//! ```ignore
+//! let mut markji = runtime.live().markji_sync();
+//! markji.changed_by(|c| &c.start_time).await?;        // 等 start_time 变
+//! let guard = markji.on_change_by(|c| &c.start_time, |t| tracing::info!(%t, "start_time changed"));
+//! // guard 存进 AppState，drop 了就不再回调
+//! ```
+//!
+//! [`LiveConfig`]、[`LiveView`] 和生成的句柄上这几个方法都有，用法一样。
+//!
+//! ## 观察过的版本（`changed` / `changed_by` 的基准）
+//!
+//! 每个句柄记着自己上一次观察到的那一版，和 tokio `watch` 的 `Receiver` 记 seen 版本一样：
+//! - 句柄建出来时（`bind` / `bind_all`、[`LiveConfig::fixed`]）是当时那一版；`clone()`、`view()`、`live()` 拿到的新句柄
+//!   从原句柄当时观察到的那一版接着算，之后各记各的
+//! - `changed()` / `changed_by()` 返回时更新成返回时的那一版；`changed_by()` 等的过程中每比过一版就推进到那一版
+//!   （比过的这几版盯的字段都没变），中途被取消（比如外面套了超时）也不回退；`get()`、`read()` 不算观察，不更新
+//!
+//! 所以「上一次观察之后、这次调用之前」发生的变化不会漏：`changed()` 马上返回，`changed_by()` 先拿当前的值和观察过的
+//! 那一版比，字段已经不一样就马上返回，一样才往下等。`on_change` / `on_change_by` 在注册时的句柄的克隆上循环，
+//! 基准相同：句柄还没观察过的变化注册后马上回调一次。
+//!
+//! # 表、改配置和生效
+//!
+//! 内部流程（启动、第一次绑定、变更怎么传到程序、出错和关闭）见仓库里的 `docs/design/live-config.md`，这里是要点：
 //!
 //! - 三张表：`{p}config`（`(namespace, key)` → JSON 值）、`{p}config_revision`（每个 namespace 的版本号）、
 //!   `{p}config_history`（每次变更的新旧值），后两张由触发器写。前缀 `{p}` 默认是应用名加 `_`
@@ -41,12 +110,29 @@
 //!   轮询版本号。只接受更大的版本号，变了只重新读那个 namespace
 //! - 一个源一个后台任务、一个独立小池（1 条连接），不占业务池；断线由 sqlx 重连，PG 的 listener 坏了在小池上重建
 //!
-//! 文件：和驱动无关的是 `source.rs` 绑定入口和后台任务的启动，`handle.rs` 对外的句柄，`worker.rs` 后台任务，
-//! `schema.rs` 表结构和检查规则；SQL 在 `sql/<数据库>/live_config.rs`；执行在 `sqlx/`（一种数据库一个文件，`mod.rs` 的 `Store` 分发），
-//! 现在只有 sqlx 的实现（SeaORM 底层也是 sqlx）；接别的框架见 `sqlx/mod.rs` 的说明
+//!
+//! 表里一行一个 key，值存 JSON：
+//!
+//! | namespace | key | value |
+//! |---|---|---|
+//! | markji_sync | auto_sync | `false` |
+//! | markji_sync | levels | `[1, 2, 3]` |
+//!
+//! `bind_all(RuntimeConfig::default())` 的 namespace 是总 struct 的第一层字段名，`bind("markji_sync", ..)` 是参数传的字符串，
+//! 两种读的是表里同一行。改配置直接改表（SQL 或管理页面），PG 几乎立刻生效，MySQL、SQLite 最多等一个 `poll_interval_secs`：
+//!
+//! ```sql
+//! UPDATE dict_jp_config SET value = '[1, 2, 3]' WHERE namespace = 'markji_sync' AND key = 'levels';
+//! ```
+//!
+//! 日志：第一次绑定后按 namespace 打出生效的值，之后每次生效的变更打 `key: 旧值 -> 新值`；值是 struct 里生效的值，
+//! `#[redact(mask)]` 的字段打成 `***`。
 //!
 //! # 用的时候要注意
 //!
+//! - 几个应用**共用一套表**（前缀、库、schema 配成一样）时，同一个 namespace 的结构要兼容（升级时新旧版本都能读），
+//!   默认值由先启动的那个写进表，历史保留按配得最少的那个删
+//! - **PgBouncer** 的 transaction 模式下不能 `LISTEN`：连接池走 PgBouncer 时，用 `[db.live_config.connect]` 把动态配置指到直连地址
 //! - struct 的字段**改名**：旧 key 留在表里（打 warn），新 key 按代码默认值补进表，线上改过的值不会跟过去。
 //!   要保留就手动 `UPDATE {p}config SET key = '新名' WHERE namespace = .. AND key = '旧名'`（触发器记 D + I）。
 //!   `#[serde(alias)]` 只管读，补默认值时还是按新名插入
@@ -65,7 +151,8 @@
 //!     [`RepoErr::LiveConfigSchemaMismatch`](crate::RepoErr::LiveConfigSchemaMismatch)：用有权限的账号只执行剩下的三条
 //!     `CREATE TRIGGER`，或者删掉三张表再整份执行
 //! - SQLite 的 `:memory:` 库（不共享缓存）用不了：小池另开一条连接，连到的是另一个空库
-//! - 组件关闭后 `get()` 还是最后一次的值，`changed()` 返回 [`RepoErr::LiveConfigClosed`](crate::RepoErr::LiveConfigClosed)
+//! - 组件关闭后 `get()` 还是最后一次的值，`changed()` 返回 [`RepoErr::LiveConfigClosed`](crate::RepoErr::LiveConfigClosed)，
+//!   `on_change` 的任务退出
 
 mod handle;
 mod schema;
@@ -85,7 +172,15 @@ use crate::config::PgConnectOverride;
 #[cfg(live_config_sqlite)]
 use crate::config::SqliteConnectOverride;
 
-pub use handle::{LiveConfig, LiveRef, LiveView};
+pub use handle::{Live, LiveConfig, LiveRef, LiveView, OnChangeGuard};
+/// 生成按字段读的句柄，见 [`Live`](trait@Live)
+pub use hygiea_core::__live_config::Live;
+
+/// `#[derive(Live)]` 生成的代码引用的路径，不是给业务用的
+#[doc(hidden)]
+pub mod __private {
+    pub use hygiea_core::Result;
+}
 
 /// 动态配置支持的后端，按它分 PG / SQLite / MySQL。variant 跟着 feature 走：没开 `sqlite` 就没有 `Sqlite`，
 /// `match` 时漏了已开的后端编译不过

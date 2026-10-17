@@ -30,6 +30,8 @@ app = ["hygiea-core/app"]
 log = ["hygiea-core/log"]
 ws-client = ["hygiea-core/ws-client"]
 redact = ["hygiea-core/redact"]
+# 动态配置的 #[derive(Live)]，单开没用，经 db-live-config 打开
+live-config = ["hygiea-core/live-config"]
 lock = ["hygiea-core/lock"]
 lock-tokio = ["hygiea-core/lock-tokio"]
 json = ["hygiea-core/json"]
@@ -46,7 +48,7 @@ db-postgres = ["dep:hygiea-db", "hygiea-db/postgres"]
 db-sqlite = ["dep:hygiea-db", "hygiea-db/sqlite"]
 db-mysql = ["dep:hygiea-db", "hygiea-db/mysql"]
 # 连接池的数据库配置表（动态配置）
-db-live-config = ["dep:hygiea-db", "hygiea-db/live-config"]
+db-live-config = ["live-config", "dep:hygiea-db", "hygiea-db/live-config"]
 # 连接池的分布式锁：PG 整数 key 用 advisory lock；字符串 key 要开 db-lock-row（锁表，精确），不开时返回
 # LockErr::Unsupported，要哈希的由调用方自己 LockKeyI64::xxh3_64(&key) 后调 try_lock_i64。
 # MySQL 的整数 key、字符串 key 都用 GET_LOCK（原生命名锁，不建表），db-lock-row 对它没有影响

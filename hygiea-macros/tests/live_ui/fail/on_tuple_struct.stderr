@@ -1,0 +1,5 @@
+error: `#[derive(Live)]` only supports structs with named fields, not tuple structs
+ --> tests/live_ui/fail/on_tuple_struct.rs:5:8
+  |
+5 | struct Pair(u32, u32);
+  |        ^^^^

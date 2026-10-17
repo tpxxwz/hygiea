@@ -106,6 +106,10 @@
 //! hygiea-db = { version = "..", features = ["sqlx", "postgres"] }
 //! ```
 
+// 宏生成的代码按调用方依赖的名字引用本 crate（见 hygiea-macros 的 krate.rs），
+// 在 hygiea-db 自己内部（`#[derive(Live)]` 的单元测试）就是 ::hygiea_db
+extern crate self as hygiea_db;
+
 #[cfg(any(sqlx_pg, sqlx_sqlite, sqlx_mysql))]
 mod component;
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]
@@ -160,7 +164,9 @@ pub use live_config::PgLiveConfigConfig;
 #[cfg(live_config_sqlite)]
 pub use live_config::SqliteLiveConfigConfig;
 #[cfg(live_config_any)]
-pub use live_config::{DbLiveConfig, LiveConfig, LiveConfigConfig, LiveRef, LiveView};
+pub use live_config::{
+    DbLiveConfig, Live, LiveConfig, LiveConfigConfig, LiveRef, LiveView, OnChangeGuard,
+};
 #[cfg(lock_any)]
 pub use lock::DbLockClient;
 #[cfg(lock_mysql)]

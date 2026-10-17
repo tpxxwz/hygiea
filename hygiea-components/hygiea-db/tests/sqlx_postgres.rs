@@ -943,6 +943,7 @@ mod lock {
 #[container]
 mod live_config {
     use hygiea_core::app::RegistryConfig;
+    use hygiea_db::live_config::Live;
     use hygiea_db::{
         DbResources, PgConnectConfig, PgConnectOverride, PgLiveConfigConfig, RepoErr, SqlxPgConfig,
         SqlxPgPool,
@@ -955,9 +956,10 @@ mod live_config {
 
     type Inst = LiveInst<SqlxPgConfig>;
 
-    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Live)]
     struct Job {
         enabled: bool,
+        #[live(by_ref)]
         levels: Vec<i32>,
         start_time: String,
     }
@@ -988,6 +990,14 @@ mod live_config {
 
     #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
     struct All {
+        sync: Job,
+        cache: Cache,
+    }
+
+    /// 和 [`All`] 一样，按字段读（`#[derive(Live)]`）
+    #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Live)]
+    struct LiveAll {
+        #[live(nested)]
         sync: Job,
         cache: Cache,
     }
@@ -1556,5 +1566,45 @@ mod live_config {
             .unwrap()
             .unwrap();
         assert_eq!(cache.get().ttl_secs, 8);
+    }
+
+    /// `#[derive(Live)]` 的句柄：改表后字段方法读到新值，changed_by 只等盯的字段，on_change_by 回调拿到新值
+    #[tokio::test]
+    async fn live_handle_reads_updates() {
+        let env = Env::new().await;
+        let source = env.start().await;
+        let runtime = source.bind_all(LiveAll::default()).await.unwrap();
+        let mut sync = runtime.live().sync();
+        let start_times = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let pushed = start_times.clone();
+        let _guard = sync.on_change_by(
+            |c| &c.start_time,
+            move |t| pushed.lock().unwrap().push(t.clone()),
+        );
+
+        env.exec("UPDATE hy_config SET value = '[3]' WHERE namespace = 'sync' AND key = 'levels'")
+            .await;
+        eventually(5, || async { *sync.levels() == vec![3] }).await;
+        let waited = tokio::time::timeout(
+            Duration::from_millis(300),
+            sync.changed_by(|c| &c.start_time),
+        )
+        .await;
+        assert!(waited.is_err(), "start_time 没变，changed_by 不应该返回");
+
+        env.exec(
+            "UPDATE hy_config SET value = '\"02:00\"' WHERE namespace = 'sync' AND key = 'start_time'",
+        )
+        .await;
+        tokio::time::timeout(Duration::from_secs(5), sync.changed_by(|c| &c.start_time))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(sync.start_time(), "02:00");
+        assert_eq!(runtime.live().snapshot().sync.start_time, "02:00");
+        eventually(5, || async {
+            *start_times.lock().unwrap() == vec!["02:00".to_string()]
+        })
+        .await;
     }
 }
