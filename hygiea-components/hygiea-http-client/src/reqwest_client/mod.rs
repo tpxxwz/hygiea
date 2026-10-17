@@ -8,9 +8,8 @@
 //! - 重试：[`RetryCtx`]、[`Retry`]、[`RetryDecision`]，失败信息 [`SendFailure`]
 //! - 日志：[`FailedLogLevel`]；错误：[`HttpClientErr`]
 //!
-//! 各文件的职责见它们自己的文档（`tools/docs.py tree hygiea-components/hygiea-http-client/src`），发送流程图在 `send.rs` 开头。
-//! 依赖方向：`retry → send → request / headers / body / response / logging / text / error`，`client → config`。
-//! `send` 和 `response` 互相引用：`FromBody::from_body` 的参数 [`RespBody`] 绑定着正在进行的那次发送。
+//! 各文件的职责见它们自己的文档（`tools/docs.py tree hygiea-components/hygiea-http-client/src`），
+//! 发送流程、日志怎么生成、debug 日志的实现见仓库里的 `docs/design/http-client.md`。
 //!
 //! 请求和响应日志里的字段打码走 [`hygiea_core::redact`]。每次请求默认打 `http call start` / `http call success`
 //! 两条 info 日志，失败（传输失败、非 2xx、解码失败）按 [`FailedLogLevel`] 打一条。

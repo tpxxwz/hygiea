@@ -15,8 +15,7 @@
 //!
 //! | 层 | 内容 | 默认 `cargo test` | 写法 |
 //! |---|---|---|---|
-//! | 单元 | 纯逻辑：参数、默认值、配置解析 | 跑 | `#[test]` |
-//! | mock | 进程内的本地服务，比如 `http_mock` | 跑 | `#[test]` / `#[tokio::test]` |
+//! | 默认 | 不依赖外部环境的 | 跑 | `#[test]` / `#[tokio::test]` |
 //! | container | 在代码里启动容器（Docker 等），CI 能跑 | 不跑 | [`#[container]`](macro@container) |
 //! | live | 连使用者自己控制的真实服务，凭证从环境变量读 | 不跑 | [`#[live]`](macro@live) |
 //!

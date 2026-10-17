@@ -1,42 +1,5 @@
-//! 字节转成日志 / 错误里的文本：charset 解码、是不是文本、控制字符转义。打码见 [`hygiea_core::redact`]
-//!
-//! ## 字节转成文本的几个函数
-//!
-//! | 函数 | 作用 | 实现 |
-//! |---|---|---|
-//! | `is_text_content_type(ct)` | 这个 content-type 算不算文本 | 本模块，按 MIME 类型判断 |
-//! | `decode_charset(ct, bytes)` | 按 ct 里的 `charset` 把字节解码成文本，默认 UTF-8 | 本模块，解码用 `encoding_rs` |
-//! | `body_text(headers, body)` | 响应 body 转文本：文本类解码，二进制只给 `<N bytes ..>`；**不转义** | 本模块 |
-//! | `to_one_line(text)` | 让日志保持一行：`\n` `\r` `\t` 换成空格，其他控制字符转义 | 本模块，单字符转义用 `char::escape_default` |
-//! | `body_preview(headers, body)` | 响应的日志摘要，就是 `to_one_line(body_text(..))` | 本模块 |
-//!
-//! 标准库的 `str::escape_default` 会转义所有非 ASCII（中文变成 `\u{..}`），`str::escape_debug` 会转义
-//! 引号和反斜杠（JSON 里全是 `\"`），都不适合日志，所以 `to_one_line` 自己实现。
-//! 打码用的 `redact::to_redacted_json` 在 [`hygiea_core::redact`]。
-//!
-//! ## 调用链
-//!
-//! ```text
-//! 请求（日志 req=）
-//!   send ─ req_preview
-//!     ├─ params → redact::to_redacted_json（打码）
-//!     └─ body   → IntoBody::preview()                      (body.rs)  
-//!           ├─ Json / Form → redact::to_redacted_json（打码）
-//!           └─ Raw → is_text_content_type(ContentType::as_str())
-//!                 ├─ 文本   → to_one_line(decode_charset(..))
-//!                 └─ 二进制 → "<N bytes type>"
-//!
-//! 响应（send 拿到 body 之后）
-//!   ├─ 非 2xx   日志 resp= body_preview       错误 body  body_text（不转义，给调用方解析）
-//!   ├─ 解码失败 日志 resp= body_preview
-//!   └─ 成功     日志 resp= FromBody::resp_preview 有值（Json<T> 打码、String 原文）→ to_one_line(..)
-//!                          没有（Bytes / ()）                                     → 不输出 resp 字段
-//!
-//! body_preview = to_one_line ∘ body_text
-//! body_text    = is_text_content_type ? decode_charset : "<N bytes ..>"
-//! ```
-//!
-//! 规则：给人看的（日志 `req=` / `resp=`）先打码、再转文本、最后 `to_one_line`；成功响应只有类型能打码
+//! 字节转成日志 / 错误里的文本：charset 解码、是不是文本、控制字符转义。打码见 [`hygiea_core::redact`]。
+//! 各函数在调用链里的位置、为什么不用标准库的转义，见仓库里的 `docs/design/http-client.md`。
 
 use std::borrow::Cow;
 

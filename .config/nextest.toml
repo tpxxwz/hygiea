@@ -1,6 +1,6 @@
-# cargo-nextest 的配置。每个测试单独一个进程，测试二进制之间也并行。安装：brew install cargo-nextest
+# cargo-nextest 的配置。每个测试单独一个进程，测试二进制之间也并行。安装：cargo install cargo-nextest --locked
 #
-# 平时全量跑（单元、mock、container 层；container 层要 Docker）：
+# 平时全量跑（默认、container 层；container 层要 Docker）：
 #   cargo nextest run --workspace --all-features --run-ignored all
 # container 层的测试被 #[container] 标成了 #[ignore]，cargo test 和 nextest 默认都不跑；--run-ignored all 连同普通测试
 # 一起跑（配置文件里写不了这一项，只能写在命令行上）。

@@ -1,16 +1,5 @@
-//! debug 日志（`debug-log` feature）。整个模块只在这个 feature 下编译（mod.rs 里的
-//! `#[cfg(feature = "debug-log")] mod debug;`），模块里不再写 cfg；别的文件只在字段和调用处有 cfg。
-//!
-//! | 内容 | 说明 |
-//! |---|---|
-//! | [`ReqwestConfig::debug`]、[`ReqwestClient::debug`]、[`ReqwestClient::set_debug`]、[`ReqwestClient::set_pretty`] | 对外的开关 |
-//! | `DebugState` | client 级的状态（默认头、两个开关），所有 clone 共享 |
-//! | `DebugDraft` → `DebugCtx` | 一次请求：发出前取 params / body 原文，build 出请求后补上 url 和请求头 |
-//! | `DebugStart` / `DebugEnd` | 两条日志的 JSON 结构：start 是请求，结束是请求加响应 |
-//! | `headers_json` / `text_json` | 头转成 JSON 对象；文本能解析成 JSON 就嵌套，否则是字符串 |
-//!
-//! 打开后 send 不打平时的日志，改打这两条：消息后面接 JSON（默认一行，`set_pretty` 打开后缩进成多行），
-//! 无视 `enable_logging`，不打码。序列化失败返回 `JsonError`，一路传给 send
+//! debug 日志（`debug-log` feature）：对外的开关是 [`ReqwestConfig::debug`]、[`ReqwestClient::debug`]、[`ReqwestClient::set_debug`]、
+//! [`ReqwestClient::set_pretty`]，日志的格式见模块文档的「debug 日志」，内部结构见仓库里的 `docs/design/http-client.md`。
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};

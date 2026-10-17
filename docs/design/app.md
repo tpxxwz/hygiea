@@ -60,6 +60,14 @@ flowchart TD
 - 默认是 `hygiea`，和默认的环境变量前缀 `HYGIEA` 对得上，什么都不配也能启动
 - 配置读不到、解析失败、校验不过时日志还没装，所以打到 stderr 后 panic（启动期错误）
 
+配置合并的实现（`config.rs`）：
+
+- 用 `config` crate 的 builder 按优先级叠加：环境配置文件、`-f` 的文件（`config::File`），环境变量（`config::Environment`，
+  前缀和层级都用 `__` 分隔、`try_parsing` 把值识别成数字和布尔），`--set`（`set_override`），最后 `try_deserialize` 成应用配置 `T`
+- 合并之前先建 `ConfigPlan`：记下这次的环境名和它从哪来、要读的文件、会参与合并的环境变量名、`--set` 的 key。
+  启动时打到 stdout；任何一步失败（`apply --set`、`load`、`parse`、`validate`）都把它连同错误和原因链打到 stderr 再 panic。
+  只记名字和 key、不记值，因为值里可能有密码
+
 ---
 
 ## 4. 组件
@@ -159,12 +167,8 @@ impl ConfigResource for FredRedisPool {
 pub type RedisComponent = ImmediateResourceComponent<FredRedisPool>;
 ```
 
-`ImmediateResourceComponent<R>`：
-
-- `provides` 是 `ResourceId::named::<R>(组件名)`。
-- `startup`：`R::from_config(&config, resources.registry_config())` → `insert_named(组件名, 资源)`。
-- `stop`：调 `R::close`。
-- 它没有 `depends_on`，所以 `from_config` 里只用配置和 `RegistryConfig`，不读别的资源（参数里也没有 `Resources`）。
+`ImmediateResourceComponent<R>` 做什么（按组件名提供、`startup` 建、`stop` 关）见它自己的文档。它没有 `depends_on`，
+所以 `from_config` 里只用配置和 `RegistryConfig`，不读别的资源，参数里也就没有 `Resources`。
 
 `from_config` 要第二个参数，是因为它不经过 Registry 也要能调（测试、脚本），这时没有 `Resources`；
 而有的资源在建的时候就要用应用名（PG 连接的 `application_name`、live config 的表前缀）。
@@ -183,3 +187,5 @@ pub type RedisComponent = ImmediateResourceComponent<FredRedisPool>;
 
 - 每个组件：触发它自己的 `CancellationToken` → 等它的后台任务结束 → 调 `stop`；单独计时，超时的 abort 任务，一个卡住的组件不会占掉后面组件的时间
 - 信号监听在 `run` 一开始就装好：组件启动期间收到的信号会留着，启动完成后马上走优雅关闭，不会被系统默认行为直接杀掉
+- 关闭途中再收到信号走 `signal.rs` 的 `force_exit`：`process::exit(130)`，不跑析构函数，文件日志缓冲里最后几行可能写不进去，
+  所以这条同时打到 stderr

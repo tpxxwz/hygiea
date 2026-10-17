@@ -28,7 +28,7 @@
 | 分布式锁 | trait 和 key：`hygiea-core/src/lock/mod.rs`；PG / MySQL：`hygiea-db/src/lock/mod.rs` | `docs/design/lock.md` |
 | 动态配置 | `hygiea-db/src/live_config/mod.rs`、`hygiea-macros/src/live_config.rs` | `docs/design/live-config.md` |
 | 数据库组件 | `hygiea-db/src/lib.rs`、`component.rs`（`uses`、建和关的顺序）、`build.rs`（feature 组合的 cfg 别名） | |
-| HTTP 客户端 | `hygiea-http-client/src/reqwest_client/mod.rs`，发送流程图在 `send.rs` 开头 | |
+| HTTP 客户端 | `hygiea-http-client/src/reqwest_client/mod.rs` | `docs/design/http-client.md` |
 | 宏生成的代码怎么引用 hygiea | `hygiea-macros/src/krate.rs` | |
 | 测试分层、给使用方的测试工具 | `hygiea-test/src/lib.rs` | |
 | 还没做的、没定的 | `docs/todo/` | |
@@ -57,29 +57,16 @@
 
 ## 代码规则
 
-- **非测试代码不允许 `unwrap` / `expect`。** 唯一的例外是启动期就会暴露的失败（初始化、加载配置）。其余一律转成 `HyErr` 往上传。
-- **依赖库的签名返回 `Result` / `Option` 就当它会失败。** 不要因为读了它当前的实现、觉得这组参数不会失败，就用 `expect` 或把自己的 API 改成不返回 `Result`。只有签名本身不可失败才算不会失败。
-- **不替调用方做语义选择。** 底层库返回"唯一 / 歧义 / 不存在"这类结果（比如 `OffsetResult`）时原样返回，不在库里替调用方挑一个。改公开签名、改语义之前先问。
 - datetime 的定位：`UtcDateTime` 管 UTC，`OffsetDateTime` 只管系统本地时区，不支持任意时区，不要加 `tz` 参数。
-- 错误用 `#[derive(hy_err)]` 定义，错误码规则见 README 的「错误码体系」。框架内置错误用项目前缀 `999`。
+- 错误码规则见 README 的「错误码体系」。框架内置错误用项目前缀 `999`。
 - `999` 下只能用 3 位的 `#[err_code_internal_module_prefix = ".."]`（变体码 2 位），宏会拦住 2 位的 `err_code_module_prefix`。
   新加模块按区间取号，取完更新 README「保留和内置错误码」的区间表（错误码表本身是生成的，见「文档」）：
   - `000`、`999`：`BaseErr`（不写前缀，5 位码），只用 `000xx` 和兜底的 `99999`
   - `001`～`089`：core（app `001`、log `002`、lock `003`）；`090`～`099`：core 测试里自定义的错误 enum
   - `100`～`799`：components（db `100`、http-client `101`）
   - `800`～`998`：hygiea-test（http_mock `800` / `801`）
-- 测试里的错误 enum 只在自己的测试二进制里注册（linkme 链接期收集），不会进正式程序，
-  但会和同一个二进制里链接进来的正式错误一起查重，所以用测试专用区间，别占正式模块的号
-- 注释、文档用中文。错误模板等实际输出的字符串保持英文，不翻译。
-- 写法跟周围代码保持一致：命名、注释密度、惯用写法。
-- 组件放进 Resources 的资源：
-  - 用组件 crate 自己定义的类型，第三方类型放在私有的 `inner` 里。只是换个类型名的（连接池、SDK 客户端）实现 `Deref` 到 `inner`，
-    不实现 `DerefMut`；在第三方之上加了自己接口、不想被绕过的（如 `ReqwestClient`）不实现 `Deref`
-  - 不存完整的 Config：配置在注册组件的地方本来就有。运行时要用的值在构建时转换好，作为单独的字段存放
-  - 不经过 Registry 也能直接从配置建出来。一个配置建一个资源的，资源实现 `ConfigResource`（`from_config` / `close`），
-    组件写成 `pub type XxxComponent = ImmediateResourceComponent<XxxPool>;`；一个配置建多个资源、有后台任务、
-    Deferred 组件照常手写。一个配置按开关建多个资源的参考 hygiea-db：几种连接池共用一个泛型组件（`DbComponent<C>`），
-    不经过 Registry 用 `DbResources::from_config` 一次建出全部
+- 一个配置按开关建多个资源的组件参考 hygiea-db：几种连接池共用一个泛型组件（`DbComponent<C>`），
+  不经过 Registry 用 `DbResources::from_config` 一次建出全部
 
 ## feature
 
@@ -92,35 +79,15 @@
 
 | 内容 | 位置 |
 |---|---|
-| 单元测试：纯逻辑（配置默认值、解析、builder、`provides()` 这类），可以测私有函数 | 源文件里的 `#[cfg(test)] mod tests` |
-| crate 的集成测试：要把组件跑起来、起本地服务或容器的；给使用方看的示范写法。只用公开 API | `<crate>/tests/` |
+| 单元测试：纯逻辑（配置默认值、解析、builder、`provides()` 这类） | 源文件里的 `#[cfg(test)] mod tests` |
+| crate 的集成测试：要把组件跑起来、起本地服务或容器的；给使用方看的示范写法 | `<crate>/tests/` |
 | 给使用方看的示例 | `hygiea-examples/examples/<主题>/`，每个示例一个文件、只讲一件事，在 `Cargo.toml` 里用 `[[example]]` 声明（Cargo 只自动发现 `examples/*.rs` 和 `examples/*/main.rs`），名字 `<目录>_<文件>`；读配置文件的示例各用 `config/<示例名>/` 一个目录 |
 | 调查、速查、暂存代码 | `playground/tests/` |
 
-- 测试按依赖分四层，后两层用 `hygiea_test::{container, live}` 标注（内部和使用方用同一套）：
-
-  | 层 | 内容 | 默认 `cargo test` | agent / CI 跑不跑 | 写法 |
-  |---|---|---|---|---|
-  | 单元 | 纯逻辑：参数、默认值、配置解析 | 跑 | 跑 | `#[test]` |
-  | mock | 进程内的本地服务（`test_support::http_server`、`hygiea-test` 的 http_mock；测建连超时用 `hygiea_test::tcp::silent()`） | 跑 | 跑 | `#[test]` / `#[tokio::test]` |
-  | container | 用 `hygiea_test::container::ContainerSpec` 在代码里启动容器（需要 Docker） | 不跑 | 跑（本机要有 Docker） | 模块上标 `#[container]` |
-  | live | 连使用者自己控制的真实服务（R2、AWS 等），凭证从环境变量读 | 不跑 | **不跑**，只由用户手动跑 | 模块上标 `#[live(env = ["A", ..])]` |
-
-  模块里照常用 `#[test]` / `#[tokio::test]` 标测试，宏给它们加 `#[ignore]`，并把模块内容挪进层名子模块（测试名 `<模块名>::container::<函数名>`）。
-  container 层：`cargo nextest run -p <crate> --features .. --run-ignored only -E 'test(/::container::/)'`
-  （`cargo test` 的写法：`-- --ignored ::container::`，一定要带上 `::container::`，否则会把 live 层一起跑）。
-  live 层只由用户手动跑，agent 绝对不能跑，见「怎么验证」。
-  有这两层的测试文件，文件头写明运行命令和需要的环境变量。
+- 测试分层见 `hygiea-test` 的 crate 文档。HTTP 客户端的测试在进程里起本地服务（`test_support::http_server`），测建连超时用 `hygiea_test::tcp::silent()`，默认就跑。
+  有 container、live 层的测试文件，文件头写明运行命令和需要的环境变量。
   组件用 `hygiea-test = { workspace = true }` 作为 dev-dependency 引入。`hygiea-test` 只依赖 core，
   core 自己的测试不能用它（会出现两份 core）。
-- 内部 crate 之间的 dev-dependency：被依赖的 crate 反过来（直接或间接）依赖自己时，形成循环，只能写 path、不写版本
-  （`cargo publish` 打包时会去掉没有版本号的 dev-dependency），目前是 `hygiea-macros` → `hygiea`、
-  `hygiea-test-macros` → `hygiea-test`。没有循环的用 `workspace = true`，`cargo publish --workspace` 会按依赖关系
-  （包括 dev-dependency）排发布顺序。
-- 组件测的是我们自己写的部分：对第三方框架的封装和增强，比如自己加的配置项和它怎么转成第三方的配置、
-  默认值、错误转换、生命周期（启动、按名字放进 Resources、关闭）、日志打码这类附加行为。
-  第三方框架自己的功能（连接池怎么复用、协议细节、它自己的配置项各自的效果）由它自己保证，不逐项测；
-  只用一两个测试确认接上了、能用就行（比如连上后执行一条查询）。不为了凑覆盖率去测第三方的行为。
 - 组件的测试照这个结构写（新加组件直接参考，`hygiea-db` 是完整的例子）：
 
   ```
@@ -148,29 +115,16 @@
 
 ## 怎么验证
 
-- 测试用 cargo-nextest 跑（每个测试单独一个进程，测试二进制之间也并行），没装的先 `brew install cargo-nextest`。
-  配置在 `.config/nextest.toml`：默认不跑 trybuild（`_ui` 结尾的测试二进制）和 live 层。命令：
-  - 全量：`cargo nextest run --workspace --all-features --run-ignored all`（单元、mock、container 层；要 Docker）
-  - **container 层 agent 要跑**：它被 `#[container]` 标成了 `#[ignore]`，只是为了让使用方默认的 `cargo test` 不依赖 Docker，
-    不是不用跑。`cargo test` 和 nextest 默认都会跳过它，所以命令里一定要带上：全量带 `--run-ignored all`，
-    按范围跑时带 `--run-ignored only -E 'test(/::container::/)'`（`cargo test` 是 `-- --ignored ::container::`）。
-    漏了参数时 container 测试被悄悄跳过、结果照样显示通过：看一眼 Summary 里的 skipped，全量时应该只有 live 层那 1 个。
-    本机有 Docker，直接跑，不用问；没有 Docker 或容器起不来时明确说没跑，不能说测试通过
-  - trybuild：改了宏时才跑，`cargo nextest run --workspace --all-features --ignore-default-filter -E 'binary(/_ui$/)'`
-  - doc test：nextest 不跑，要跑用 `cargo test --workspace --all-features --doc`（可运行的只有 core 里的两个）
-  - **live 层 agent 绝对不能跑**：它用真实凭证连真实的托管服务，会产生费用、改动真实数据。默认过滤已经排除了它，
-    不要用 `--ignore-default-filter`、`-E 'test(/::live::/)'`，也不要用 `cargo test -- --ignored`（会把 live 层一起跑进去）。
-    改了相关代码时，告诉用户要手动跑哪条命令
-  - 跑得反常地慢（简单的测试也要几秒）时先看 `target/` 是不是太大：换 feature 组合编译会一直积累产物，
-    文件多了 macOS 读系统代理、rustc 找依赖都会变慢，`cargo clean` 后重编
-- 改代码过程中只 check / test 改到的 crate 和相关 feature，比如 `cargo nextest run -p hygiea-http-client --features reqwest --test reqwest_client`。crate 和 feature 很多，不要动不动 `--workspace`、`--all-features` 全量编译、全量测试，同一条命令不要重复跑。
-- 准备提交时，先分析这次改动需要新增或修改哪些测试，确认后再按范围测。
-- 改了 feature 或 `cfg`，用几种相关的 feature 组合 `cargo check`（不开、只开相关的）；`--all-features` 留到收尾时跑一次。
-- 改了有 container 层测试的代码，一定跑对应 crate 的 container 层（`--run-ignored only -E 'test(/::container::/)'`），
-  规则见上面加粗的两条：container 层要跑，live 层绝对不能跑。
+- nextest 的配置在 `.config/nextest.toml`：默认不跑 trybuild（`_ui` 结尾的测试二进制）和 live 层。命令：
+  - 全量：`cargo nextest run --workspace --all-features --run-ignored all`（默认、container 层；要 Docker）。
+    跑完看一眼 Summary 里的 skipped，应该只有 live 层那 1 个。本机有 Docker，container 层直接跑，不用问
+  - trybuild：`cargo nextest run --workspace --all-features --ignore-default-filter -E 'binary(/_ui$/)'`
+  - doc test：可运行的只有 core 里的两个
+  - live 层：默认过滤已经排除了它，不要用 `--ignore-default-filter`、`-E 'test(/::live::/)'`
+- 改了有 container 层测试的代码，一定跑对应 crate 的 container 层。
 - 仓库目前没有 CI。以后加 CI 时：普通测试 `cargo nextest run --workspace --all-features`；有 Docker 的 runner 上加
   `--run-ignored all`；trybuild、doc test 另跑；live 层不放进 CI。
-- 改了宏的报错信息，重新生成 trybuild 快照并检查 diff（只跑改到的那个 `--test`）：
+- 重新生成 trybuild 快照（只跑改到的那个 `--test`）：
   - hygiea-macros：`TRYBUILD=overwrite cargo test -p hygiea-macros --test hy_err_ui --test redact_ui --test component_ui --test lock_ui --test live_ui`
   - `#[container]` / `#[live]`：`TRYBUILD=overwrite cargo test -p hygiea-test-macros --test test_tier_ui`
   - hygiea-db 的 `db!`：`TRYBUILD=overwrite cargo test -p hygiea-db --all-features --test db_macro_ui`
@@ -212,6 +166,3 @@
 
 - 讨论方案时，用户回一句简短的话不等于同意，不要按默认理解直接写下去。只有用户明确说「定了，开始做」才写代码；
   做完先给用户看，不顺手改别的。补文档、同步 README / design / todo、整理提交这类收尾，等用户明确说「收尾」再做。
-- 如实陈述方案的能力、限制和工作量，不替用户判断需求轻重（不说"过度设计""太重"）。
-- 问第三方库的行为就只答第三方库，不顺带分析本项目的代码。
-- 演示某个 API 的用法时只用这个 API 本身，不要混入项目里的 wrapper。
