@@ -1,6 +1,6 @@
 //! 日期时间：基于 [`time`]，补上项目里常用的格式、时间戳、日历边界和系统时区换算。
 //!
-//! # 两种类型
+//! # 类型
 //!
 //! - [`UtcDateTime`]：UTC 时刻。存储、传输、比较、按 UTC 切日都用它。
 //!   日历边界见 [`HygieaUtcDateTimeExt`]。
@@ -8,54 +8,18 @@
 //!   - [`now()`]、`from_millis`、`from_secs` 得到的是 UTC offset；
 //!   - `parse_ext_rfc3339`、`parse_ext_with_offset` 保留输入里的 offset；
 //!   - 带 `_local` 的方法得到的才是系统时区的 offset。
+//! - [`Time`]：钟面时间，不带日期和 offset，是哪个时区的由取它的地方决定：[`now_time()`] 是 UTC 的，
+//!   `now_time_local()` 是系统时区的。格式和解析见 [`HygieaTimeExt`]。
 //!
-//! 两种类型共有的能力（时间戳、RFC 3339、格式化、平移）见 [`HygieaDateTimeExt`]。
+//! `UtcDateTime`、`OffsetDateTime` 共有的能力（时间戳、RFC 3339、格式化、平移）见 [`HygieaDateTimeExt`]。
 //!
-//! # 系统时区（feature `datetime-iana`）
+//! # 默认和 `_local`
 //!
-//! 按系统时区做的事都在 `HygieaOffsetDateTimeExt` 里，方法名带 `_local`。
-//! 这些方法先把输入换算到系统时区再计算，**结果只取决于时刻，和输入带什么 offset 无关**，
-//! 所以 `now()` 的结果、解析来的带 offset 的时间都可以直接调用。
+//! 默认的版本只按值自身的 offset（`UtcDateTime` 就是 UTC）算，不依赖系统时区；按系统时区算的是另一份，
+//! 名字带 `_local`（方法、serde 模块、宏都是），在 feature `datetime-iana` 下。比如 `format_ext` 和 `format_ext_local`、
+//! [`ymdhms_utc_range`] 和 `ymdhms_utc_range_local`。
 //!
-//! 系统时区在第一次使用时确定并缓存：`TZ` 环境变量 → 系统设置（unix 上是 `/etc/localtime`）→ UTC。
-//!
-//! # 格式化时注意 offset
-//!
-//! `format_ext` 按值自身的 offset 输出。配不带 offset 的格式（[`WithoutOffsetFormatter`]）时，
-//! 字符串里看不出是哪个 offset 的钟面时间：
-//!
-//! ```ignore
-//! let dt = now();                                        // UTC offset
-//! dt.format_ext(WithoutOffsetFormatter::YmdHMS)?;        // UTC 钟面时间，不是本地时间
-//! dt.format_ext_local(WithoutOffsetFormatter::YmdHMS)?;  // 系统时区的钟面时间
-//! dt.format_ext(WithOffsetFormatter::YmdTHMS3F)?;        // 带 offset，没有歧义
-//! ```
-//!
-//! 要本地时间字符串用 `format_ext_local`；只有确定值自身的 offset 就是想要的，才用 `format_ext` 配不带 offset 的格式。
-//!
-//! # 日历边界
-//!
-//! - `start_of_*` / `end_of_*`：`end_of_*` 是闭区间终点（最后 1 纳秒），适合展示；
-//! - 做区间判断用半开区间 `[start_of_x, start_of_next_x)`，不要写 `<= end_of_x`：
-//!
-//! ```
-//! use hygiea_core::datetime::{HygieaUtcDateTimeExt, now_utc};
-//!
-//! let t = now_utc();
-//! let (start, next) = (t.start_of_day(), t.start_of_next_day().unwrap());
-//! assert!(start <= t && t < next);
-//! ```
-//!
-//! - `_local` 版本返回 `OffsetResult`：夏令时切换可能让某天的零点**不存在**（`None`）或**出现两次**（`Ambiguous`），
-//!   库不替调用方选，按业务自己处理：
-//!
-//! ```ignore
-//! match dt.start_of_day_local()? {
-//!     OffsetResult::Some(t) => t,
-//!     OffsetResult::Ambiguous(first, second) => first.min(second), // 比如取较早的
-//!     OffsetResult::None => { /* 比如跳过这一天，或取切换后的第一个时刻 */ }
-//! }
-//! ```
+//! 不带 offset 的字符串只按系统时区解释（`parse_ext_local`），不会当成 UTC 读：没有 offset 不知道是哪个时区的时刻。
 //!
 //! # 错误与返回值
 //!
@@ -63,36 +27,26 @@
 //! - 可能失败的（越界、解析失败）返回 [`Result<_>`](crate::Result)（错误是 `HyErr`），错误码是 `BaseErr::DateError`；
 //! - 有多种可能结果的（本地钟面时间对应 0/1/2 个时刻）原样返回 `OffsetResult`。
 //!
-//! # serde
+//! # 文件
 //!
-//! 外部接口常用 RFC 3339（`2026-10-05T12:57:24.719Z`），time 给 `UtcDateTime` 默认的 serde 格式却是
-//! `2026-10-05 12:57:24.719`，读不了。字段上用 [`rfc3339_utc`]：解析时带 `Z` 或任意 offset 都换算成 UTC，
-//! 输出带 `Z`；`Option` 字段用 `rfc3339_utc::option`，字段可能缺失时再加 `#[serde(default)]`：
-//!
-//! ```ignore
-//! #[derive(Serialize, Deserialize)]
-//! struct Card {
-//!     #[serde(with = "hygiea::datetime::rfc3339_utc")]
-//!     created_time: UtcDateTime,
-//!     #[serde(default, with = "hygiea::datetime::rfc3339_utc::option")]
-//!     expire_time: Option<UtcDateTime>,
-//! }
-//! ```
-//!
-//! # 格式名
-//!
-//! [`DateTimeFormatter`] 可以从配置里的名字解析（`FromStr` / serde），名字就是 `类别.变体`，
-//! 比如 `WithOffset.YmdTHMS3F`、`WithoutOffset.YmdHMS`；[`WithoutOffsetParser`] 也能直接当格式用。
-
-use time::format_description::well_known::Rfc3339;
+//! - `datetime_ext.rs`：`UtcDateTime` / `OffsetDateTime` 的 Formatter / Parser 和格式名、[`HygieaDateTimeExt`]、
+//!   [`HygieaUtcDateTimeExt`]；serde 读写模块 [`rfc3339_utc`]、`Range` 的 [`ymdhms_utc_range`] / [`ymdhms_offset_range`]
+//! - `local.rs`：系统时区、`now_local`、`WithoutOffsetParser` 的解析、`HygieaOffsetDateTimeExt`、
+//!   `Range` 的 `_local` serde 读写模块（feature `datetime-iana`）
+//! - `time_ext.rs`：[`Time`] 的 [`TimeFormatter`] / [`TimeParser`]、[`HygieaTimeExt`]；serde 读写模块 [`hms`]、`Range` 的 [`hms_range`]
+//! - `chrono_bridge.rs`：和 chrono 互转（feature `datetime-chrono`）
 
 /// 公开接口里用到了 time 的类型，再导出 time，下游不用自己加依赖，也不会和这里的版本对不上。
-/// 两个主类型直接放在这里：`hygiea::datetime::UtcDateTime`，其余经 `hygiea::datetime::time::..`
+/// 主类型直接放在这里：`hygiea::datetime::UtcDateTime`，其余经 `hygiea::datetime::time::..`
 pub use time;
-pub use time::{OffsetDateTime, UtcDateTime};
 
-mod layout;
-mod utc;
+/// 宏生成的 serde 模块用
+#[doc(hidden)]
+pub use serde as __serde;
+pub use time::{OffsetDateTime, Time, UtcDateTime};
+
+mod datetime_ext;
+mod time_ext;
 
 #[cfg(feature = "datetime-iana")]
 pub(super) mod local;
@@ -100,11 +54,15 @@ pub(super) mod local;
 #[cfg(feature = "datetime-chrono")]
 mod chrono_bridge;
 
-pub use layout::*;
-pub use utc::*;
+pub use datetime_ext::*;
+pub use time_ext::*;
 
 #[cfg(feature = "datetime-iana")]
-pub use local::{HygieaOffsetDateTimeExt, now_local};
+pub use local::{
+    __datetime_range_local, HygieaOffsetDateTimeExt, now_local, ymdhms_offset_range_local,
+    ymdhms_utc_range_local,
+};
+
 /// `parse_ext_local` 的返回类型（钟面时间可能唯一、歧义或不存在）。再导出后下游不用自己加
 /// time-tz 依赖去 match 它，也不会撞上版本对不上
 #[cfg(feature = "datetime-iana")]
@@ -112,9 +70,6 @@ pub use time_tz::OffsetResult;
 
 #[cfg(feature = "datetime-chrono")]
 pub use chrono_bridge::*;
-
-// serde 用的 RFC 3339 读写模块 `rfc3339_utc` 和 `rfc3339_utc::option`，说明见模块文档「serde」
-time::serde::format_description!(pub rfc3339_utc, UtcDateTime, Rfc3339);
 
 /// 当前 UTC 时刻。
 pub fn now_utc() -> UtcDateTime {
@@ -126,6 +81,17 @@ pub fn now_utc() -> UtcDateTime {
 /// 要系统时区的当前时间用 `now_local`；按系统时区格式化或切日直接调用带 `_local` 的方法即可。
 pub fn now() -> OffsetDateTime {
     now_utc().into()
+}
+
+/// 当前 UTC 的钟面时间，取自 [`now_utc`]
+pub fn now_time() -> Time {
+    now_utc().time()
+}
+
+/// 当前系统时区的钟面时间，取自 `now_local`（它也是从 [`now`] 换算来的）
+#[cfg(feature = "datetime-iana")]
+pub fn now_time_local() -> Time {
+    now_local().time()
 }
 
 #[cfg(test)]
@@ -140,70 +106,5 @@ mod tests {
         let real = UtcDateTime::now();
         assert!((now_utc() - real).whole_seconds().abs() < 60);
         assert_eq!(now().offset(), UtcOffset::UTC);
-    }
-
-    // ---- serde ---------------------------------------------------------------
-
-    #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-    struct Rfc3339Fields {
-        #[serde(with = "rfc3339_utc")]
-        at: UtcDateTime,
-        #[serde(default, with = "rfc3339_utc::option")]
-        maybe: Option<UtcDateTime>,
-    }
-
-    #[test]
-    fn rfc3339_utc_reads_z_and_offset_as_utc() {
-        let fields: Rfc3339Fields = serde_json::from_str(
-            r#"{"at":"2026-10-05T12:57:24.719Z","maybe":"2026-10-05T20:57:24.719+08:00"}"#,
-        )
-        .unwrap();
-        let expected = time::macros::utc_datetime!(2026-10-05 12:57:24.719);
-        assert_eq!(fields.at, expected);
-        assert_eq!(fields.maybe, Some(expected));
-    }
-
-    #[test]
-    fn rfc3339_utc_writes_z() {
-        let fields = Rfc3339Fields {
-            at: time::macros::utc_datetime!(2026-10-05 12:57:24.719),
-            maybe: None,
-        };
-        assert_eq!(
-            serde_json::to_string(&fields).unwrap(),
-            r#"{"at":"2026-10-05T12:57:24.719Z","maybe":null}"#
-        );
-    }
-
-    #[test]
-    fn rfc3339_utc_option_missing_is_none() {
-        let fields: Rfc3339Fields =
-            serde_json::from_str(r#"{"at":"2026-10-05T12:57:24Z"}"#).unwrap();
-        assert_eq!(fields.maybe, None);
-    }
-
-    #[test]
-    fn rfc3339_utc_option_some_writes_z() {
-        let at = time::macros::utc_datetime!(2026-10-05 12:57:24);
-        let fields = Rfc3339Fields {
-            at,
-            maybe: Some(at),
-        };
-        assert_eq!(
-            serde_json::to_string(&fields).unwrap(),
-            r#"{"at":"2026-10-05T12:57:24Z","maybe":"2026-10-05T12:57:24Z"}"#
-        );
-    }
-
-    #[test]
-    fn rfc3339_utc_rejects_missing_offset() {
-        // 没有 offset 不知道是哪个时区的时刻，不能当成 UTC 读
-        for at in [r#""2026-10-05T12:57:24""#, r#""2026-10-05 12:57:24.719""#] {
-            let json = format!(r#"{{"at":{at}}}"#);
-            assert!(
-                serde_json::from_str::<Rfc3339Fields>(&json).is_err(),
-                "{json}"
-            );
-        }
     }
 }
