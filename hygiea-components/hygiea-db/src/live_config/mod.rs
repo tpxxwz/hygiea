@@ -82,6 +82,14 @@
 //!
 //! [`LiveConfig`]、[`LiveView`] 和生成的句柄上这几个方法都有，用法一样。
 //!
+//! # 按配置取消
+//!
+//! 配置类型实现 [`CancelCondition`]（`should_cancel`：按这份配置现在该不该取消；时间段这类配置不变也会到点失效的，
+//! 再实现 `recheck_after` 说多久后再判断），`cancel_token(&parent)` 得出一个子 `CancellationToken`：
+//! 上级取消、或者配置变了 / 到点后判断该取消了就取消，拿它包住一轮工作（`token.run_until_cancelled(..)`）。
+//! derive 时在 struct 上写 `#[hy_live_config(cancel_condition)]`，生成的句柄多一个 `cancel_token`，其余和不写时一样；
+//! 这样的 struct 放进别的配置里当 `nested` 字段也行，外层不受影响。见 [`LiveView::cancel_token`]
+//!
 //! ## 观察过的版本（`changed` / `changed_by` 的基准）
 //!
 //! 每个句柄记着自己上一次观察到的那一版，和 tokio `watch` 的 `Receiver` 记 seen 版本一样：
@@ -154,6 +162,7 @@
 //! - 组件关闭后 `get()` 还是最后一次的值，`changed()` 返回 [`RepoErr::LiveConfigClosed`](crate::RepoErr::LiveConfigClosed)，
 //!   `on_change` 的任务退出
 
+mod cancel;
 mod handle;
 mod schema;
 mod source;
@@ -172,6 +181,7 @@ use crate::config::PgConnectOverride;
 #[cfg(live_config_sqlite)]
 use crate::config::SqliteConnectOverride;
 
+pub use cancel::{CancelCondition, CancelTokenGuard};
 pub use handle::{LiveConfig, LiveConfigFields, LiveRef, LiveView, OnChangeGuard};
 /// 生成按字段读的句柄，见 [`LiveConfigFields`](trait@LiveConfigFields)
 pub use hygiea_core::__live_config::hy_live_config;
@@ -180,6 +190,7 @@ pub use hygiea_core::__live_config::hy_live_config;
 #[doc(hidden)]
 pub mod __private {
     pub use hygiea_core::Result;
+    pub use hygiea_core::app::CancellationToken;
 }
 
 /// 动态配置支持的后端，按它分 PG / SQLite / MySQL。variant 跟着 feature 走：没开 `sqlite` 就没有 `Sqlite`，

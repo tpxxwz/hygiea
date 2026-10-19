@@ -404,6 +404,8 @@ mod lock {
 /// 动态配置：只靠轮询
 #[container]
 mod live_config {
+    use hygiea_core::app::CancellationToken;
+    use hygiea_db::live_config::{CancelCondition, hy_live_config};
     use hygiea_db::{MySqlLiveConfigConfig, RepoErr};
     use serde::{Deserialize, Serialize};
 
@@ -443,6 +445,32 @@ mod live_config {
     struct All {
         sync: Job,
         cache: Cache,
+    }
+
+    /// 外层不开 cancel_condition，里层的 `switch` 开：`enabled` 关了就取消
+    #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, hy_live_config)]
+    struct LiveSwitched {
+        #[live_config(nested)]
+        switch: Switch,
+        cache: Cache,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, hy_live_config)]
+    #[hy_live_config(cancel_condition)]
+    struct Switch {
+        enabled: bool,
+    }
+
+    impl Default for Switch {
+        fn default() -> Self {
+            Self { enabled: true }
+        }
+    }
+
+    impl CancelCondition for Switch {
+        fn should_cancel(&self) -> bool {
+            !self.enabled
+        }
     }
 
     /// 轮询间隔 1 秒
@@ -641,5 +669,42 @@ mod live_config {
             .unwrap()
             .unwrap();
         assert_eq!(cache.get().ttl_secs, 9);
+    }
+
+    /// `#[hy_live_config(cancel_condition)]` 的句柄放在外层配置里：轮询拿到别的 namespace 的变化不取消，
+    /// 改表把条件改成该取消了，子 token 被取消；上级 token 没受影响
+    #[tokio::test]
+    async fn cancel_token_follows_table() {
+        let server = start().await;
+        let source = live_pool(&server).await;
+        let runtime = source.bind_all(LiveSwitched::default()).await.unwrap();
+        let mut cache = runtime.view(|c| &c.cache);
+        let parent = CancellationToken::new();
+        let guard = runtime.fields().switch().cancel_token(&parent);
+
+        exec(
+            source.pool(),
+            "UPDATE hy_config SET value = '8' WHERE namespace = 'cache' AND `key` = 'ttl_secs'",
+        )
+        .await;
+        tokio::time::timeout(Duration::from_secs(5), cache.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            !guard.token().is_cancelled(),
+            "改的是别的 namespace，不应该取消"
+        );
+
+        exec(
+            source.pool(),
+            "UPDATE hy_config SET value = 'false' WHERE namespace = 'switch' AND `key` = 'enabled'",
+        )
+        .await;
+        tokio::time::timeout(Duration::from_secs(5), guard.token().cancelled())
+            .await
+            .unwrap();
+        assert!(!parent.is_cancelled());
     }
 }

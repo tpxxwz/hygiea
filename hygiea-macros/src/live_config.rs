@@ -11,6 +11,9 @@
 //! }
 //! ```
 //!
+//! struct 上写 `#[hy_live_config(cancel_condition)]` 时句柄多一个 `cancel_token`（转给 `LiveView::cancel_token`，
+//! struct 要实现 `CancelCondition`），其余一样。
+//!
 //! 展开成（路径按调用方的依赖名来，见 krate.rs）：
 //!
 //! ```ignore
@@ -31,7 +34,7 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 /// 句柄上固定生成的方法，字段名不能和它们重名。`clone` 是 `#[derive(Clone)]` 的方法，
-/// 字段方法叫 `clone` 会让 `handle.clone()` 调到字段方法上
+/// 字段方法叫 `clone` 会让 `handle.clone()` 调到字段方法上。开了 `cancel_condition` 时再加上 [`CANCEL_TOKEN`]
 const RESERVED: &[&str] = &[
     "snapshot",
     "changed",
@@ -40,6 +43,18 @@ const RESERVED: &[&str] = &[
     "on_change_by",
     "clone",
 ];
+
+/// `#[hy_live_config(cancel_condition)]` 生成的方法
+const CANCEL_TOKEN: &str = "cancel_token";
+
+/// struct 上的 `#[hy_live_config(..)]`
+#[derive(Default)]
+struct ContainerAttr {
+    /// `crate = ".."`
+    explicit_crate: Option<syn::Path>,
+    /// `cancel_condition`：句柄上生成 `cancel_token`
+    cancel_condition: bool,
+}
 
 /// 字段上的 `#[live_config(..)]`
 #[derive(Clone, Copy, PartialEq)]
@@ -58,7 +73,7 @@ pub(crate) fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream 
 }
 
 fn expand(ast: syn::DeriveInput) -> syn::Result<TokenStream> {
-    let explicit_crate = container_attr(&ast.attrs)?;
+    let container = container_attr(&ast.attrs)?;
     let fields = match &ast.data {
         syn::Data::Struct(s) => match &s.fields {
             syn::Fields::Named(named) => &named.named,
@@ -89,15 +104,30 @@ fn expand(ast: syn::DeriveInput) -> syn::Result<TokenStream> {
         ));
     }
 
-    let live = crate::krate::resolve_live_config(explicit_crate);
+    let live = crate::krate::resolve_live_config(container.explicit_crate);
     let name = &ast.ident;
     let vis = &ast.vis;
     let handle = format_ident!("{}LiveConfig", name);
 
+    let mut reserved = RESERVED.to_vec();
+    if container.cancel_condition {
+        reserved.push(CANCEL_TOKEN);
+    }
     let mut methods = Vec::with_capacity(fields.len());
     for field in fields {
-        methods.push(field_method(field, &live)?);
+        methods.push(field_method(field, &live, &reserved)?);
     }
+    let cancel_token = container.cancel_condition.then(|| {
+        quote! {
+            /// 从上级 token 得出一个子 token，上级取消、或者按这一块配置该取消了时取消，见 `LiveView::cancel_token`
+            #vis fn cancel_token(
+                &self,
+                parent: &#live::__private::CancellationToken,
+            ) -> #live::CancelTokenGuard {
+                self.view.cancel_token(parent)
+            }
+        }
+    });
 
     let struct_doc = format!(
         " [`{name}`] 的动态配置句柄，`#[derive(hy_live_config)]` 生成：每个字段一个同名方法，每次调用读到最新的值；\
@@ -158,29 +188,37 @@ fn expand(ast: syn::DeriveInput) -> syn::Result<TokenStream> {
                 self.view.on_change_by(project, f)
             }
 
+            #cancel_token
+
             #(#methods)*
         }
     })
 }
 
-/// struct 上的 `#[hy_live_config(crate = "..")]`；字段属性 `#[live_config(..)]` 写到 struct 上时报错
-fn container_attr(attrs: &[syn::Attribute]) -> syn::Result<Option<syn::Path>> {
+/// struct 上的 `#[hy_live_config(crate = "..", cancel_condition)]`；字段属性 `#[live_config(..)]` 写到 struct 上时报错
+fn container_attr(attrs: &[syn::Attribute]) -> syn::Result<ContainerAttr> {
     if let Some(attr) = attrs.iter().find(|a| a.path().is_ident("live_config")) {
         return Err(syn::Error::new_spanned(
             attr,
-            "`#[live_config(..)]` goes on fields (`nested` / `by_ref`); on the struct use `#[hy_live_config(crate = \"path\")]`",
+            "`#[live_config(..)]` goes on fields (`nested` / `by_ref`); on the struct use `#[hy_live_config(crate = \"path\")]` or `#[hy_live_config(cancel_condition)]`",
         ));
     }
-    let mut explicit_crate = None;
+    let mut container = ContainerAttr::default();
     for attr in attrs.iter().filter(|a| a.path().is_ident("hy_live_config")) {
         attr.parse_nested_meta(|meta| {
-            if crate::krate::parse_crate_arg(&meta, &mut explicit_crate)? {
+            if crate::krate::parse_crate_arg(&meta, &mut container.explicit_crate)? {
                 return Ok(());
             }
-            Err(meta.error("unknown `hy_live_config` attribute; expected `crate = \"path\"`"))
+            if meta.path.is_ident("cancel_condition") {
+                container.cancel_condition = true;
+                return Ok(());
+            }
+            Err(meta.error(
+                "unknown `hy_live_config` attribute; expected `crate = \"path\"` or `cancel_condition`",
+            ))
         })?;
     }
-    Ok(explicit_crate)
+    Ok(container)
 }
 
 /// 字段上的 `#[live_config(nested)]` / `#[live_config(by_ref)]`
@@ -218,7 +256,11 @@ fn field_mode(field: &syn::Field) -> syn::Result<Mode> {
     }
 }
 
-fn field_method(field: &syn::Field, live: &syn::Path) -> syn::Result<TokenStream> {
+fn field_method(
+    field: &syn::Field,
+    live: &syn::Path,
+    reserved: &[&str],
+) -> syn::Result<TokenStream> {
     let mode = field_mode(field)?;
     // 具名字段一定有名字，这里只是不用 unwrap
     let Some(ident) = &field.ident else {
@@ -229,13 +271,13 @@ fn field_method(field: &syn::Field, live: &syn::Path) -> syn::Result<TokenStream
     };
     let plain = ident.to_string();
     let plain = plain.strip_prefix("r#").unwrap_or(&plain);
-    if RESERVED.contains(&plain) {
+    if reserved.contains(&plain) {
         return Err(syn::Error::new_spanned(
             ident,
             format!(
                 "field `{plain}` conflicts with the method `{plain}` generated by `#[derive(hy_live_config)]` \
                  (reserved: {}); rename the field and keep the key with `#[serde(rename = \"{plain}\")]`",
-                RESERVED.join(", ")
+                reserved.join(", ")
             ),
         ));
     }

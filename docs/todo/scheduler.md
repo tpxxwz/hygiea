@@ -32,6 +32,10 @@
 ## 目标
 
 - Deferred 组件 `SchedulerComponent`：`activate` 时开始调度，关闭时收到 `CancellationToken`，在两轮之间退出；任务能拿到退出信号，长任务中途检查
+- 每一轮用 token 包住：任务给出这一轮的取消条件（比如开关、时间段这类动态配置，用 live config 的 `cancel_token`
+  从退出信号得出子 token），调度器用 `token.run_until_cancelled(..)` 跑 `run_once`，取消了就丢掉这一轮的 future，
+  任务里不用一处处检查。注意每轮单独 `spawn` 时，drop 掉 `JoinHandle` 不会停掉任务：要在 spawn 出去的任务里面包，
+  或者取消时 `abort()`。前提是任务断在任何地方下一轮都能恢复，做不到的任务照旧只在两轮之间退出
 - 任务启动时注册（实现 `Job` trait 或传闭包），调度方式支持固定间隔和 cron
 - 命名：调度单元叫 job（`Job`、`JobId`、`job_name`），不叫 task，避免和 tokio 的 task（`tokio::spawn`、`JoinHandle`）混淆；
   日志、执行记录里也用 job

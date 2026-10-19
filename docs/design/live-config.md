@@ -220,10 +220,54 @@ sequenceDiagram
 
 ---
 
-## 8. 为什么这样做
+## 8. 按配置取消（`cancel_token`）
+
+用法和行为见 `hygiea-components/hygiea-db/src/live_config/cancel.rs` 的文档，这里讲内部怎么做。
+跑起来看效果：`cargo run -p hygiea-examples --example db_live_config_cancel`（开关关了、时间段到点，正在跑的那一轮停下）。
+
+```mermaid
+sequenceDiagram
+    participant J as 调用方（比如一轮任务）
+    participant V as LiveView
+    participant T as 后台任务
+    participant W as watch（worker 发新值）
+
+    J->>V: cancel_token(&parent)
+    V->>V: parent.child_token()，当场判断一次
+    alt should_cancel() 是 true
+        V-->>J: 已取消的 token，不起后台任务
+    else 还不用
+        V->>T: spawn（带着这次算出的 recheck_after）
+        V-->>J: CancelTokenGuard（token + 任务）
+        loop 直到取消
+            T->>T: select! 上级取消 / changed() / recheck_after 到点
+            W-->>T: changed()（配置变了）
+            T->>T: 按最新那一版重新判断，重新算 recheck_after、重新计时
+        end
+        T->>T: 该取消了：token.cancel()，退出
+    end
+    J->>J: token.run_until_cancelled(工作)，取消了就丢掉工作的 future
+```
+
+- 只用句柄的公开方法 `read` / `changed()`，不碰 worker 和后端：PG 的 NOTIFY、MySQL / SQLite 的轮询只决定新值多久到 `watch`，
+  也就是改表后多久取消；后端各自的测试里都有一条改表后取消的
+- 建的时候当场判断，已经该取消了就不起任务：调用方紧接着看 `is_cancelled()` 不会因为任务还没跑到而读到旧结果
+- 每次判断都按当时那一版重新算 `recheck_after`、重新计时：配置把时间段的结束改早了，定时器跟着改早
+- 配置组件关闭后（`changed()` 报 `LiveConfigClosed`）再判断一次、重新算 `recheck_after`，之后只按它到点判断；没有就退出
+- guard drop 时 abort 后台任务，不取消 token：每一轮建一个，跑完就丢，任务不会越积越多；token 的取消只来自上级或者判断结果
+
+---
+
+## 9. 为什么这样做
 
 - **字段方法每次读最新**：思路和 .NET 的 `IOptionsMonitor<T>.CurrentValue`、Netflix Archaius 的 `Property<T>.get()` 一样，
   持有的是句柄不是值。代价是连续调几个字段方法时中间可能换了版本，所以另外留了整块快照（`get()` / `snapshot()`）
 - **版本号每个 namespace 一个、只接受更大的**：变了只重新读那一个 namespace；重复的通知、多实例、乱序都不会把新值换回旧的
 - **变更历史程序不读**：版本号单独放在 `_config_revision`，历史只给人查，随便删不影响生效的值
 - **表结构不迁移**：要么全对上直接用，要么一个都没有全建，有一个对不上就报错不启动，以后改结构手动执行 DDL
+- **按配置取消做成子 token，调用方丢掉整个 future**：业务代码里不用一处处检查要不要停，正在等的 HTTP 请求、sleep 也马上停；
+  前提是工作断在任何地方下一轮都能恢复（用不用由调用方决定）。没做成"框架定时轮询配置"：条件只在配置变了、或者调用方说的
+  `recheck_after` 到点时才判断，只看开关的条件不起定时器
+- **`recheck_after` 是可选的、默认 `None`**：不是每个条件都能说出什么时候会变；能说的（时间段到点）才写，写了才能在那一刻停下正在跑的
+- **`cancel_condition` 是 `hy_live_config` 上的属性，不另做 derive**：字段方法、`snapshot`、`changed`、`on_change` 只有一份生成逻辑，
+  开了只多一个转发给 `LiveView::cancel_token` 的方法；`LiveConfig`、`LiveView` 上是泛型方法，不经过宏

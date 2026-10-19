@@ -1,0 +1,10 @@
+error[E0599]: no method named `cancel_token` found for struct `JobLiveConfig` in the current scope
+  --> tests/live_ui/fail/cancel_token_without_attr.rs:12:29
+   |
+ 5 | #[derive(hy_live_config)]
+   |          -------------- method `cancel_token` not found for this struct
+...
+12 |     let _ = config.fields().cancel_token(&CancellationToken::new());
+   |             ------          ^^^^^^^^^^^^ method not found in `JobLiveConfig`
+   |             |
+   |             method `cancel_token` is available on `&LiveConfig<Job>`

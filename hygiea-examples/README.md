@@ -23,6 +23,7 @@ app 的示例启动后按 Ctrl+C 退出，可以看到组件的关闭顺序：�
 | `app_two_phase` | 两阶段启动：`before_activate` 在 HTTP 开始接请求之前执行，适合建表、预热、初始化全局状态。 |
 | `datetime_basic` | 日期时间：格式化 / 解析、日 / 周 / 月边界、系统本地时区。 |
 | `db_live_config` | 动态配置（数据库配置表）：配置存在库里，改了表，运行中的程序自动拿到新值。 |
+| `db_live_config_cancel` | 按动态配置取消一轮工作：开关关了、时间段到点，正在跑的那一轮马上停下。 |
 | `db_lock` | 分布式锁：PG 连接池组件 `uses` 带 4 时放进 Resources 的 `DbLockClient` 实现 `DistributedLock`。这里不经过 Registry，用 `DbResources::from_config` 直接建两份（`uses = 5`：业务池 + 锁，锁和业务池共用连接），模拟两个实例抢同一把锁。 |
 | `env_basic` | 环境变量：内置 key `BuiltinKey`、自定义 `EnvKey`，以及取值的四个函数`env_get` / `env_get_opt` / `env_get_or` / `env_get_or_else`。 |
 | `error_basic` | 错误处理：定义错误 enum、err! 的几种写法、错误码。 |

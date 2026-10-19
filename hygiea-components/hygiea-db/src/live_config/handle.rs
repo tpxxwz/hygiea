@@ -356,6 +356,8 @@ impl<U: 'static> LiveRef<U> {
 ///   `#[live_config(by_ref)]` 返回 [`LiveRef`]，不复制；`#[live_config(nested)]` 返回字段类型的句柄（字段类型也要 `#[derive(hy_live_config)]`）
 /// - `snapshot()`：整块的快照 [`LiveRef`]
 /// - `changed()`、`changed_by()`、`on_change()`、`on_change_by()`：同 [`LiveView`] 的同名方法
+/// - struct 上写了 `#[hy_live_config(cancel_condition)]` 时多一个 `cancel_token()`，同 [`LiveView::cancel_token`]，
+///   struct 要实现 [`CancelCondition`](super::CancelCondition)
 ///
 /// 字段方法每次调用都读当时最新的那一版，连续调几个字段方法，中间配置可能换了版本，拿到的值可能来自不同版本；
 /// 要几个值来自同一版用 `snapshot()`。

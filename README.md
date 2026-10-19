@@ -286,7 +286,7 @@ async fn run(db: &impl DistributedLock, order_id: u32, day: &str) -> hygiea::Res
 ### 动态配置
 
 需要 `db-live-config` 和一个数据库组件（比如 `db-sqlx` + `db-postgres`），组件的 `uses` 带 2：配置存在库里，改了表，运行中的程序自动拿到新值，
-`#[derive(hy_live_config)]` 生成按字段读的句柄。用法见 [`hygiea::db::live_config`](https://docs.rs/hygiea/latest/hygiea/db/live_config/index.html) 的模块文档，
+`#[derive(hy_live_config)]` 生成按字段读的句柄，配置类型实现 `CancelCondition` 后能按配置得出取消用的 token（`cancel_token`）。用法见 [`hygiea::db::live_config`](https://docs.rs/hygiea/latest/hygiea/db/live_config/index.html) 的模块文档，
 内部流程见 [docs/design/live-config.md](docs/design/live-config.md)。
 
 ### HTTP 客户端与日志打码

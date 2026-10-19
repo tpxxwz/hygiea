@@ -15,7 +15,7 @@ err_code_project_prefix = "001"
 
 [dev-dependencies]
 # db-sqlx + db-sqlite / http-axum：app 示例用的现成组件，SQLite 用内存库，不需要装数据库服务；
-# db-live-config：db_live_config 示例用的动态配置（DbLiveConfig）；
+# db-live-config：db_live_config、db_live_config_cancel 示例用的动态配置（DbLiveConfig）；
 # db-postgres、db-lock-row：db_lock 示例用的 PG 分布式锁（DbLockClient）；
 # full 里的 lock-tokio：lock_tokio 示例用的进程内锁；
 # full 带上 log、datetime-iana、redact 等 core feature；HTTP 客户端另开组件 feature
@@ -64,6 +64,10 @@ path = "examples/app/two_phase.rs"
 [[example]]
 name = "db_live_config"
 path = "examples/db/live_config.rs"
+
+[[example]]
+name = "db_live_config_cancel"
+path = "examples/db/live_config_cancel.rs"
 
 [[example]]
 name = "db_lock"
