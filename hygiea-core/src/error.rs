@@ -453,24 +453,45 @@ macro_rules! __hygiea_check_keys {
 ///     Ok(())
 /// }
 /// ```
+///
+/// 手上已经是一个错误（比如辅助函数返回的 [`HyErr`]）时写 `from:`，原样返回，不再经过 [`err!`]；转换同上：
+///
+/// ```ignore
+/// fn without_lv(ids: &[i64]) -> HyErr { err!(BizErr::WithoutLv, format!("{ids:?}")) }
+///
+/// if !missing.is_empty() {
+///     bail!(from: without_lv(&missing));
+/// }
+/// ```
 #[macro_export]
 macro_rules! bail {
+    (from: $err:expr $(,)?) => {
+        return ::core::result::Result::Err(::core::convert::From::from($err))
+    };
     ($($t:tt)*) => {
         return ::core::result::Result::Err(::core::convert::From::from($crate::err!($($t)*)))
     };
 }
 
 /// 条件不成立时构造错误并立即返回：第一个参数是应该成立的条件，后面的参数同 [`err!`]。
-/// 等价于 `if !(条件) { bail!(..) }`，返回类型的转换同 [`bail!`]
+/// 等价于 `if !(条件) { bail!(..) }`，返回类型的转换同 [`bail!`]。
+/// 现成的错误同 [`bail!`] 写 `from:`，只在条件不成立时才求值
 ///
 /// ```ignore
 /// fn withdraw(amount: i64) -> Result<()> {
 ///     ensure!(amount > 0, BizErr::InvalidAmount, { "amount": amount });
 ///     Ok(())
 /// }
+///
+/// ensure!(missing.is_empty(), from: without_lv(&missing));
 /// ```
 #[macro_export]
 macro_rules! ensure {
+    ($cond:expr, from: $err:expr $(,)?) => {
+        if !($cond) {
+            $crate::bail!(from: $err);
+        }
+    };
     ($cond:expr, $($t:tt)*) => {
         if !($cond) {
             $crate::bail!($($t)*);
@@ -814,6 +835,49 @@ mod tests {
 
         let result = check_value(1);
         assert!(result.is_ok());
+    }
+
+    /// bail!(from: ..) / ensure!(.., from: ..)：现成的错误原样返回，经 From 转成函数的错误类型；
+    /// ensure! 条件成立时不求值
+    #[test]
+    fn from_returns_existing_error() {
+        fn existing() -> HyErr {
+            err!(TestErr::NotFound, "alice")
+        }
+
+        fn bail_existing() -> Result<()> {
+            bail!(from: existing());
+        }
+        let e = bail_existing().unwrap_err();
+        assert!(e.is(TestErr::NotFound));
+        assert_eq!(e.to_string(), "user alice not found");
+
+        let built = std::cell::Cell::new(0);
+        let ensure_existing = |n: i32| -> Result<i32> {
+            ensure!(n > 0, from: {
+                built.set(built.get() + 1);
+                existing()
+            });
+            Ok(n)
+        };
+        assert_eq!(ensure_existing(1).unwrap(), 1);
+        assert_eq!(built.get(), 0, "条件成立时不构造错误");
+        assert!(ensure_existing(0).unwrap_err().is(TestErr::NotFound));
+        assert_eq!(built.get(), 1);
+
+        /// 返回类型是别的错误：和 ? 一样经 From 转过去
+        struct Wrapped(HyErr);
+        impl From<HyErr> for Wrapped {
+            fn from(e: HyErr) -> Self {
+                Self(e)
+            }
+        }
+        fn into_other(n: i32) -> std::result::Result<(), Wrapped> {
+            ensure!(n > 0, from: existing());
+            bail!(from: err!(TestErr::Wrapped));
+        }
+        assert!(into_other(0).err().unwrap().0.is(TestErr::NotFound));
+        assert!(into_other(1).err().unwrap().0.is(TestErr::Wrapped));
     }
 
     /// ensure! 条件不成立时提前返回，成立时往下走
