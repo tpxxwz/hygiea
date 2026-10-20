@@ -20,7 +20,7 @@ use hygiea_core::app::RegistryConfig;
 use hygiea_core::lock::{DistributedLock, hy_lock_key, hy_lock_type, lock_key};
 use hygiea_db::{MySqlConnectConfig, PoolConfig, SqlxMySqlConfig, SqlxMySqlPool};
 use hygiea_test::container;
-use hygiea_test::container::{ContainerSpec, RunningContainer};
+use hygiea_test::container::{MySqlSpec, RunningMySql};
 
 #[derive(hy_lock_type)]
 #[lock_internal_module_prefix = "100"]
@@ -36,32 +36,13 @@ enum TestLockKey {
     Job,
 }
 
-const PASSWORD: &str = "hygiea-test";
-
-const DATABASE: &str = "hy";
-
-const PORT: u16 = 3306;
-
-/// 镜像固定版本（8.x 的 LTS）。启动时先起临时实例（`port: 0`）做初始化再重启，就绪日志出现两次，第二次才是正式实例
-async fn start() -> RunningContainer {
-    ContainerSpec::new("mysql", "8.4")
-        .env("MYSQL_ROOT_PASSWORD", PASSWORD)
-        .env("MYSQL_DATABASE", DATABASE)
-        .port(PORT)
-        .wait_log_times("mysqld: ready for connections", 2)
-        .startup_timeout(Duration::from_secs(180))
-        .start()
-        .await
+/// 库名 `hy`，其余用 [`MySqlSpec`] 的默认值
+async fn start() -> RunningMySql {
+    MySqlSpec::new().database("hy").start().await
 }
 
-fn connect(server: &RunningContainer) -> MySqlConnectConfig {
-    MySqlConnectConfig {
-        host: server.host().to_string(),
-        port: server.port(PORT),
-        password: PASSWORD.to_string(),
-        database: DATABASE.to_string(),
-        ..Default::default()
-    }
+fn connect(server: &RunningMySql) -> MySqlConnectConfig {
+    common::mysql_connect(server)
 }
 
 /// 应用名 `hy`：动态配置的表是 hy_config 那三张
@@ -73,7 +54,7 @@ fn app() -> RegistryConfig {
 }
 
 /// 业务池加锁（`uses = 5`），锁和业务池共用连接
-fn config(server: &RunningContainer) -> SqlxMySqlConfig {
+fn config(server: &RunningMySql) -> SqlxMySqlConfig {
     SqlxMySqlConfig {
         uses: uses(5),
         connect: connect(server),
@@ -84,7 +65,7 @@ fn config(server: &RunningContainer) -> SqlxMySqlConfig {
 type Inst = LockInst<SqlxMySqlConfig>;
 
 /// 一个实例：业务池加锁
-async fn pool(server: &RunningContainer) -> Inst {
+async fn pool(server: &RunningMySql) -> Inst {
     Inst::open(&config(server), &app()).await
 }
 
@@ -482,7 +463,7 @@ mod live_config {
     }
 
     /// 业务池加动态配置（`uses = 3`）
-    fn live_config_of(server: &RunningContainer) -> SqlxMySqlConfig {
+    fn live_config_of(server: &RunningMySql) -> SqlxMySqlConfig {
         SqlxMySqlConfig {
             uses: uses(3),
             connect: connect(server),
@@ -491,7 +472,7 @@ mod live_config {
         }
     }
 
-    async fn live_pool(server: &RunningContainer) -> Source {
+    async fn live_pool(server: &RunningMySql) -> Source {
         Source::open(&live_config_of(server), &app()).await
     }
 

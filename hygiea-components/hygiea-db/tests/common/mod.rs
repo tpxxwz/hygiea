@@ -27,6 +27,36 @@ pub async fn open_pool<C: DbConfig>(config: &C, app: &RegistryConfig) -> C::Pool
     open(config, app).await.pool.unwrap()
 }
 
+// ---- 连容器：hygiea-test 的预设起的容器，拼成连接配置 ------------------------------------------
+
+/// 连 [`PostgresSpec`](hygiea_test::container::PostgresSpec) 起的容器，其余是默认值
+#[cfg(feature = "postgres")]
+pub fn pg_connect(server: &hygiea_test::container::RunningPostgres) -> hygiea_db::PgConnectConfig {
+    hygiea_db::PgConnectConfig {
+        host: server.host().to_string(),
+        port: server.port(),
+        username: server.user().to_string(),
+        password: server.password().to_string(),
+        database: server.database().to_string(),
+        ..Default::default()
+    }
+}
+
+/// 连 [`MySqlSpec`](hygiea_test::container::MySqlSpec) 起的容器，其余是默认值
+#[cfg(feature = "mysql")]
+pub fn mysql_connect(
+    server: &hygiea_test::container::RunningMySql,
+) -> hygiea_db::MySqlConnectConfig {
+    hygiea_db::MySqlConnectConfig {
+        host: server.host().to_string(),
+        port: server.port(),
+        username: server.user().to_string(),
+        password: server.password().to_string(),
+        database: server.database().to_string(),
+        ..Default::default()
+    }
+}
+
 /// 锁的测试里的一个实例：`uses` 带 4 建出来的资源，方法直接是锁的（`Deref` 到 `DbLockClient`），查询用 [`pool`](Self::pool)
 #[cfg(all(feature = "lock", any(feature = "postgres", feature = "mysql")))]
 #[derive(Clone)]

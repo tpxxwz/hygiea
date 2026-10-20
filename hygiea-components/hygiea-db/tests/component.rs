@@ -49,7 +49,7 @@ mod registry {
         SqlxPgComponent, SqlxPgConfig, SqlxPgPool, SqlxSqliteComponent, SqlxSqliteConfig,
         SqlxSqlitePool,
     };
-    use hygiea_test::container::{ContainerSpec, RunningContainer};
+    use hygiea_test::container::{MySqlSpec, PostgresSpec, RunningMySql, RunningPostgres};
     use sea_orm::{ConnectionTrait, DatabaseConnection, Statement};
     use serde::{Deserialize, Serialize};
 
@@ -88,19 +88,10 @@ mod registry {
         local: SeaOrmSqliteConfig,
     }
 
-    const PG_PASSWORD: &str = "pg-root";
-    const PG_PORT: u16 = 5432;
-    const MYSQL_PASSWORD: &str = "mysql-root";
-    const MYSQL_PORT: u16 = 3306;
-
     /// 应用的配置文件：所有库放在 `[db.<名字>]` 下
-    fn config_toml(
-        pg: &RunningContainer,
-        mysql: &RunningContainer,
-        dir: &tempfile::TempDir,
-    ) -> String {
-        let (pg_host, pg_port) = (pg.host(), pg.port(PG_PORT));
-        let (mysql_host, mysql_port) = (mysql.host(), mysql.port(MYSQL_PORT));
+    fn config_toml(pg: &RunningPostgres, mysql: &RunningMySql, dir: &tempfile::TempDir) -> String {
+        let (pg_host, pg_port) = (pg.host(), pg.port());
+        let (mysql_host, mysql_port) = (mysql.host(), mysql.port());
         let cache = dir.path().join("cache.db").display().to_string();
         let local = dir.path().join("local.db").display().to_string();
         format!(
@@ -190,24 +181,12 @@ database = "{local}"
 
     // ---- 环境：两个容器、建库建用户、启动 Registry ---------------------------------------------
 
-    async fn start_pg() -> RunningContainer {
-        ContainerSpec::new("postgres", "18")
-            .env("POSTGRES_PASSWORD", PG_PASSWORD)
-            .port(PG_PORT)
-            .wait_log_times("database system is ready to accept connections", 2)
-            .start()
-            .await
+    async fn start_pg() -> RunningPostgres {
+        PostgresSpec::new().start().await
     }
 
-    /// 启动时先起临时实例做初始化再重启，就绪日志出现两次
-    async fn start_mysql() -> RunningContainer {
-        ContainerSpec::new("mysql", "8.4")
-            .env("MYSQL_ROOT_PASSWORD", MYSQL_PASSWORD)
-            .port(MYSQL_PORT)
-            .wait_log_times("mysqld: ready for connections", 2)
-            .startup_timeout(Duration::from_secs(180))
-            .start()
-            .await
+    async fn start_mysql() -> RunningMySql {
+        MySqlSpec::new().start().await
     }
 
     async fn pg_exec(pool: &sqlx::PgPool, sql: &str) {
@@ -257,8 +236,8 @@ database = "{local}"
 
     /// 两个容器、临时目录，加上按配置起好的第一个实例
     struct Env {
-        pg: RunningContainer,
-        mysql: RunningContainer,
+        pg: RunningPostgres,
+        mysql: RunningMySql,
         dir: tempfile::TempDir,
         app: Option<Running>,
     }
@@ -349,18 +328,22 @@ database = "{local}"
         /// 超级用户连 PG 的某个库：建用户、库、schema，查表在哪，改动态配置的表（模拟别的程序）
         async fn pg_admin(&self, database: &str) -> sqlx::PgPool {
             let url = format!(
-                "postgres://postgres:{PG_PASSWORD}@{}:{}/{database}",
+                "postgres://{}:{}@{}:{}/{database}",
+                self.pg.user(),
+                self.pg.password(),
                 self.pg.host(),
-                self.pg.port(PG_PORT)
+                self.pg.port()
             );
             sqlx::PgPool::connect(&url).await.unwrap()
         }
 
         async fn mysql_root(&self) -> sqlx::MySqlPool {
             let url = format!(
-                "mysql://root:{MYSQL_PASSWORD}@{}:{}/",
+                "mysql://{}:{}@{}:{}/",
+                self.mysql.user(),
+                self.mysql.password(),
                 self.mysql.host(),
-                self.mysql.port(MYSQL_PORT)
+                self.mysql.port()
             );
             sqlx::MySqlPool::connect(&url).await.unwrap()
         }

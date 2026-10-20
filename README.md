@@ -316,7 +316,7 @@ hygiea                         facade：重新导出全部内容，按 feature �
 | `hygiea-http-client` | 是 | reqwest HTTP 客户端及组件 |
 | `hygiea-grpc` | 是 | gRPC 服务组件 |
 | `hygiea-aws` | 是 | AWS SDK 组件（公共配置 + S3 客户端） |
-| `hygiea-test` | 是 | 给使用方写测试用，作为 dev-dependency：测试日志、mock HTTP 服务（httpmock + TOML cassette + Rhai）、测试分层宏（`#[container]` / `#[live]`）、启动容器 |
+| `hygiea-test` | 是 | 给使用方写测试用，作为 dev-dependency：测试日志、mock HTTP 服务（httpmock + TOML cassette + Rhai）、测试分层宏（`#[container]` / `#[live]`）、启动容器（PostgreSQL、MySQL、Redis、S3 有现成的预设） |
 | `hygiea-test-macros` | 是 | `hygiea-test` 的过程宏（`#[container]` / `#[live]`），经 `hygiea-test` 使用 |
 
 使用方不需要额外依赖（比如 `linkme`、`serde_json`）。宏生成的代码跟随你依赖时用的名字：依赖 `hygiea`、给它改名、或者只依赖 `hygiea-core` 都可以。需要覆盖时用 `#[hy_err(crate = "path")]` / `#[hy_lock_type(crate = "path")]` / `#[hy_lock_key(crate = "path")]` / `#[redact(crate = "path")]` / `#[hy_live_config(crate = "path")]`（`hy_live_config` 写 facade 的路径，后面接 `::db::live_config`）。

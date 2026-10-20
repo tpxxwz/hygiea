@@ -19,9 +19,9 @@ use std::time::Duration;
 use common::{LiveInst, LockInst, eventually, uses};
 use hygiea_core::app::RegistryConfig;
 use hygiea_core::lock::{hy_lock_key, lock_key};
-use hygiea_db::{MySqlConnectConfig, SeaOrmMySqlConfig, SeaOrmMySqlPool};
+use hygiea_db::{SeaOrmMySqlConfig, SeaOrmMySqlPool};
 use hygiea_test::container;
-use hygiea_test::container::{ContainerSpec, RunningContainer};
+use hygiea_test::container::{MySqlSpec, RunningMySql};
 use sea_orm::ConnectionTrait;
 use serde::{Deserialize, Serialize};
 
@@ -37,22 +37,9 @@ struct Cache {
     ttl_secs: u64,
 }
 
-const PASSWORD: &str = "hygiea-test";
-
-const DATABASE: &str = "hy";
-
-const PORT: u16 = 3306;
-
-/// 镜像固定版本（8.x 的 LTS）。启动时先起临时实例（`port: 0`）做初始化再重启，就绪日志出现两次，第二次才是正式实例
-async fn start() -> RunningContainer {
-    ContainerSpec::new("mysql", "8.4")
-        .env("MYSQL_ROOT_PASSWORD", PASSWORD)
-        .env("MYSQL_DATABASE", DATABASE)
-        .port(PORT)
-        .wait_log_times("mysqld: ready for connections", 2)
-        .startup_timeout(Duration::from_secs(180))
-        .start()
-        .await
+/// 库名 `hy`，其余用 [`MySqlSpec`] 的默认值
+async fn start() -> RunningMySql {
+    MySqlSpec::new().database("hy").start().await
 }
 
 /// 应用名 `hy`：动态配置的表是 hy_config 那三张
@@ -64,22 +51,16 @@ fn app() -> RegistryConfig {
 }
 
 /// 业务池加锁（`uses = 5`）
-fn config(server: &RunningContainer) -> SeaOrmMySqlConfig {
+fn config(server: &RunningMySql) -> SeaOrmMySqlConfig {
     SeaOrmMySqlConfig {
         uses: uses(5),
-        connect: MySqlConnectConfig {
-            host: server.host().to_string(),
-            port: server.port(PORT),
-            password: PASSWORD.to_string(),
-            database: DATABASE.to_string(),
-            ..Default::default()
-        },
+        connect: common::mysql_connect(server),
         ..Default::default()
     }
 }
 
 /// 一个实例：业务池加锁
-async fn pool(server: &RunningContainer) -> LockInst<SeaOrmMySqlConfig> {
+async fn pool(server: &RunningMySql) -> LockInst<SeaOrmMySqlConfig> {
     LockInst::open(&config(server), &app()).await
 }
 

@@ -1,15 +1,17 @@
 //! 用代码启动容器，给 container 层的测试用（测试分层见 [crate 文档](crate)）。
 //!
-//! 这里只提供通用的启动能力，不写具体服务：镜像、环境变量、端口、怎样算就绪都由调用方传。
+//! - 常用服务有现成的：[`PostgresSpec`]、[`MySqlSpec`]、[`RedisSpec`]、[`S3Spec`]（RustFS），默认值直接能用，
+//!   每一项都能改，返回值上拿地址、账号这些连接要用的值
+//! - 别的镜像用 [`ContainerSpec`]：镜像、环境变量、端口、怎样算就绪都由调用方传
 //!
 //! ```ignore
-//! let server = ContainerSpec::new("rustfs/rustfs", "1.0.0")
-//!     .env("RUSTFS_ACCESS_KEY", "ak")
-//!     .port(9000)
-//!     .wait_http(9000, "/health", 200)
+//! let server = ContainerSpec::new("nginx", "1.31.7")
+//!     .env("NGINX_ENTRYPOINT_QUIET_LOGS", "1")
+//!     .port(80)
+//!     .wait_http(80, "/", 200)
 //!     .start()
 //!     .await;
-//! let endpoint = format!("http://{}", server.addr(9000));
+//! let url = format!("http://{}", server.addr(80));
 //! ```
 //!
 //! 底层是 testcontainers，走 Docker Engine API：默认连本机 Docker；用 Podman 时把 `DOCKER_HOST`
@@ -22,6 +24,13 @@ use testcontainers::core::wait::{HttpWaitStrategy, LogWaitStrategy};
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
+
+mod service;
+
+pub use service::{
+    MySqlSpec, PostgresSpec, RedisSpec, RunningMySql, RunningPostgres, RunningRedis, RunningS3,
+    S3Spec,
+};
 
 /// testcontainers 整个再导出，这里的接口不够用时直接用它
 pub use testcontainers;

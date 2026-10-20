@@ -30,7 +30,7 @@
 | 数据库组件 | `hygiea-db/src/lib.rs`、`component.rs`（`uses`、建和关的顺序）、`build.rs`（feature 组合的 cfg 别名） | |
 | HTTP 客户端 | `hygiea-http-client/src/reqwest_client/mod.rs` | `docs/design/http-client.md` |
 | 宏生成的代码怎么引用 hygiea | `hygiea-macros/src/krate.rs` | |
-| 测试分层、给使用方的测试工具 | `hygiea-test/src/lib.rs` | |
+| 测试分层、给使用方的测试工具 | `hygiea-test/src/lib.rs` | 容器：`docs/design/test-container.md` |
 | 还没做的、没定的 | `docs/todo/` | |
 
 ## 结构约定

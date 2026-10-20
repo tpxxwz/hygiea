@@ -43,43 +43,20 @@ mod pool {
     };
 
     use super::common::open_pool;
-    use hygiea_test::container::{ContainerSpec, RunningContainer};
-
-    const USER: &str = "postgres";
-
-    const PASSWORD: &str = "hygiea-test";
-
-    const DATABASE: &str = "postgres";
-
-    const PORT: u16 = 5432;
+    use hygiea_test::container::{PostgresSpec, RunningPostgres};
 
     /// 测试用的非 public schema，和 [`create_schema`] 里建的一致
     const SCHEMA: &str = "hygiea_test";
 
-    /// 镜像固定版本。启动时先起临时实例跑初始化再重启，就绪日志会出现两次，第二次才是正式实例
-    async fn start() -> RunningContainer {
-        ContainerSpec::new("postgres", "18")
-            .env("POSTGRES_USER", USER)
-            .env("POSTGRES_PASSWORD", PASSWORD)
-            .env("POSTGRES_DB", DATABASE)
-            .port(PORT)
-            .wait_log_times("database system is ready to accept connections", 2)
-            .start()
-            .await
+    async fn start() -> RunningPostgres {
+        PostgresSpec::new().start().await
     }
 
-    fn connect(server: &RunningContainer) -> PgConnectConfig {
-        PgConnectConfig {
-            host: server.host().to_string(),
-            port: server.port(PORT),
-            username: USER.to_string(),
-            password: PASSWORD.to_string(),
-            database: DATABASE.to_string(),
-            ..Default::default()
-        }
+    fn connect(server: &RunningPostgres) -> PgConnectConfig {
+        super::common::pg_connect(server)
     }
 
-    fn sqlx_config(server: &RunningContainer) -> SqlxPgConfig {
+    fn sqlx_config(server: &RunningPostgres) -> SqlxPgConfig {
         SqlxPgConfig {
             connect: connect(server),
             ..Default::default()
@@ -87,7 +64,7 @@ mod pool {
     }
 
     /// 用默认配置连上去建好 [`SCHEMA`]，search_path 指向不存在的 schema 时 current_schema() 是 NULL
-    async fn create_schema(server: &RunningContainer) {
+    async fn create_schema(server: &RunningPostgres) {
         let db = DbResources::from_config(&sqlx_config(server), &Default::default())
             .await
             .unwrap();
@@ -375,24 +352,15 @@ mod pool {
 mod lock {
     use hygiea_core::app::RegistryConfig;
     use hygiea_db::{PgConnectConfig, PoolConfig, SqlxPgConfig};
-    use hygiea_test::container::{ContainerSpec, RunningContainer};
+    use hygiea_test::container::{PostgresSpec, RunningPostgres};
 
     use super::common::{LockInst, uses};
     use super::*;
 
     type Inst = LockInst<SqlxPgConfig>;
 
-    const PASSWORD: &str = "hygiea-test";
-
-    const PORT: u16 = 5432;
-
-    async fn start() -> RunningContainer {
-        ContainerSpec::new("postgres", "18")
-            .env("POSTGRES_PASSWORD", PASSWORD)
-            .port(PORT)
-            .wait_log_times("database system is ready to accept connections", 2)
-            .start()
-            .await
+    async fn start() -> RunningPostgres {
+        PostgresSpec::new().start().await
     }
 
     /// 应用名 `hy`：锁表是 hy_lock
@@ -403,17 +371,12 @@ mod lock {
         }
     }
 
-    fn connect(server: &RunningContainer) -> PgConnectConfig {
-        PgConnectConfig {
-            host: server.host().to_string(),
-            port: server.port(PORT),
-            password: PASSWORD.to_string(),
-            ..Default::default()
-        }
+    fn connect(server: &RunningPostgres) -> PgConnectConfig {
+        super::common::pg_connect(server)
     }
 
     /// 一个实例：业务池加锁（`uses = 5`），锁和业务池共用连接
-    async fn pool(server: &RunningContainer) -> Inst {
+    async fn pool(server: &RunningPostgres) -> Inst {
         let config = SqlxPgConfig {
             uses: uses(5),
             connect: connect(server),
@@ -948,7 +911,7 @@ mod live_config {
         DbResources, PgConnectConfig, PgConnectOverride, PgLiveConfigConfig, RepoErr, SqlxPgConfig,
         SqlxPgPool,
     };
-    use hygiea_test::container::{ContainerSpec, RunningContainer};
+    use hygiea_test::container::{PostgresSpec, RunningPostgres};
     use serde::{Deserialize, Serialize};
 
     use super::common::{LiveInst, uses};
@@ -1028,25 +991,16 @@ mod live_config {
         }
     }
 
-    const PASSWORD: &str = "hygiea-test";
-
-    const PORT: u16 = 5432;
-
     /// 业务池模拟别的程序改表，动态配置走它自己的那条连接
     struct Env {
-        server: RunningContainer,
+        server: RunningPostgres,
         source: Inst,
         pool: SqlxPgPool,
     }
 
     impl Env {
         async fn new() -> Self {
-            let server = ContainerSpec::new("postgres", "18")
-                .env("POSTGRES_PASSWORD", PASSWORD)
-                .port(PORT)
-                .wait_log_times("database system is ready to accept connections", 2)
-                .start()
-                .await;
+            let server = PostgresSpec::new().start().await;
             let source = Inst::open(&sqlx_config(&server), &app()).await;
             let pool = source.pool().clone();
             Self {
@@ -1087,7 +1041,7 @@ mod live_config {
         }
     }
 
-    fn sqlx_config(server: &RunningContainer) -> SqlxPgConfig {
+    fn sqlx_config(server: &RunningPostgres) -> SqlxPgConfig {
         SqlxPgConfig {
             uses: uses(3),
             connect: connect(server),
@@ -1096,13 +1050,8 @@ mod live_config {
         }
     }
 
-    fn connect(server: &RunningContainer) -> PgConnectConfig {
-        PgConnectConfig {
-            host: server.host().to_string(),
-            port: server.port(PORT),
-            password: PASSWORD.to_string(),
-            ..Default::default()
-        }
+    fn connect(server: &RunningPostgres) -> PgConnectConfig {
+        super::common::pg_connect(server)
     }
 
     /// 保留行数在 PG 上也生效：后台任务一启动就删到只剩最新的 N 行

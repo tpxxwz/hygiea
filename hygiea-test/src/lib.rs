@@ -4,7 +4,7 @@
 //! |---|---|
 //! | `log` | [`log::init_once`]：在测试里装一次 hygiea 的默认日志 |
 //! | `http-mock` | [`http_mock`]：本地 mock HTTP 服务，TOML cassette + Rhai 脚本 + 接口约定校验 |
-//! | `container` | [`container`](mod@container)：在代码里启动容器，给 container 层的测试用 |
+//! | `container` | [`container`](mod@container)：在代码里启动容器，给 container 层的测试用；PostgreSQL、MySQL、Redis、S3（RustFS）有现成的预设 |
 //! | `tcp` | [`tcp`]：socket 层的工具，比如建连卡住的本地地址（测 `connect_timeout`） |
 //!
 //! 不需要 feature 的：[`container`](macro@container) / [`live`](macro@live) 测试分层属性宏，见下文。

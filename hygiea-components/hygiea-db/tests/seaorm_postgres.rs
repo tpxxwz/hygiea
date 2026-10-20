@@ -42,44 +42,21 @@ mod pool {
     };
 
     use super::common::open_pool;
-    use hygiea_test::container::{ContainerSpec, RunningContainer};
+    use hygiea_test::container::{PostgresSpec, RunningPostgres};
     use sea_orm::{ActiveModelTrait, ConnectionTrait, DbBackend, EntityTrait, Set, Statement};
-
-    const USER: &str = "postgres";
-
-    const PASSWORD: &str = "hygiea-test";
-
-    const DATABASE: &str = "postgres";
-
-    const PORT: u16 = 5432;
 
     /// 测试用的非 public schema，和 [`create_schema`] 里建的一致
     const SCHEMA: &str = "hygiea_test";
 
-    /// 镜像固定版本。启动时先起临时实例跑初始化再重启，就绪日志会出现两次，第二次才是正式实例
-    async fn start() -> RunningContainer {
-        ContainerSpec::new("postgres", "18")
-            .env("POSTGRES_USER", USER)
-            .env("POSTGRES_PASSWORD", PASSWORD)
-            .env("POSTGRES_DB", DATABASE)
-            .port(PORT)
-            .wait_log_times("database system is ready to accept connections", 2)
-            .start()
-            .await
+    async fn start() -> RunningPostgres {
+        PostgresSpec::new().start().await
     }
 
-    fn connect(server: &RunningContainer) -> PgConnectConfig {
-        PgConnectConfig {
-            host: server.host().to_string(),
-            port: server.port(PORT),
-            username: USER.to_string(),
-            password: PASSWORD.to_string(),
-            database: DATABASE.to_string(),
-            ..Default::default()
-        }
+    fn connect(server: &RunningPostgres) -> PgConnectConfig {
+        super::common::pg_connect(server)
     }
 
-    fn seaorm_config(server: &RunningContainer) -> SeaOrmPgConfig {
+    fn seaorm_config(server: &RunningPostgres) -> SeaOrmPgConfig {
         SeaOrmPgConfig {
             connect: connect(server),
             ..Default::default()
@@ -87,7 +64,7 @@ mod pool {
     }
 
     /// 用默认配置连上去建好 [`SCHEMA`]，search_path 指向不存在的 schema 时 current_schema() 是 NULL
-    async fn create_schema(server: &RunningContainer) {
+    async fn create_schema(server: &RunningPostgres) {
         let db = DbResources::from_config(&seaorm_config(server), &Default::default())
             .await
             .unwrap();
@@ -700,24 +677,15 @@ mod pool {
 mod lock {
     use hygiea_core::app::RegistryConfig;
     use hygiea_db::{PgConnectConfig, SeaOrmPgConfig};
-    use hygiea_test::container::{ContainerSpec, RunningContainer};
+    use hygiea_test::container::{PostgresSpec, RunningPostgres};
 
     use super::common::{LockInst, uses};
     use super::*;
 
     type Inst = LockInst<SeaOrmPgConfig>;
 
-    const PASSWORD: &str = "hygiea-test";
-
-    const PORT: u16 = 5432;
-
-    async fn start() -> RunningContainer {
-        ContainerSpec::new("postgres", "18")
-            .env("POSTGRES_PASSWORD", PASSWORD)
-            .port(PORT)
-            .wait_log_times("database system is ready to accept connections", 2)
-            .start()
-            .await
+    async fn start() -> RunningPostgres {
+        PostgresSpec::new().start().await
     }
 
     /// 应用名 `hy`：锁表是 hy_lock
@@ -728,17 +696,12 @@ mod lock {
         }
     }
 
-    fn connect(server: &RunningContainer) -> PgConnectConfig {
-        PgConnectConfig {
-            host: server.host().to_string(),
-            port: server.port(PORT),
-            password: PASSWORD.to_string(),
-            ..Default::default()
-        }
+    fn connect(server: &RunningPostgres) -> PgConnectConfig {
+        super::common::pg_connect(server)
     }
 
     /// 一个实例：业务池加锁（`uses = 5`），锁用 SeaORM 底下的 sqlx 池
-    async fn pool(server: &RunningContainer) -> Inst {
+    async fn pool(server: &RunningPostgres) -> Inst {
         let config = SeaOrmPgConfig {
             uses: uses(5),
             connect: connect(server),
@@ -775,7 +738,7 @@ mod lock {
 mod live_config {
     use hygiea_core::app::RegistryConfig;
     use hygiea_db::{LiveConfigConfig, PgConnectConfig, SeaOrmPgConfig};
-    use hygiea_test::container::{ContainerSpec, RunningContainer};
+    use hygiea_test::container::{PostgresSpec, RunningPostgres};
     use sea_orm::ConnectionTrait;
 
     use super::common::{LiveInst, uses};
@@ -783,16 +746,8 @@ mod live_config {
 
     type Source = LiveInst<SeaOrmPgConfig>;
 
-    const PASSWORD: &str = "hygiea-test";
-    const PORT: u16 = 5432;
-
-    async fn start() -> RunningContainer {
-        ContainerSpec::new("postgres", "18")
-            .env("POSTGRES_PASSWORD", PASSWORD)
-            .port(PORT)
-            .wait_log_times("database system is ready to accept connections", 2)
-            .start()
-            .await
+    async fn start() -> RunningPostgres {
+        PostgresSpec::new().start().await
     }
 
     fn app() -> RegistryConfig {
@@ -803,15 +758,12 @@ mod live_config {
     }
 
     /// 轮询间隔很长：测试里的变化只能靠通知收到
-    fn config(server: &RunningContainer, search_path: &str) -> SeaOrmPgConfig {
+    fn config(server: &RunningPostgres, search_path: &str) -> SeaOrmPgConfig {
         SeaOrmPgConfig {
             uses: uses(3),
             connect: PgConnectConfig {
-                host: server.host().to_string(),
-                port: server.port(PORT),
-                password: PASSWORD.to_string(),
                 schema_search_path: search_path.to_string(),
-                ..Default::default()
+                ..super::common::pg_connect(server)
             },
             live_config: Some(LiveConfigConfig {
                 poll_interval_secs: Some(3600),

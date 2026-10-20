@@ -13,24 +13,17 @@ mod redis {
     use fred::interfaces::KeysInterface;
     use hygiea_core::app::{ConfigResource, Registry, Resources};
     use hygiea_redis::{FredRedisPool, RedisComponent, RedisConfig};
-    use hygiea_test::container::{ContainerSpec, RunningContainer};
+    use hygiea_test::container::{RedisSpec, RunningRedis};
 
-    const PORT: u16 = 6379;
-
-    /// 镜像固定版本，日志出现 "Ready to accept connections" 算就绪
-    async fn start() -> RunningContainer {
-        ContainerSpec::new("redis", "7.4")
-            .port(PORT)
-            .wait_log("Ready to accept connections")
-            .start()
-            .await
+    async fn start() -> RunningRedis {
+        RedisSpec::new().start().await
     }
 
-    fn config(redis: &RunningContainer, db: u8) -> RedisConfig {
+    fn config(redis: &RunningRedis, db: u8) -> RedisConfig {
         RedisConfig {
             mode: "standalone".to_string(),
             host: redis.host().to_string(),
-            port: redis.port(PORT),
+            port: redis.port(),
             db,
             ..Default::default()
         }

@@ -76,32 +76,21 @@ async fn put_get_delete(client: &AwsS3Client, bucket: &str) {
 /// 用代码启动的 RustFS（兼容 S3 的对象存储）
 #[container]
 mod rustfs {
-    use hygiea_test::container::{ContainerSpec, RunningContainer};
+    use hygiea_test::container::{RunningS3, S3Spec};
 
     use super::*;
 
-    const ACCESS_KEY: &str = "hygiea-test";
-    const SECRET_KEY: &str = "hygiea-test-secret";
-    const PORT: u16 = 9000;
-
-    /// 镜像固定版本，`/health` 返回 200 算就绪
-    async fn start() -> RunningContainer {
-        ContainerSpec::new("rustfs/rustfs", "1.0.0")
-            .env("RUSTFS_ACCESS_KEY", ACCESS_KEY)
-            .env("RUSTFS_SECRET_KEY", SECRET_KEY)
-            .port(PORT)
-            .wait_http(PORT, "/health", 200)
-            .start()
-            .await
+    async fn start() -> RunningS3 {
+        S3Spec::new().start().await
     }
 
     /// 自建服务的写法：path-style，region 随便填
-    fn config(server: &RunningContainer, secret_key: &str) -> AwsConfig {
+    fn config(server: &RunningS3, secret_key: &str) -> AwsConfig {
         AwsConfig {
             region: Some("us-east-1".into()),
-            endpoint_url: Some(format!("http://{}", server.addr(PORT))),
+            endpoint_url: Some(server.endpoint()),
             credentials: Some(StaticCredentials {
-                access_key_id: ACCESS_KEY.into(),
+                access_key_id: server.access_key().into(),
                 secret_access_key: secret_key.into(),
                 session_token: None,
             }),
@@ -116,9 +105,10 @@ mod rustfs {
     #[tokio::test]
     async fn put_get_delete_object() {
         let server = start().await;
-        let client = AwsS3Client::from_config(&config(&server, SECRET_KEY), &Default::default())
-            .await
-            .unwrap();
+        let client =
+            AwsS3Client::from_config(&config(&server, server.secret_key()), &Default::default())
+                .await
+                .unwrap();
         client.create_bucket().bucket("test").send().await.unwrap();
         put_get_delete(&client, "test").await;
     }

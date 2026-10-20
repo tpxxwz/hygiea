@@ -23,7 +23,7 @@ use hygiea::Result;
 use hygiea::app::RegistryConfig;
 use hygiea::db::{DbLockClient, DbResources, DbUses, PgConnectConfig, SqlxPgConfig, SqlxPgPool};
 use hygiea::lock::{DistributedLock, LockKeyI64, hy_lock_key, hy_lock_type, lock_key};
-use hygiea_test::container::{ContainerSpec, RunningContainer};
+use hygiea_test::container::{PostgresSpec, RunningPostgres};
 
 // ---- 注册：锁类型、字符串 key 共用一套编号，同模块里 code 不能重复 ----
 
@@ -45,17 +45,9 @@ enum OrderLockKey {
     Export,
 }
 
-const PASSWORD: &str = "hygiea-example";
-const PORT: u16 = 5432;
-
 #[tokio::main]
 async fn main() -> Result<()> {
-    let server = ContainerSpec::new("postgres", "18")
-        .env("POSTGRES_PASSWORD", PASSWORD)
-        .port(PORT)
-        .wait_log_times("database system is ready to accept connections", 2)
-        .start()
-        .await;
+    let server = PostgresSpec::new().start().await;
     // 两个实例，各自的锁；a 的业务池用来查锁表
     let (pool_a, a) = instance(&server).await?;
     let (_, b) = instance(&server).await?;
@@ -162,13 +154,15 @@ a 拿锁（哈希成 i64）：{:?}",
 }
 
 /// 一个实例的业务池和锁。应用名 example：锁表是 example_lock
-async fn instance(server: &RunningContainer) -> Result<(SqlxPgPool, DbLockClient)> {
+async fn instance(server: &RunningPostgres) -> Result<(SqlxPgPool, DbLockClient)> {
     let config = SqlxPgConfig {
         uses: DbUses::try_from(DbUses::POOL | DbUses::LOCK)?,
         connect: PgConnectConfig {
             host: server.host().to_string(),
-            port: server.port(PORT),
-            password: PASSWORD.to_string(),
+            port: server.port(),
+            username: server.user().to_string(),
+            password: server.password().to_string(),
+            database: server.database().to_string(),
             ..Default::default()
         },
         ..Default::default()
