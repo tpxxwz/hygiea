@@ -249,8 +249,35 @@ fn lock_key_impl(
         let (var_name, full) = (&v.var_name, &v.full);
         quote! { #enum_name::#var_name => #krate::lock::__private::lock_key(#full, args) }
     });
+    let code_arms = variants.iter().map(|v| {
+        let (var_name, full) = (&v.var_name, &v.full);
+        quote! { #enum_name::#var_name => #full }
+    });
+    let tpl_arms = variants.iter().map(|v| {
+        let var_name = &v.var_name;
+        let tpl = v
+            .tpl
+            .as_ref()
+            .map(|(tpl, _)| tpl.as_str())
+            .unwrap_or_default();
+        quote! { #enum_name::#var_name => #tpl }
+    });
     quote! {
         impl #enum_name {
+            /// 9 位编号：项目前缀 + 模块前缀 + `code`，也是渲染出来的 key 的前缀
+            pub const fn code(&self) -> &'static str {
+                match self {
+                    #(#code_arms,)*
+                }
+            }
+
+            /// `#[lock_key(tpl = "..")]` 的原文，不渲染：带变量的原样返回 `{{ .. }}`
+            pub const fn tpl(&self) -> &'static str {
+                match self {
+                    #(#tpl_arms,)*
+                }
+            }
+
             /// 模板需要的变量名（已排序）。lock_key! 在 const 块里调用它做编译期检查，
             /// 单变量简写 lock_key!(X, 值) 也靠它取 key
             #[doc(hidden)]

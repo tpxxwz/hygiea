@@ -99,7 +99,13 @@ impl LockType {
 ///
 /// lock.try_lock(lock_key!(OrderLockKey::DailySettle)).await?;       // "101020003:daily_settle"
 /// lock.try_lock(lock_key!(OrderLockKey::Export, user_name)).await?;  // "101020004:export:alice"
+///
+/// OrderLockKey::Export.code();                                       // "101020004"
+/// OrderLockKey::Export.tpl();                                        // "export:{{ user }}"，不渲染
+/// lock_key!(OrderLockKey::Export, user_name).rendered()?;            // "export:alice"
 /// ```
+///
+/// derive 给 enum 生成 `const fn code()`、`const fn tpl()`，不用先渲染出 key
 ///
 /// 模板有多个变量时，变量的值里不要带模板里的分隔符：模板 `{{ a }}:{{ b }}` 下 `a = "x:y", b = "z"` 和
 /// `a = "x", b = "y:z"` 渲染出来一样，是同一把锁。传 id、日期、数字不会有这个问题。
@@ -112,6 +118,9 @@ impl LockType {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct LockKey(pub(super) std::result::Result<String, String>);
 
+/// key 开头 `<9 位编号>:` 的长度：编号是 9 位数字，前缀都是 ASCII
+const PREFIX_LEN: usize = 10;
+
 impl LockKey {
     /// 后端用的 key；模板渲染失败时是 [`LockErr::InvalidKey`](super::LockErr::InvalidKey)
     pub fn as_str(&self) -> crate::Result<&str> {
@@ -119,6 +128,12 @@ impl LockKey {
             Ok(key) => Ok(key),
             Err(cause) => Err(crate::err!(super::LockErr::InvalidKey, cause)),
         }
+    }
+
+    /// 模板渲染的结果，不带开头的 `<9 位编号>:`，比如 `"export:alice"`；借用 key 里的字符串，不复制。
+    /// 渲染失败时同 [`as_str`](Self::as_str)
+    pub fn rendered(&self) -> crate::Result<&str> {
+        self.as_str().map(|key| &key[PREFIX_LEN..])
     }
 }
 
@@ -317,6 +332,32 @@ mod tests {
             "999090005:x:7"
         );
         assert_eq!(i64_key(-5).as_str().unwrap(), "999999999:-5");
+    }
+
+    /// enum 上的 code / tpl 是编号和模板原文；rendered 去掉编号前缀，渲染失败时报错
+    #[test]
+    fn code_tpl_and_rendered() {
+        assert_eq!(TestLockKey::User.code(), "999090004");
+        assert_eq!(TestLockKey::User.tpl(), "user:{{ id }}");
+        assert_eq!(TestLockKey::Fixed.tpl(), "fixed");
+        const CODE: &str = TestLockKey::Pair.code();
+        assert_eq!(CODE, "999090005");
+
+        let user = crate::lock_key!(TestLockKey::User, 42);
+        assert_eq!(user.rendered().unwrap(), "user:42");
+        assert_eq!(
+            user.as_str().unwrap(),
+            format!("{}:{}", TestLockKey::User.code(), user.rendered().unwrap())
+        );
+        assert_eq!(i64_key(-5).rendered().unwrap(), "-5");
+        let name = "a";
+        let broken = crate::lock_key!(TestLockKey::Pair, { (name): "x" });
+        assert!(
+            broken
+                .rendered()
+                .unwrap_err()
+                .is(crate::lock::LockErr::InvalidKey)
+        );
     }
 
     /// `{ .. }` 里 key 用了表达式，编译期查不了，缺的变量在 as_str 时报错
