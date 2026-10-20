@@ -316,7 +316,7 @@ mod decisions {
         })
         .await;
         let resp = RequestConfig::plain(Method::GET, format!("{base}/x"))
-            .headers(header_map(&[("x-token", "stale")]))
+            .headers([("x-token", "stale")])
             .unwrap()
             .send::<Bytes>((
                 &ReqwestClient::from_config(&local_config(), &Default::default())
@@ -333,7 +333,7 @@ mod decisions {
                         }
                         let body: serde_json::Value = serde_json::from_slice(&resp.body).unwrap();
                         let token = body["new_token"].as_str().unwrap();
-                        match cfg.headers(header_map(&[("x-token", token)])) {
+                        match cfg.headers([("x-token", token)]) {
                             Ok(cfg) => RetryDecision::Retry(cfg),
                             Err(e) => RetryDecision::Stop(e),
                         }

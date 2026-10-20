@@ -200,7 +200,6 @@ mod tests {
     use hygiea_core::redact::redact;
     use serde::Serialize;
     use serde_json::{Value, json};
-    use test_support::headers::header_map;
 
     use super::*;
 
@@ -271,9 +270,9 @@ mod tests {
         #[test]
         fn headers_merge_across_calls() {
             let cfg = RequestConfig::plain(Method::GET, URL)
-                .headers(header_map(&[("x-a", "1"), ("x-b", "old")]))
+                .headers([("x-a", "1"), ("x-b", "old")])
                 .unwrap()
-                .headers(header_map(&[("x-b", "new"), ("x-c", "3")]))
+                .headers([("x-b", "new"), ("x-c", "3")])
                 .unwrap();
             assert_eq!(cfg.headers["x-a"], "1");
             assert_eq!(cfg.headers.get_all("x-b").iter().count(), 1);
@@ -310,8 +309,8 @@ mod tests {
         /// `RequestConfig::headers` 走的也是这套检查
         #[test]
         fn request_headers_use_the_same_check() {
-            let result = RequestConfig::plain(Method::GET, URL)
-                .headers(header_map(&[("authorization", "Bearer x")]));
+            let result =
+                RequestConfig::plain(Method::GET, URL).headers([("authorization", "Bearer x")]);
             assert!(result.is_err());
         }
     }
@@ -332,7 +331,7 @@ mod tests {
         #[test]
         fn headers_are_applied() {
             let cfg = RequestConfig::plain(Method::GET, URL)
-                .headers(header_map(&[("x-a", "1")]))
+                .headers([("x-a", "1")])
                 .unwrap();
             assert_eq!(build(cfg).headers()["x-a"], "1");
         }

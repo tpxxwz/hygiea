@@ -841,7 +841,6 @@ mod tests {
     #[cfg(feature = "debug-log")]
     mod debug {
         use serde_json::{Value, json};
-        use test_support::headers::header_map;
 
         use super::*;
 
@@ -853,7 +852,7 @@ mod tests {
                     user_agent: Some("ua".into()),
                     ..ReqwestConfig::default()
                 }
-                .default_headers(header_map(&[("x-default", "d"), ("x-both", "client")]))
+                .default_headers([("x-default", "d"), ("x-both", "client")])
                 .unwrap()
                 .debug(true),
                 &Default::default(),
@@ -884,7 +883,7 @@ mod tests {
 
         fn login() -> RequestConfig<&'static Login, Json<&'static Login>> {
             RequestConfig::new(Method::POST, REFUSED, &LOGIN, Json(&LOGIN))
-                .headers(header_map(&[("x-both", "request")]))
+                .headers([("x-both", "request")])
                 .unwrap()
                 .enable_logging(false)
         }

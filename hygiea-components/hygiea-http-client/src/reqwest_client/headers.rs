@@ -5,7 +5,7 @@ use std::fmt;
 use hygiea_core::{Result, redact};
 
 use super::error::invalid_header;
-use super::{HeaderMap, HeaderValue};
+use super::{HeaderMap, HeaderName, HeaderValue};
 
 // ============================ 请求头输入：IntoHeaders 与保留字段校验 ============================
 
@@ -13,9 +13,11 @@ use super::{HeaderMap, HeaderValue};
 ///
 /// 内置实现：
 /// - [`HeaderMap`] / `&HeaderMap`：一份请求头（同名多值用 `append` 追加）
+/// - 名字和值 `(&str, &str)`：一个请求头。名字大小写随意（统一成小写），名字或值不合法时
+///   返回 [`HttpClientErr::InvalidHeader`](super::HttpClientErr::InvalidHeader)（错误里只有名字，不带值）
 /// - 多份请求头一起传：数组 `[T; N]`、`Vec<T>`，或者类型各不相同的元组 `(A, B)` ~ `(A, B, C, D)`。
 ///   按顺序合并，同名的以靠后的为准（整组值替换，不是追加），比如固定头在前、会话头在后：
-///   `.headers([&*BASE_HEADERS, &session])`
+///   `.headers([&*BASE_HEADERS, &session])`；几个名字和值：`.headers([("accept", "text/plain"), ("x-a", "1")])`
 ///
 /// 其他形式由外部类型自己实现这个 trait，比如签名头的结构体；保留字段统一由
 /// [`RequestConfig::headers`](super::RequestConfig::headers) 拦截
@@ -35,6 +37,24 @@ impl IntoHeaders for &HeaderMap {
     fn into_headers(self) -> Result<HeaderMap> {
         Ok(self.clone())
     }
+}
+
+/// 一个请求头：名字、值
+impl IntoHeaders for (&str, &str) {
+    fn into_headers(self) -> Result<HeaderMap> {
+        single_header(self.0, self.1)
+    }
+}
+
+/// 名字、值解析成只有这一个请求头的 [`HeaderMap`]；错误里不带值，值可能是凭据
+fn single_header(name: &str, value: &str) -> Result<HeaderMap> {
+    let name = HeaderName::from_bytes(name.as_bytes())
+        .map_err(|e| invalid_header(format!("header name {name:?}: {e}")))?;
+    let value = HeaderValue::from_str(value)
+        .map_err(|e| invalid_header(format!("header {name} value: {e}")))?;
+    let mut headers = HeaderMap::new();
+    headers.insert(name, value);
+    Ok(headers)
 }
 
 /// 多份按顺序合并，同名的以靠后的为准
@@ -164,7 +184,6 @@ pub(super) fn auth_value(raw: String) -> Result<HeaderValue> {
 #[cfg(test)]
 mod tests {
     use crate::reqwest_client::HttpClientErr;
-    use test_support::headers::header_map;
 
     use super::*;
 
@@ -183,10 +202,12 @@ mod tests {
         /// 数组：不同名的都保留，同名的整组被后面的替换（不是追加）
         #[test]
         fn array_later_overrides_earlier() {
-            let mut base = header_map(&[("x-a", "1"), ("x-b", "base")]);
+            let mut base = [("x-a", "1"), ("x-b", "base")].into_headers().unwrap();
             base.append("x-multi", HeaderValue::from_static("m1"));
             base.append("x-multi", HeaderValue::from_static("m2"));
-            let session = header_map(&[("x-b", "session"), ("x-multi", "s"), ("x-c", "3")]);
+            let session = [("x-b", "session"), ("x-multi", "s"), ("x-c", "3")]
+                .into_headers()
+                .unwrap();
 
             let merged = [&base, &session].into_headers().unwrap();
             assert_eq!(value(&merged, "x-a"), ["1"]);
@@ -198,7 +219,7 @@ mod tests {
         /// 后面的一份里同名多值会整组保留
         #[test]
         fn later_multi_values_are_kept() {
-            let base = header_map(&[("x-multi", "base")]);
+            let base = [("x-multi", "base")].into_headers().unwrap();
             let mut later = HeaderMap::new();
             later.append("x-multi", HeaderValue::from_static("l1"));
             later.append("x-multi", HeaderValue::from_static("l2"));
@@ -209,9 +230,9 @@ mod tests {
         /// 元组里类型可以不同，规则同数组
         #[test]
         fn tuple_of_mixed_types() {
-            let base = header_map(&[("x-a", "1"), ("x-b", "base")]);
-            let session = header_map(&[("x-b", "session")]);
-            let extra = header_map(&[("x-c", "3")]);
+            let base = [("x-a", "1"), ("x-b", "base")].into_headers().unwrap();
+            let session = [("x-b", "session")].into_headers().unwrap();
+            let extra = [("x-c", "3")].into_headers().unwrap();
             let merged = (&base, session, extra).into_headers().unwrap();
             assert_eq!(value(&merged, "x-a"), ["1"]);
             assert_eq!(value(&merged, "x-b"), ["session"]);
@@ -221,10 +242,44 @@ mod tests {
         /// 合并之后再过保留字段检查，任何一份里有保留字段都会被拦下
         #[test]
         fn reserved_header_in_any_part_is_rejected() {
-            let base = header_map(&[("x-a", "1")]);
-            let bad = header_map(&[("content-type", "text/plain")]);
+            let base = [("x-a", "1")].into_headers().unwrap();
+            let bad = [("content-type", "text/plain")].into_headers().unwrap();
             let err = checked_headers([&base, &bad]).unwrap_err();
             assert!(err.is(HttpClientErr::InvalidHeader));
+        }
+    }
+
+    /// 名字和值：大小写统一成小写，数组里同名的后一个覆盖前一个，不合法的报错且不带值
+    mod pairs {
+        use super::*;
+
+        #[test]
+        fn names_lowercased_and_later_overrides() {
+            let headers = [("X-A", "1"), ("x-a", "2"), ("x-b", "3")]
+                .into_headers()
+                .unwrap();
+            assert_eq!(headers.len(), 2);
+            assert_eq!(headers["x-a"], "2");
+            assert_eq!(headers["x-b"], "3");
+        }
+
+        /// 和 HeaderMap 混在元组里，规则同多份合并；运行时拼的值用 as_str
+        #[test]
+        fn mixes_with_header_map() {
+            let token = format!("t-{}", 1);
+            let base = [("x-a", "1")].into_headers().unwrap();
+            let headers = (&base, ("x-token", token.as_str())).into_headers().unwrap();
+            assert_eq!(headers["x-a"], "1");
+            assert_eq!(headers["x-token"], "t-1");
+        }
+
+        #[test]
+        fn invalid_name_or_value_is_rejected_without_value() {
+            let err = ("bad name", "1").into_headers().unwrap_err();
+            assert!(err.is(HttpClientErr::InvalidHeader));
+            let err = ("x-a", "secret\nvalue").into_headers().unwrap_err();
+            assert!(err.is(HttpClientErr::InvalidHeader));
+            assert!(!err.to_string().contains("secret"), "{err}");
         }
     }
 
@@ -242,7 +297,7 @@ mod tests {
                 "Transfer-Encoding",
                 "connection",
             ] {
-                let err = checked_headers(header_map(&[(name, "x")])).unwrap_err();
+                let err = checked_headers([(name, "x")]).unwrap_err();
                 assert!(err.is(HttpClientErr::InvalidHeader), "{name}");
             }
         }
@@ -250,14 +305,18 @@ mod tests {
         /// 混在普通头里也会被拦下，整个调用失败
         #[test]
         fn one_reserved_header_fails_the_whole_map() {
-            let headers = header_map(&[("x-a", "1"), ("content-type", "text/plain")]);
+            let headers = [("x-a", "1"), ("content-type", "text/plain")]
+                .into_headers()
+                .unwrap();
             assert!(checked_headers(headers).is_err());
         }
 
         /// 看着像但不是保留字段的，照常放行
         #[test]
         fn similar_names_are_allowed() {
-            let headers = header_map(&[("x-authorization", "1"), ("content-encoding", "gzip")]);
+            let headers = [("x-authorization", "1"), ("content-encoding", "gzip")]
+                .into_headers()
+                .unwrap();
             assert_eq!(checked_headers(headers).unwrap().len(), 2);
         }
     }

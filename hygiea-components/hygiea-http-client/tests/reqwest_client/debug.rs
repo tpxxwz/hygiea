@@ -15,7 +15,7 @@ async fn debug_client() -> ReqwestClient {
             user_agent: Some("hygiea-debug".into()),
             ..local_config()
         }
-        .default_headers(header_map(&[("x-default", "d")]))
+        .default_headers([("x-default", "d")])
         .unwrap()
         .debug(true),
         &Default::default(),
@@ -27,7 +27,7 @@ async fn debug_client() -> ReqwestClient {
 /// 发一个带敏感字段的 POST：params 和 body 都是 login，单请求头一个，关掉 enable_logging
 fn login_request(url: String) -> RequestConfig<Login, Json<Login>> {
     RequestConfig::new(Method::POST, url, login("t0k"), Json(login("t0k")))
-        .headers(header_map(&[("x-req", "r")]))
+        .headers([("x-req", "r")])
         .unwrap()
         .enable_logging(false)
 }

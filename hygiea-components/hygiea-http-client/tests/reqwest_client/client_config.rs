@@ -44,14 +44,14 @@ mod headers {
         let base = serve(echo).await;
         let client = ReqwestClient::from_config(
             &local_config()
-                .default_headers(header_map(&[("x-a", "1"), ("x-b", "1")]))
+                .default_headers([("x-a", "1"), ("x-b", "1")])
                 .unwrap(),
             &Default::default(),
         )
         .await
         .unwrap();
         let seen = RequestConfig::plain(Method::GET, format!("{base}/echo"))
-            .headers(header_map(&[("x-b", "2")]))
+            .headers([("x-b", "2")])
             .unwrap()
             .send::<Json<serde_json::Value>>(&client)
             .await

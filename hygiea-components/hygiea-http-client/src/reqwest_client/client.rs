@@ -307,9 +307,9 @@ pub type ReqwestComponent = ImmediateResourceComponent<ReqwestClient>;
 
 #[cfg(test)]
 mod tests {
+    use crate::reqwest_client::IntoHeaders;
     use crate::reqwest_client::error::HttpClientErr;
     use std::error::Error as _;
-    use test_support::headers::header_map;
 
     use super::*;
 
@@ -374,7 +374,7 @@ mod tests {
         #[test]
         fn accepts_normal_headers() {
             let c = ReqwestConfig::default()
-                .default_headers(header_map(&[("x-api-key", "k"), ("accept", "*/*")]))
+                .default_headers([("x-api-key", "k"), ("accept", "*/*")])
                 .unwrap();
             let headers = HeaderMap::try_from(c.default_headers).unwrap();
             assert_eq!(headers["x-api-key"], "k");
@@ -392,7 +392,7 @@ mod tests {
                 "CONNECTION",
             ] {
                 let err = ReqwestConfig::default()
-                    .default_headers(header_map(&[(name, "x")]))
+                    .default_headers([(name, "x")])
                     .unwrap_err();
                 assert!(err.is(HttpClientErr::InvalidHeader), "{name}");
             }
@@ -402,9 +402,9 @@ mod tests {
         #[test]
         fn later_call_merges_into_earlier() {
             let c = ReqwestConfig::default()
-                .default_headers(header_map(&[("x-a", "1"), ("x-b", "old")]))
+                .default_headers([("x-a", "1"), ("x-b", "old")])
                 .unwrap()
-                .default_headers(header_map(&[("x-b", "new"), ("x-c", "3")]))
+                .default_headers([("x-b", "new"), ("x-c", "3")])
                 .unwrap();
             let headers = HeaderMap::try_from(c.default_headers).unwrap();
             assert_eq!(headers["x-a"], "1");
@@ -467,7 +467,7 @@ mod tests {
             ReqwestClient::from_config(
                 &ReqwestConfig {
                     user_agent: Some("hygiea-test".into()),
-                    default_headers: header_map(&[("x-a", "1")]).into(),
+                    default_headers: [("x-a", "1")].into_headers().unwrap().into(),
                     cookie_store: true,
                     transparent_compression: false,
                     max_redirects: 0,

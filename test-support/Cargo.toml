@@ -12,8 +12,6 @@ publish = false
 # 不能依赖 hygiea-core：core 把本 crate 当 dev-dependency，反过来依赖会让测试构建里出现两份 core，
 # 两边的类型对不上。需要 hygiea 类型的测试数据留在各 crate 自己的测试里
 [dependencies]
-# 版本走 workspace，和 reqwest 用的是同一个 http crate，HeaderMap 才是同一个类型
-http = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["rt", "net", "io-util", "time", "macros"] }

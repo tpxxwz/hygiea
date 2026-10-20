@@ -314,8 +314,9 @@ fn text_json(text: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
-    use test_support::headers::header_map;
     use test_support::logs::capture;
+
+    use crate::reqwest_client::IntoHeaders;
 
     use super::*;
 
@@ -350,7 +351,7 @@ mod tests {
             assert_eq!(client.debug.mode(), Some(false));
             assert_eq!(
                 client.debug.default_headers,
-                header_map(&[("accept", "*/*")])
+                [("accept", "*/*")].into_headers().unwrap()
             );
         }
 
@@ -386,14 +387,16 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 client.debug.default_headers,
-                header_map(&[("accept", "*/*")])
+                [("accept", "*/*")].into_headers().unwrap()
             );
         }
 
         /// UA 和 default_headers 都算进来；default_headers 里的同名头覆盖 Accept 和 UA，同名多值只剩最后一个
         #[tokio::test]
         async fn default_headers_follow_reqwest_rules() {
-            let mut configured = header_map(&[("accept", "text/plain"), ("x-a", "1")]);
+            let mut configured = [("accept", "text/plain"), ("x-a", "1")]
+                .into_headers()
+                .unwrap();
             configured.append("x-a", "2".parse().unwrap());
             let client = ReqwestClient::from_config(
                 &ReqwestConfig {
@@ -407,13 +410,15 @@ mod tests {
             .unwrap();
             assert_eq!(
                 client.debug.default_headers,
-                header_map(&[("accept", "text/plain"), ("user-agent", "ua"), ("x-a", "2")])
+                [("accept", "text/plain"), ("user-agent", "ua"), ("x-a", "2")]
+                    .into_headers()
+                    .unwrap()
             );
 
             let client = ReqwestClient::from_config(
                 &ReqwestConfig {
                     user_agent: Some("ua".into()),
-                    default_headers: header_map(&[("user-agent", "override")]).into(),
+                    default_headers: [("user-agent", "override")].into_headers().unwrap().into(),
                     ..ReqwestConfig::default()
                 },
                 &Default::default(),

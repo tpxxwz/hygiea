@@ -5547,7 +5547,6 @@ dependencies = [
 name = "test-support"
 version = "0.1.1-alpha.7"
 dependencies = [
- "http 1.5.0",
  "serde",
  "serde_json",
  "tokio",
