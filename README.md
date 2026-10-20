@@ -366,7 +366,7 @@ pub enum LegacyErrors {
 
   | 区间 | 给谁 |
   |---|---|
-  | `000`、`999` | `BaseErr`：不需要 feature 的模块，没有模块前缀，5 位编号。只用 `000xx`，兜底的 `SysErr` 是 `99999`；别的 5 位码会落进其他模块的区间 |
+  | `000`、`999` | `BaseErr`：不需要 feature 的模块，没有模块前缀，5 位编号。只用 `000xx`（`Impossible` 是 `00000`），兜底的 `SysErr` 是 `99999`；别的 5 位码会落进其他模块的区间 |
   | `001`～`089` | core：app `001`、log `002`、lock `003` |
   | `090`～`099` | core 的测试（`hygiea-core/tests/` 里自定义的错误 enum） |
   | `100`～`799` | components：db（`RepoErr`）`100`、http-client（`HttpClientErr`）`101` |
@@ -380,6 +380,7 @@ pub enum LegacyErrors {
 <!-- gen:err-codes -->
 | 错误码 | 变体 | 模板 |
 |---|---|---|
+| `99900000` | `BaseErr::Impossible` | Should not happen: {{ what }} |
 | `99900001` | `BaseErr::DateError` | Date error: {{ cause }} |
 | `99900002` | `BaseErr::RegexError` | Invalid regex: {{ pattern }} |
 | `99900003` | `BaseErr::JsonError` | JSON error: {{ cause }} |

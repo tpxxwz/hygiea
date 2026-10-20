@@ -502,12 +502,16 @@ macro_rules! ensure {
 /// 框架内置错误：默认启用的模块（错误处理、datetime、string 等）和 redact 用到的都在这里。
 /// 需要开 feature 的模块各有自己的错误 enum，比如 http 的 `hygiea::http_client::reqwest_client::HttpClientErr`。
 /// 它们共用项目前缀 999（配在 hygiea-core 的 Cargo.toml）。`BaseErr` 不带模块前缀，5 位业务码随意分配，
-/// 兜底的 `SysErr` 是 99999；`HttpClientErr` 用内部模块前缀 101。是否撞码由 `init()` 的全局查重保证
+/// 兜底的 `SysErr` 是 99999、`Impossible` 是 00000；`HttpClientErr` 用内部模块前缀 101。是否撞码由 `init()` 的全局查重保证
 #[derive(hy_err)]
 pub enum BaseErr {
     /// Generic system error. 对外只说 "System Error"，内部原因用 `with_source` 挂上
     #[error(err_code = "99999", err_tpl = "System Error")]
     SysErr,
+    /// 按约定不会出现的情况真的出现了（数据库约束、调用方保证的前提这类被打破），兜底用。
+    /// `what` 用一句话说明是哪条约定被打破了：`err!(BaseErr::Impossible, "local row of a backfilled id")`
+    #[error(err_code = "00000", err_tpl = "Should not happen: {{ what }}")]
+    Impossible,
     /// Date error
     #[error(err_code = "00001", err_tpl = "Date error: {{ cause }}")]
     DateError,
