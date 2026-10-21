@@ -499,6 +499,24 @@ macro_rules! ensure {
     };
 }
 
+/// 构造 [`BaseErr::Impossible`]：参数同 `format!`，拼出来的字符串就是模板里的 `what`，
+/// 用一句话说明是哪条约定被打破了。要提前返回时配合 [`bail!`] / [`ensure!`] 的 `from:`
+///
+/// ```ignore
+/// let chapter = chapter_map
+///     .get(&chapter_sync_id)
+///     .ok_or_else(|| impossible!("synced chapter of chapter_sync {chapter_sync_id}"))?;
+///
+/// bail!(from: impossible!("card sync for template {:?}", template));
+/// ensure!(rows.len() == ids.len(), from: impossible!("rows of ids {ids:?}"));
+/// ```
+#[macro_export]
+macro_rules! impossible {
+    ($($arg:tt)+) => {
+        $crate::err!($crate::BaseErr::Impossible, ::std::format!($($arg)+))
+    };
+}
+
 /// 框架内置错误：默认启用的模块（错误处理、datetime、string 等）和 redact 用到的都在这里。
 /// 需要开 feature 的模块各有自己的错误 enum，比如 http 的 `hygiea::http_client::reqwest_client::HttpClientErr`。
 /// 它们共用项目前缀 999（配在 hygiea-core 的 Cargo.toml）。`BaseErr` 不带模块前缀，5 位业务码随意分配，
@@ -509,7 +527,7 @@ pub enum BaseErr {
     #[error(err_code = "99999", err_tpl = "System Error")]
     SysErr,
     /// 按约定不会出现的情况真的出现了（数据库约束、调用方保证的前提这类被打破），兜底用。
-    /// `what` 用一句话说明是哪条约定被打破了：`err!(BaseErr::Impossible, "local row of a backfilled id")`
+    /// `what` 用一句话说明是哪条约定被打破了，用 [`impossible!`] 构造：`impossible!("local row of backfilled id {id}")`
     #[error(err_code = "00000", err_tpl = "Should not happen: {{ what }}")]
     Impossible,
     /// Date error
@@ -882,6 +900,40 @@ mod tests {
         }
         assert!(into_other(0).err().unwrap().0.is(TestErr::NotFound));
         assert!(into_other(1).err().unwrap().0.is(TestErr::Wrapped));
+    }
+
+    /// impossible! 按 format! 拼好 what，构造 BaseErr::Impossible；配合 bail! / ensure! 的 from: 提前返回
+    #[test]
+    fn impossible_formats_what() {
+        let chapter_sync_id = 7;
+        let e = impossible!("synced chapter of chapter_sync {chapter_sync_id}");
+        assert!(e.is(BaseErr::Impossible));
+        assert_eq!(e.err_code(), "99900000");
+        assert_eq!(
+            e.to_string(),
+            "Should not happen: synced chapter of chapter_sync 7"
+        );
+        assert_eq!(
+            impossible!("{} of {:?}", "rows", [1, 2]).to_string(),
+            "Should not happen: rows of [1, 2]"
+        );
+
+        fn bail_impossible() -> Result<()> {
+            bail!(from: impossible!("fixed"));
+        }
+        assert_eq!(
+            bail_impossible().unwrap_err().to_string(),
+            "Should not happen: fixed"
+        );
+        let ensure_impossible = |n: i32| -> Result<i32> {
+            ensure!(n > 0, from: impossible!("n is {n}"));
+            Ok(n)
+        };
+        assert_eq!(ensure_impossible(1).unwrap(), 1);
+        assert_eq!(
+            ensure_impossible(0).unwrap_err().to_string(),
+            "Should not happen: n is 0"
+        );
     }
 
     /// ensure! 条件不成立时提前返回，成立时往下走
