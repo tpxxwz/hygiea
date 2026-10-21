@@ -450,7 +450,7 @@ fn compile_route(
         return Err(invalid("handlers needs at least one handler"));
     }
     let mut chain = Vec::with_capacity(handlers.len());
-    for (i, HandlerDef { delay_ms, action }) in handlers.into_iter().enumerate() {
+    for (i, HandlerDef { delay, action }) in handlers.into_iter().enumerate() {
         let desc = match &action {
             Action::Script(script) => format!("script {script}"),
             Action::InlineScript(_) => "inline script".to_string(),
@@ -497,11 +497,7 @@ fn compile_route(
                 Step::Fixed(response)
             }
         };
-        chain.push(Stage {
-            delay_ms,
-            step,
-            desc,
-        });
+        chain.push(Stage { delay, step, desc });
     }
     let match_script = match request.match_script.take() {
         Some(script) => Some(compile_script(

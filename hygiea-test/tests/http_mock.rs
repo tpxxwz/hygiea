@@ -424,7 +424,8 @@ async fn code_only_service() {
             "/down",
             [
                 Handler::script_str("()"),
-                Handler::response(Response::text("bad gateway").status(502)).delay_ms(50),
+                Handler::response(Response::text("bad gateway").status(502))
+                    .delay(Duration::from_millis(50)),
             ],
         )
         .start()

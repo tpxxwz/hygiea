@@ -14,10 +14,14 @@ use hygiea_core::{HyErr, Result, ResultExt, err};
 #[derive(Deserialize, Clone, Debug, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct HttpTimeout {
-    pub connect_secs: Option<u64>,
-    pub header_read_secs: Option<u64>,
-    pub request_read_secs: Option<u64>,
-    pub response_write_secs: Option<u64>,
+    #[serde(with = "hygiea_core::datetime::duration_secs::option")]
+    pub connect_secs: Option<Duration>,
+    #[serde(with = "hygiea_core::datetime::duration_secs::option")]
+    pub header_read_secs: Option<Duration>,
+    #[serde(with = "hygiea_core::datetime::duration_secs::option")]
+    pub request_read_secs: Option<Duration>,
+    #[serde(with = "hygiea_core::datetime::duration_secs::option")]
+    pub response_write_secs: Option<Duration>,
 }
 
 #[derive(Deserialize, Clone, Debug, Default)]
@@ -53,7 +57,8 @@ pub struct AxumConfig {
     pub limits: Option<HttpLimits>,
     /// 关闭时最多等多久（秒）让手上的请求处理完，不写用 Registry 的默认值（15 秒）。
     /// 有长请求（大文件上传、长轮询）就配长一点
-    pub shutdown_timeout_secs: Option<u64>,
+    #[serde(with = "hygiea_core::datetime::duration_secs::option")]
+    pub shutdown_timeout_secs: Option<Duration>,
 }
 
 impl Default for AxumConfig {
@@ -105,7 +110,7 @@ impl DeferredComponent for AxumComponent {
     }
 
     fn shutdown_timeout(&self) -> Option<Duration> {
-        self.config.shutdown_timeout_secs.map(Duration::from_secs)
+        self.config.shutdown_timeout_secs
     }
 
     async fn prepare(&mut self, _sink: &ResourceSink) -> Result<()> {
@@ -356,8 +361,7 @@ pub fn build_router(router: axum::Router, config: &AxumConfig) -> axum::Router {
     };
 
     match config.timeout.as_ref().and_then(|t| t.request_read_secs) {
-        Some(secs) => {
-            let duration = Duration::from_secs(secs);
+        Some(duration) => {
             tracing::info!("HTTP request timeout set to {:?}", duration);
             router.layer(tower_http::timeout::TimeoutLayer::with_status_code(
                 http::StatusCode::REQUEST_TIMEOUT,
@@ -511,9 +515,12 @@ mod tests {
         assert_eq!(config.host, "127.0.0.1");
         assert_eq!(config.port, 9090);
         assert_eq!(config.base_path, "/api");
-        assert_eq!(config.timeout.unwrap().request_read_secs, Some(5));
+        assert_eq!(
+            config.timeout.unwrap().request_read_secs,
+            Some(Duration::from_secs(5))
+        );
         assert_eq!(config.limits.unwrap().max_body_size, Some(1024));
-        assert_eq!(config.shutdown_timeout_secs, Some(10));
+        assert_eq!(config.shutdown_timeout_secs, Some(Duration::from_secs(10)));
     }
 
     #[test]
@@ -535,9 +542,9 @@ mod tests {
     fn http_timeout_deserialize_overrides_given_fields() {
         let timeout: HttpTimeout =
             serde_json::from_str(r#"{"connect_secs": 3, "request_read_secs": 7}"#).unwrap();
-        assert_eq!(timeout.connect_secs, Some(3));
+        assert_eq!(timeout.connect_secs, Some(Duration::from_secs(3)));
         assert_eq!(timeout.header_read_secs, None);
-        assert_eq!(timeout.request_read_secs, Some(7));
+        assert_eq!(timeout.request_read_secs, Some(Duration::from_secs(7)));
         assert_eq!(timeout.response_write_secs, None);
     }
 

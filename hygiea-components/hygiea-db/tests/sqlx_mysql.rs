@@ -334,7 +334,7 @@ mod lock {
         let mut one = config(&server);
         one.pool = Some(PoolConfig {
             max_connections: Some(1),
-            acquire_timeout_secs: Some(2),
+            acquire_timeout_secs: Some(Duration::from_secs(2)),
             ..Default::default()
         });
         let b = Inst::open(&one, &app()).await;
@@ -359,7 +359,7 @@ mod lock {
         let mut own = config(&server);
         own.pool = Some(PoolConfig {
             max_connections: Some(1),
-            acquire_timeout_secs: Some(2),
+            acquire_timeout_secs: Some(Duration::from_secs(2)),
             ..Default::default()
         });
         own.lock = Some(hygiea_db::MySqlLockConfig {
@@ -457,7 +457,7 @@ mod live_config {
     /// 轮询间隔 1 秒
     fn live_config() -> MySqlLiveConfigConfig {
         MySqlLiveConfigConfig {
-            poll_interval_secs: Some(1),
+            poll_interval_secs: Some(Duration::from_secs(1)),
             ..Default::default()
         }
     }
@@ -614,7 +614,7 @@ mod live_config {
         let mut trimmed = live_config_of(&server);
         let retention = trimmed.live_config.as_mut().unwrap();
         retention.history_keep_rows = Some(2);
-        retention.history_trim_interval_mins = Some(60);
+        retention.history_trim_interval_mins = Some(Duration::from_secs(60 * 60));
         let restarted = Source::open(&trimmed, &app()).await;
         restarted.bind("sync", Job::default()).await.unwrap();
         eventually(5, || async {

@@ -1,4 +1,4 @@
-//! 一条 interaction 收到请求后怎么响应：按顺序跑 handler 链，每一步先等 `delay_ms`，再固定响应或跑脚本；
+//! 一条 interaction 收到请求后怎么响应：按顺序跑 handler 链，每一步先等一会儿（toml 里的 `delay_ms`），再固定响应或跑脚本；
 //! 脚本返回 `()` 交给下一步，第一个给出响应的生效。组装成 httpmock 的响应；
 //! 出了问题不 panic（mock server 里 panic 只会让客户端断开）：变成 [`HttpMockRuntimeErr`] 记进 problems，
 //! 同时作为响应返回（见 [`Shared::fail`]）
@@ -28,8 +28,8 @@ pub(crate) enum Step {
 
 /// handler 链里的一步
 pub(crate) struct Stage {
-    /// 先等这么久（毫秒）再执行；在回调里阻塞等待，等的时候这个 server 处理不了别的请求
-    pub delay_ms: u64,
+    /// 先等这么久再执行；在回调里阻塞等待，等的时候这个 server 处理不了别的请求
+    pub delay: Duration,
     pub step: Step,
     /// 报错时用：`script login.rhai` / `inline script` / `response`
     pub desc: String,
@@ -134,8 +134,8 @@ impl RouteHandler {
     /// 按顺序跑 handler 链，第一个给出响应的生效
     fn run_chain(&self, req: Req, calls: usize, route: &str) -> Result<ResponseSpec> {
         for (i, stage) in self.chain.iter().enumerate() {
-            if stage.delay_ms > 0 {
-                std::thread::sleep(Duration::from_millis(stage.delay_ms));
+            if !stage.delay.is_zero() {
+                std::thread::sleep(stage.delay);
             }
             let spec = match &stage.step {
                 Step::Fixed(spec) => Some(spec.clone()),

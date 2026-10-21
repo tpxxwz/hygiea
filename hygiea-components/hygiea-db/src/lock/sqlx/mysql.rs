@@ -153,7 +153,7 @@ async fn own_pool(
                 .unwrap_or_else(|| pool.max_connections(MYSQL_POOL_SIZE)),
         )
         .min_connections(0)
-        .acquire_timeout(Duration::from_secs(pool.acquire_timeout_secs()))
+        .acquire_timeout(pool.acquire_timeout())
         .idle_timeout(Duration::from_secs(600))
         .max_lifetime(Duration::from_secs(1800))
         .test_before_acquire(true);

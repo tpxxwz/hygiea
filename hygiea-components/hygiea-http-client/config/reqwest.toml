@@ -18,10 +18,10 @@ transparent_compression = true
 max_redirects = 10
 referer = true
 no_proxy = false
-# 不配超时即 None；需要时使用 Duration 的 secs / nanos 结构
-# timeout = { secs = 5, nanos = 0 }
-# read_timeout = { secs = 5, nanos = 0 }
-# connect_timeout = { secs = 2, nanos = 0 }
+# 不配超时即 None；写带单位的字符串，比如 "500ms"、"5s"、"1m 30s"
+# timeout = "5s"
+# read_timeout = "5s"
+# connect_timeout = "2s"
 # 默认代理列表为空；启用下方 [[http_client.proxies]] 前，删除或注释这一行
 proxies = []
 # 默认不覆盖 DNS；要指定域名解析，替换下一行的空数组

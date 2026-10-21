@@ -1,10 +1,7 @@
 //! 连接池配置的公共部分：连哪个库（每种数据库一个）和池怎么管（所有数据库、框架共用）。
 //! 各连接池的配置由它们拼起来，配置文件里是 `[db.connect]`、`[db.pool]` 两段
 
-#[cfg(any(
-    all(feature = "sqlx", any(feature = "postgres", feature = "mysql")),
-    sqlx_sqlite
-))]
+#[cfg(any(feature = "sqlx", feature = "seaorm"))]
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -333,7 +330,8 @@ pub struct SqliteConnectConfig {
     pub shared_cache: bool,
     pub journal_mode: Option<String>,
     pub synchronous: Option<String>,
-    pub busy_timeout_millis: Option<u64>,
+    #[serde(with = "hygiea_core::datetime::duration_millis::option")]
+    pub busy_timeout_millis: Option<Duration>,
     pub statement_cache_capacity: Option<usize>,
 }
 
@@ -349,7 +347,7 @@ impl Default for SqliteConnectConfig {
             shared_cache: false,
             journal_mode: Some("wal".to_string()),
             synchronous: Some("full".to_string()),
-            busy_timeout_millis: Some(5_000),
+            busy_timeout_millis: Some(Duration::from_millis(5_000)),
             statement_cache_capacity: Some(100),
         }
     }
@@ -421,7 +419,7 @@ impl SqliteConnectConfig {
             shared_cache: self.shared_cache,
             journal_mode: parse(&self.journal_mode, "journal_mode")?,
             synchronous: parse(&self.synchronous, "synchronous")?,
-            busy_timeout: self.busy_timeout_millis.map(Duration::from_millis),
+            busy_timeout: self.busy_timeout_millis,
             statement_cache_capacity: self.statement_cache_capacity,
         })
     }
@@ -481,7 +479,8 @@ pub struct SqliteConnectOverride {
     pub shared_cache: Option<bool>,
     pub journal_mode: Option<String>,
     pub synchronous: Option<String>,
-    pub busy_timeout_millis: Option<u64>,
+    #[serde(with = "hygiea_core::datetime::duration_millis::option")]
+    pub busy_timeout_millis: Option<Duration>,
     pub statement_cache_capacity: Option<usize>,
 }
 
@@ -552,11 +551,14 @@ pub struct PoolConfig {
     pub max_connections: Option<u32>,
     pub min_connections: Option<u32>,
     /// 从池里拿连接最多等多久
-    pub acquire_timeout_secs: Option<u64>,
+    #[serde(with = "hygiea_core::datetime::duration_secs::option")]
+    pub acquire_timeout_secs: Option<Duration>,
     /// 空闲多久的连接关掉
-    pub idle_timeout_secs: Option<u64>,
+    #[serde(with = "hygiea_core::datetime::duration_secs::option")]
+    pub idle_timeout_secs: Option<Duration>,
     /// 连接最长用多久，到了换新的
-    pub max_lifetime_secs: Option<u64>,
+    #[serde(with = "hygiea_core::datetime::duration_secs::option")]
+    pub max_lifetime_secs: Option<Duration>,
     /// 拿连接前先检查还能不能用
     pub test_before_acquire: bool,
     /// 启动时不连，第一次用时才连
@@ -603,16 +605,16 @@ impl PoolConfig {
         self.min_connections.unwrap_or(size.min)
     }
 
-    pub(crate) fn acquire_timeout_secs(&self) -> u64 {
-        self.acquire_timeout_secs.unwrap_or(30)
+    pub(crate) fn acquire_timeout(&self) -> Duration {
+        self.acquire_timeout_secs.unwrap_or(Duration::from_secs(30))
     }
 
-    pub(crate) fn idle_timeout_secs(&self) -> u64 {
-        self.idle_timeout_secs.unwrap_or(600)
+    pub(crate) fn idle_timeout(&self) -> Duration {
+        self.idle_timeout_secs.unwrap_or(Duration::from_secs(600))
     }
 
-    pub(crate) fn max_lifetime_secs(&self) -> u64 {
-        self.max_lifetime_secs.unwrap_or(1800)
+    pub(crate) fn max_lifetime(&self) -> Duration {
+        self.max_lifetime_secs.unwrap_or(Duration::from_secs(1800))
     }
 
     /// sqlx 的池参数
@@ -621,9 +623,9 @@ impl PoolConfig {
         sqlx::pool::PoolOptions::new()
             .max_connections(self.max_connections(size))
             .min_connections(self.min_connections(size))
-            .acquire_timeout(Duration::from_secs(self.acquire_timeout_secs()))
-            .idle_timeout(Duration::from_secs(self.idle_timeout_secs()))
-            .max_lifetime(Duration::from_secs(self.max_lifetime_secs()))
+            .acquire_timeout(self.acquire_timeout())
+            .idle_timeout(self.idle_timeout())
+            .max_lifetime(self.max_lifetime())
             .test_before_acquire(self.test_before_acquire)
     }
 }
@@ -757,13 +759,13 @@ mod tests {
     #[test]
     fn pool_defaults_follow_backend() {
         let config = PoolConfig {
-            acquire_timeout_secs: Some(5),
+            acquire_timeout_secs: Some(Duration::from_secs(5)),
             ..Default::default()
         };
         let size = PoolSize { max: 4, min: 1 };
         assert_eq!(config.max_connections(size), 4);
         assert_eq!(config.min_connections(size), 1);
-        assert_eq!(config.acquire_timeout_secs(), 5);
-        assert_eq!(config.idle_timeout_secs(), 600);
+        assert_eq!(config.acquire_timeout(), Duration::from_secs(5));
+        assert_eq!(config.idle_timeout(), Duration::from_secs(600));
     }
 }

@@ -58,11 +58,10 @@ impl LiveConfigSource {
     pub(super) fn new<C>(store: Store, config: &LiveConfigConfig<C>) -> Result<Self> {
         // 有推送（PG 的 LISTEN）的轮询只是兜底；没有的（SQLite）主要靠它
         let backend = store.backend();
-        let poll_interval_secs =
-            config
-                .poll_interval_secs
-                .unwrap_or(if store.has_push() { 60 } else { 1 });
-        ensure!(poll_interval_secs > 0, BaseErr::NotPositive, {
+        let poll_interval = config
+            .poll_interval_secs
+            .unwrap_or(Duration::from_secs(if store.has_push() { 60 } else { 1 }));
+        ensure!(!poll_interval.is_zero(), BaseErr::NotPositive, {
             "param": "live_config.poll_interval_secs",
             "op": "LiveConfigSource::new",
         });
@@ -72,7 +71,7 @@ impl LiveConfigSource {
                 backend,
                 table: store.table(),
                 store: std::sync::Mutex::new(Some(store)),
-                poll_interval: Duration::from_secs(poll_interval_secs),
+                poll_interval,
                 history,
                 commands: OnceCell::new(),
                 handle: std::sync::Mutex::new(None),
@@ -220,12 +219,10 @@ impl LiveConfigSource {
 
 /// `history_keep_rows`、`history_trim_interval_mins` 要么都配、要么都不配，配了都要是正数
 fn history_retention<C>(config: &LiveConfigConfig<C>) -> Result<Option<HistoryRetention>> {
-    let (keep_rows, interval_mins) = match (
-        config.history_keep_rows,
-        config.history_trim_interval_mins,
-    ) {
+    let (keep_rows, interval) = match (config.history_keep_rows, config.history_trim_interval_mins)
+    {
         (None, None) => return Ok(None),
-        (Some(rows), Some(mins)) => (rows, mins),
+        (Some(rows), Some(interval)) => (rows, interval),
         _ => {
             return Err(err!(
                 AppErr::InvalidConfig,
@@ -237,13 +234,13 @@ fn history_retention<C>(config: &LiveConfigConfig<C>) -> Result<Option<HistoryRe
         "param": "live_config.history_keep_rows",
         "op": "LiveConfigSource::new",
     });
-    ensure!(interval_mins > 0, BaseErr::NotPositive, {
+    ensure!(!interval.is_zero(), BaseErr::NotPositive, {
         "param": "live_config.history_trim_interval_mins",
         "op": "LiveConfigSource::new",
     });
     Ok(Some(HistoryRetention {
         keep_rows,
-        interval: Duration::from_secs(interval_mins.saturating_mul(60)),
+        interval,
     }))
 }
 

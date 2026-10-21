@@ -150,11 +150,14 @@ pub struct ReqwestConfig {
     /// 整个请求的时限：从发出到响应 body 读完。需要更长（比如大文件下载）时，
     /// 在 [`RequestConfig::timeout`](super::RequestConfig::timeout) 上按次覆盖即可（调大调小都行），
     /// 不必单开 `Client`；不配置则不设客户端级总时限
+    #[serde(with = "hygiea_core::datetime::duration::option")]
     pub timeout: Option<Duration>,
     /// 对端最长多久不给数据。覆盖等响应头（服务端处理时间）和 body 分块之间的空闲两段，
     /// 每读到数据就重置，不累计总耗时，所以不会掐断持续传输的长下载。不能被单请求覆盖
+    #[serde(with = "hygiea_core::datetime::duration::option")]
     pub read_timeout: Option<Duration>,
     /// 建连时限，覆盖 DNS 解析、TCP 握手、TLS 握手三段，不含发请求和等响应
+    #[serde(with = "hygiea_core::datetime::duration::option")]
     pub connect_timeout: Option<Duration>,
 
     /// 写死的域名解析结果，绕过系统 DNS，相当于进程内 hosts。同一域名可给多个地址按顺序尝试。
@@ -533,9 +536,9 @@ mod tests {
         async fn fields_convert_to_runtime_types() {
             let config: ReqwestConfig = toml::from_str(
                 r#"
-        timeout = { secs = 5, nanos = 0 }
-        read_timeout = { secs = 7, nanos = 250000000 }
-        connect_timeout = { secs = 2, nanos = 0 }
+        timeout = "5s"
+        read_timeout = "7s 250ms"
+        connect_timeout = "2s"
         max_redirects = 0
         resolve = [["example.com", ["127.0.0.1:80"]]]
         [default_headers]

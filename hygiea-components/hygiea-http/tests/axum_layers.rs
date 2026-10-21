@@ -171,7 +171,7 @@ async fn body_over_limit_is_413() {
 async fn handler_too_slow_is_408() {
     let config = AxumConfig {
         timeout: Some(HttpTimeout {
-            request_read_secs: Some(1),
+            request_read_secs: Some(Duration::from_secs(1)),
             ..Default::default()
         }),
         ..Default::default()

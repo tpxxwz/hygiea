@@ -766,7 +766,7 @@ mod live_config {
                 ..super::common::pg_connect(server)
             },
             live_config: Some(LiveConfigConfig {
-                poll_interval_secs: Some(3600),
+                poll_interval_secs: Some(std::time::Duration::from_secs(3600)),
                 ..Default::default()
             }),
             ..Default::default()

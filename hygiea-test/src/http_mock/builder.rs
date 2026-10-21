@@ -5,12 +5,13 @@
 //! Cassette::new()
 //!     .state(json!({ "token": "t" }))
 //!     .route("GET", "/api/items/{id}", Handler::script_str(r#"#{ json: #{ id: request.param("id") } }"#))
-//!     .route("GET", "/api/down", Handler::response(Response::text("bad gateway").status(502)).delay_ms(300))
+//!     .route("GET", "/api/down", Handler::response(Response::text("bad gateway").status(502)).delay(Duration::from_millis(300)))
 //!     .start()
 //!     .await?;
 //! ```
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use serde_json::Value;
 
@@ -62,13 +63,13 @@ impl Response {
     }
 }
 
-/// 一个 handler，对应 toml 里的 `handler = { .. }`：先等 `delay_ms`，再跑脚本或返回固定响应
+/// 一个 handler，对应 toml 里的 `handler = { .. }`：先等 [`Handler::delay`]（toml 里的 `delay_ms`），再跑脚本或返回固定响应
 pub struct Handler(pub(crate) HandlerDef);
 
 impl Handler {
     fn new(action: Action) -> Self {
         Self(HandlerDef {
-            delay_ms: 0,
+            delay: Duration::ZERO,
             action,
         })
     }
@@ -87,9 +88,9 @@ impl Handler {
         Self::new(Action::Response(response.0))
     }
 
-    /// 先等这么久（毫秒）再执行，阻塞等待，同 toml 里的 `delay_ms`
-    pub fn delay_ms(mut self, ms: u64) -> Self {
-        self.0.delay_ms = ms;
+    /// 先等这么久再执行，阻塞等待，同 toml 里的 `delay_ms`
+    pub fn delay(mut self, delay: Duration) -> Self {
+        self.0.delay = delay;
         self
     }
 }

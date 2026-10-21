@@ -117,6 +117,8 @@ pub type SqlxSqliteComponent = DbComponent<SqlxSqliteConfig>;
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     /// 配置模板 `config/sqlx-sqlite.toml` 就是代码里的默认值，加上 `uses = 3` 和写出来的各段（结构体没有实现 PartialEq，比 Debug 输出）
@@ -186,7 +188,7 @@ mod tests {
         let mut config = memory(1);
         config.connect.journal_mode = Some("memory".to_string());
         config.connect.synchronous = Some("normal".to_string());
-        config.connect.busy_timeout_millis = Some(2_500);
+        config.connect.busy_timeout_millis = Some(Duration::from_millis(2_500));
         config.connect.statement_cache_capacity = Some(64);
         let pool = open(&config).await.unwrap();
 

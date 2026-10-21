@@ -220,7 +220,7 @@ mod live_config {
         let mut config = config(&server);
         config.uses = uses(3);
         config.live_config = Some(MySqlLiveConfigConfig {
-            poll_interval_secs: Some(1),
+            poll_interval_secs: Some(Duration::from_secs(1)),
             ..Default::default()
         });
         let pool = LiveInst::open(&config, &app()).await;

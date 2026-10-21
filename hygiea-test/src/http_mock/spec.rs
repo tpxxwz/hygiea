@@ -8,6 +8,7 @@
 //! - `json_body_includes` / `json_body_excludes`：一个 JSON 对象，或者数组表示多个部分匹配
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use httpmock::When;
 use hygiea_core::{Result, err};
@@ -41,8 +42,8 @@ pub(crate) struct Interaction {
 #[serde(deny_unknown_fields)]
 pub(crate) struct HandlerSpec {
     /// 毫秒，不写或 0 不等；负数、小数解析时就报错
-    #[serde(default)]
-    pub delay_ms: u64,
+    #[serde(default, with = "hygiea_core::datetime::duration_millis")]
+    pub delay_ms: Duration,
     /// 脚本，路径相对 `rhai/`；返回 `()` 交给下一个 handler
     pub script: Option<String>,
     /// 固定响应
@@ -57,7 +58,7 @@ impl HandlerSpec {
             _ => return Err("exactly one of script / response is required"),
         };
         Ok(HandlerDef {
-            delay_ms: self.delay_ms,
+            delay: self.delay_ms,
             action,
         })
     }
@@ -65,7 +66,8 @@ impl HandlerSpec {
 
 /// 校验过的 handler：toml 解析完转出来的，或者代码（[`Handler`](super::Handler)）直接构造的
 pub(crate) struct HandlerDef {
-    pub delay_ms: u64,
+    /// 先等这么久再执行，0 不等
+    pub delay: Duration,
     pub action: Action,
 }
 

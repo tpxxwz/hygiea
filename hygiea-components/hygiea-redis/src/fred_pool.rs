@@ -49,9 +49,11 @@ pub struct RedisConfig {
 
     // ========== 超时 ==========
     /// Connection timeout in seconds (0 = no timeout)
-    pub connect_timeout_secs: u64,
+    #[serde(with = "hygiea_core::datetime::duration_secs")]
+    pub connect_timeout_secs: Duration,
     /// Default command timeout in seconds (0 = no timeout)
-    pub command_timeout_secs: u64,
+    #[serde(with = "hygiea_core::datetime::duration_secs")]
+    pub command_timeout_secs: Duration,
 
     // ========== 重试 ==========
     /// Max command attempts on failure (includes first attempt)
@@ -80,8 +82,8 @@ impl Default for RedisConfig {
             password: String::new(),
             db: 0,
             pool_size: 5,
-            connect_timeout_secs: 5,
-            command_timeout_secs: 0,
+            connect_timeout_secs: Duration::from_secs(5),
+            command_timeout_secs: Duration::ZERO,
             max_command_attempts: 3,
             max_redirections: 5,
             reconnect_max_attempts: 0,
@@ -246,16 +248,16 @@ fn build_fred_config(config: &RedisConfig) -> Result<Config> {
 
 fn build_perf_config(config: &RedisConfig) -> PerformanceConfig {
     let mut perf = PerformanceConfig::default();
-    if config.command_timeout_secs > 0 {
-        perf.default_command_timeout = Duration::from_secs(config.command_timeout_secs);
+    if !config.command_timeout_secs.is_zero() {
+        perf.default_command_timeout = config.command_timeout_secs;
     }
     perf
 }
 
 fn build_connection_config(config: &RedisConfig) -> ConnectionConfig {
     let mut conn = ConnectionConfig::default();
-    if config.connect_timeout_secs > 0 {
-        conn.connection_timeout = Duration::from_secs(config.connect_timeout_secs);
+    if !config.connect_timeout_secs.is_zero() {
+        conn.connection_timeout = config.connect_timeout_secs;
     }
     conn.max_command_attempts = config.max_command_attempts;
     conn.max_redirections = config.max_redirections;
@@ -443,7 +445,7 @@ mod tests {
     #[test]
     fn perf_config_zero_timeout_uses_default() {
         let config = RedisConfig {
-            command_timeout_secs: 0,
+            command_timeout_secs: Duration::ZERO,
             ..Default::default()
         };
         let perf = build_perf_config(&config);
@@ -455,7 +457,7 @@ mod tests {
     #[test]
     fn perf_config_nonzero_timeout_is_set() {
         let config = RedisConfig {
-            command_timeout_secs: 10,
+            command_timeout_secs: Duration::from_secs(10),
             ..Default::default()
         };
         let perf = build_perf_config(&config);
@@ -465,7 +467,7 @@ mod tests {
     #[test]
     fn connection_config_zero_timeout_uses_default() {
         let config = RedisConfig {
-            connect_timeout_secs: 0,
+            connect_timeout_secs: Duration::ZERO,
             ..Default::default()
         };
         let conn = build_connection_config(&config);
@@ -476,7 +478,7 @@ mod tests {
     #[test]
     fn connection_config_nonzero_timeout_is_set() {
         let config = RedisConfig {
-            connect_timeout_secs: 5,
+            connect_timeout_secs: Duration::from_secs(5),
             ..Default::default()
         };
         let conn = build_connection_config(&config);
@@ -497,7 +499,7 @@ mod tests {
         assert_eq!(config.host, "localhost");
         assert_eq!(config.port, 6379);
         assert_eq!(config.pool_size, 5);
-        assert_eq!(config.connect_timeout_secs, 5);
+        assert_eq!(config.connect_timeout_secs, Duration::from_secs(5));
         assert_eq!(config.db, 0);
     }
 }

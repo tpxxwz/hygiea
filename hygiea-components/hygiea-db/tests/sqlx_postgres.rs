@@ -575,7 +575,7 @@ mod lock {
             connect: connect(&server),
             pool: Some(PoolConfig {
                 max_connections: Some(1),
-                acquire_timeout_secs: Some(2),
+                acquire_timeout_secs: Some(Duration::from_secs(2)),
                 ..Default::default()
             }),
             ..Default::default()
@@ -755,7 +755,7 @@ mod lock {
             connect: connect(&server),
             pool: Some(PoolConfig {
                 max_connections: Some(1),
-                acquire_timeout_secs: Some(2),
+                acquire_timeout_secs: Some(Duration::from_secs(2)),
                 ..Default::default()
             }),
             lock: Some(hygiea_db::PgLockConfig {
@@ -1036,7 +1036,7 @@ mod live_config {
     /// 轮询间隔很长：测试里的变化只能靠通知收到
     fn live_config() -> PgLiveConfigConfig {
         PgLiveConfigConfig {
-            poll_interval_secs: Some(3600),
+            poll_interval_secs: Some(Duration::from_secs(3600)),
             ..Default::default()
         }
     }
@@ -1077,7 +1077,7 @@ mod live_config {
             .live_config
             .as_mut()
             .unwrap()
-            .history_trim_interval_mins = Some(60);
+            .history_trim_interval_mins = Some(Duration::from_secs(60 * 60));
         let restarted = Inst::open(&config, &app()).await;
         let _sync = restarted.bind("sync", Job::default()).await.unwrap();
         eventually(5, || async { count().await == 2 }).await;

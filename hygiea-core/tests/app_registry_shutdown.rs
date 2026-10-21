@@ -50,7 +50,7 @@ impl ImmediateComponent for Marker {
 async fn shutdown_delay_postpones_component_stop() {
     let events: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let registry = Registry::with_config(RegistryConfig {
-        shutdown_delay_secs: 1,
+        shutdown_delay_secs: Duration::from_secs(1),
         ..RegistryConfig::default()
     })
     .add::<Marker>(events.clone());

@@ -2,6 +2,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::time::Duration;
 
 use serde::Deserialize;
 
@@ -85,7 +86,8 @@ macro_rules! tonic_serve_fn {
 pub struct TonicConfig {
     pub addr: String,
     /// 关闭时最多等多久（秒）让手上的请求处理完，不写用 Registry 的默认值（15 秒）
-    pub shutdown_timeout_secs: Option<u64>,
+    #[serde(with = "hygiea_core::datetime::duration_secs::option")]
+    pub shutdown_timeout_secs: Option<Duration>,
 }
 
 impl Default for TonicConfig {
@@ -126,10 +128,8 @@ impl DeferredComponent for TonicComponent {
         }
     }
 
-    fn shutdown_timeout(&self) -> Option<std::time::Duration> {
-        self.config
-            .shutdown_timeout_secs
-            .map(std::time::Duration::from_secs)
+    fn shutdown_timeout(&self) -> Option<Duration> {
+        self.config.shutdown_timeout_secs
     }
 
     async fn prepare(&mut self, _sink: &ResourceSink) -> Result<()> {
@@ -268,12 +268,12 @@ mod tests {
     }
 
     #[test]
-    fn shutdown_timeout_converts_secs_to_duration() {
+    fn shutdown_timeout_uses_config() {
         let component = TonicComponent::build(
             Name::from(""),
             TonicComponentConfig {
                 config: TonicConfig {
-                    shutdown_timeout_secs: Some(7),
+                    shutdown_timeout_secs: Some(Duration::from_secs(7)),
                     ..Default::default()
                 },
                 serve_fn: noop_serve_fn(),

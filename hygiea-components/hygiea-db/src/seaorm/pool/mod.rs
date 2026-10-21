@@ -31,7 +31,8 @@ pub struct SeaOrmLogConfig {
     pub level: String,
     /// 慢 SQL 单独打的级别，`off` 不打
     pub slow_statements_level: String,
-    pub slow_statements_threshold_secs: u64,
+    #[serde(with = "hygiea_core::datetime::duration_secs")]
+    pub slow_statements_threshold_secs: Duration,
 }
 
 impl Default for SeaOrmLogConfig {
@@ -40,7 +41,7 @@ impl Default for SeaOrmLogConfig {
             enabled: true,
             level: "info".to_string(),
             slow_statements_level: "off".to_string(),
-            slow_statements_threshold_secs: 1,
+            slow_statements_threshold_secs: Duration::from_secs(1),
         }
     }
 }
@@ -56,16 +57,16 @@ pub(crate) fn connect_options(
     let mut opt = ConnectOptions::new(url);
     opt.max_connections(pool.max_connections(size))
         .min_connections(pool.min_connections(size))
-        .acquire_timeout(Duration::from_secs(pool.acquire_timeout_secs()))
-        .idle_timeout(Duration::from_secs(pool.idle_timeout_secs()))
-        .max_lifetime(Duration::from_secs(pool.max_lifetime_secs()))
+        .acquire_timeout(pool.acquire_timeout())
+        .idle_timeout(pool.idle_timeout())
+        .max_lifetime(pool.max_lifetime())
         .test_before_acquire(pool.test_before_acquire)
         .connect_lazy(pool.connect_lazy)
         .sqlx_logging(log.enabled)
         .sqlx_logging_level(parse_log_level(&log.level))
         .sqlx_slow_statements_logging_settings(
             parse_log_level(&log.slow_statements_level),
-            Duration::from_secs(log.slow_statements_threshold_secs),
+            log.slow_statements_threshold_secs,
         );
     opt
 }

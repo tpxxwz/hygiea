@@ -65,8 +65,8 @@ impl Registry {
                 panic!("{e:#}")
             }
         };
-        let shutdown_timeout = Duration::from_secs(config.shutdown_timeout_secs);
-        let shutdown_delay = Duration::from_secs(config.shutdown_delay_secs);
+        let shutdown_timeout = config.shutdown_timeout_secs;
+        let shutdown_delay = config.shutdown_delay_secs;
         // 框架配置交给 Resources，组件各阶段都能取（ImmediateResourceComponent 交给 from_config）
         let state = Resources::new(config);
         Self {

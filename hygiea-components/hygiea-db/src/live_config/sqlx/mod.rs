@@ -27,8 +27,6 @@
 //! - 小池最多 1 条连接，listener 一直占着它：PG 的查询都要走 listener（`&mut **listener`），不能走 `&pool`，
 //!   否则拿不到连接，等到 acquire 超时
 
-use std::time::Duration;
-
 use serde_json::{Map, Value};
 #[cfg(sqlx_mysql)]
 use sqlx::mysql::MySqlConnectOptions;
@@ -242,7 +240,7 @@ fn fixed<DB: sqlx::Database>(main: &PoolConfig) -> PoolOptions<DB> {
     PoolOptions::new()
         .max_connections(1)
         .min_connections(0)
-        .acquire_timeout(Duration::from_secs(main.acquire_timeout_secs()))
+        .acquire_timeout(main.acquire_timeout())
         .idle_timeout(None)
         .max_lifetime(None)
         .test_before_acquire(true)

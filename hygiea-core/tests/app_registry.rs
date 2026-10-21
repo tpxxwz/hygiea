@@ -236,7 +236,7 @@ async fn force_shutdown(_state: Resources) -> Result<()> {
 
 fn registry_with(shutdown_timeout_secs: u64) -> Registry {
     Registry::with_config(RegistryConfig {
-        shutdown_timeout_secs,
+        shutdown_timeout_secs: Duration::from_secs(shutdown_timeout_secs),
         ..RegistryConfig::default()
     })
 }

@@ -172,6 +172,8 @@ mod sqlx;
 mod store;
 mod worker;
 
+use std::time::Duration;
+
 use serde::Deserialize;
 
 #[cfg(live_config_mysql)]
@@ -215,12 +217,14 @@ pub(crate) use store::Store;
 pub struct LiveConfigConfig<C> {
     /// 对一遍版本号的间隔（秒）。PostgreSQL 上是兜底（变更靠 NOTIFY 推过来），不写是 60；
     /// SQLite、MySQL 上是主要的检查方式（改了表最多等这么久生效），不写是 1
-    pub poll_interval_secs: Option<u64>,
+    #[serde(with = "hygiea_core::datetime::duration_secs::option")]
+    pub poll_interval_secs: Option<Duration>,
     /// 变更历史表（`{p}config_history`）最多留最新的多少行，更早的删掉。
     /// 和 `history_trim_interval_mins` 要么都配、要么都不配（只配一个启动报错），都不配不删
     pub history_keep_rows: Option<u64>,
     /// 隔多少分钟清一次变更历史表。后台任务启动时先清一次；多个实例都会清，结果一样
-    pub history_trim_interval_mins: Option<u64>,
+    #[serde(with = "hygiea_core::datetime::duration_mins::option")]
+    pub history_trim_interval_mins: Option<Duration>,
     /// 表名前缀：不写用应用名（`[registry] app_name`）加 `_`，写 `""` 不加前缀，写 `foo` 或 `foo_` 都是 `foo_`。
     /// 去掉末尾的 `_` 后得是小写下划线 `[a-z][a-z0-9_]*`
     pub table_prefix: Option<String>,

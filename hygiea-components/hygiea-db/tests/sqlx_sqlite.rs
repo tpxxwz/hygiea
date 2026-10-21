@@ -433,7 +433,7 @@ mod live_config {
             .live_config
             .as_mut()
             .unwrap()
-            .history_trim_interval_mins = Some(60);
+            .history_trim_interval_mins = Some(Duration::from_secs(60 * 60));
         let restarted = Inst::open(&config, &app()).await;
         let _sync = restarted.bind("sync", Job::default()).await.unwrap();
         eventually(5, || async { history_count(&env.pool).await == 2 }).await;
@@ -453,13 +453,14 @@ mod live_config {
         let dir = tempfile::tempdir().unwrap();
         let database = dir.path().join("options.db").display().to_string();
         let open = |rows: Option<u64>, mins: Option<u64>| {
+            let interval = mins.map(|mins| Duration::from_secs(mins * 60));
             let database = database.clone();
             async move {
                 let mut config = SqlxSqliteConfig {
                     uses: uses(3),
                     live_config: Some(SqliteLiveConfigConfig {
                         history_keep_rows: rows,
-                        history_trim_interval_mins: mins,
+                        history_trim_interval_mins: interval,
                         ..Default::default()
                     }),
                     ..Default::default()
@@ -741,7 +742,7 @@ mod live_config {
             },
             pool: Some(PoolConfig {
                 max_connections: Some(1),
-                acquire_timeout_secs: Some(1),
+                acquire_timeout_secs: Some(Duration::from_secs(1)),
                 ..Default::default()
             }),
             live_config: Some(SqliteLiveConfigConfig::default()),

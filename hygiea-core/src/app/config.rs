@@ -1,5 +1,7 @@
 //! 配置：命令行参数、框架级配置、按来源分层加载（见模块文档「配置从哪里来」）
 
+use std::time::Duration;
+
 use serde::Deserialize;
 
 use super::Registry;
@@ -140,17 +142,19 @@ pub struct RegistryConfig {
     pub tracing: TracingConfig,
     /// 关闭时**每个组件**最多等多久（秒），默认 15。组件可以用 [`Component::shutdown_timeout`](super::Component::shutdown_timeout)
     /// 单独指定（比如 HTTP 有长请求就给 30 秒）。超时的组件任务会被 abort，接着关下一个。
-    pub shutdown_timeout_secs: u64,
+    #[serde(with = "crate::datetime::duration_secs")]
+    pub shutdown_timeout_secs: Duration,
     /// 收到退出信号后，先照常服务多久（秒）再开始关组件，默认 0。
     ///
     /// 给 k8s 用：Pod 收到 SIGTERM 的同时才开始从 Service 的 endpoints 里摘掉，负载均衡器生效要几秒，
     /// 这几秒里还会有新请求打过来。立刻停止接请求的话这些请求会失败，所以先等一会儿（一般 5 秒）。
     /// 和 k8s 的 `preStop: sleep 5` 作用一样，二选一即可。本地开发保持 0
-    pub shutdown_delay_secs: u64,
+    #[serde(with = "crate::datetime::duration_secs")]
+    pub shutdown_delay_secs: Duration,
 }
 
 impl RegistryConfig {
-    pub const DEFAULT_SHUTDOWN_TIMEOUT_SECS: u64 = 15;
+    pub const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(15);
     /// 默认应用名，和 [`ConfigArgs::DEFAULT_ENV_PREFIX`] 对得上
     pub const DEFAULT_APP_NAME: &'static str = "hygiea";
 }
@@ -160,8 +164,8 @@ impl Default for RegistryConfig {
         Self {
             app_name: Self::DEFAULT_APP_NAME.to_string(),
             tracing: TracingConfig::default(),
-            shutdown_timeout_secs: Self::DEFAULT_SHUTDOWN_TIMEOUT_SECS,
-            shutdown_delay_secs: 0,
+            shutdown_timeout_secs: Self::DEFAULT_SHUTDOWN_TIMEOUT,
+            shutdown_delay_secs: Duration::ZERO,
         }
     }
 }
@@ -442,8 +446,8 @@ mod tests {
     #[test]
     fn registry_config_default_values() {
         let config = RegistryConfig::default();
-        assert_eq!(config.shutdown_timeout_secs, 15);
-        assert_eq!(config.shutdown_delay_secs, 0);
+        assert_eq!(config.shutdown_timeout_secs, Duration::from_secs(15));
+        assert_eq!(config.shutdown_delay_secs, Duration::ZERO);
         assert_eq!(config.tracing.root_env_filter, "info");
         assert_eq!(config.tracing.root_dir, "./logs");
         assert!(!config.tracing.utc_time);
@@ -460,6 +464,6 @@ mod tests {
     fn registry_config_missing_fields_use_default() {
         // deny_unknown_fields 只挡未知字段，缺省字段照样走 default
         let config: RegistryConfig = serde_json::from_str("{}").unwrap();
-        assert_eq!(config.shutdown_timeout_secs, 15);
+        assert_eq!(config.shutdown_timeout_secs, Duration::from_secs(15));
     }
 }
