@@ -7,13 +7,7 @@
 //! 所以 `now()` 的结果、解析来的带 offset 的时间都可以直接调用。
 //!
 //! 系统时区在第一次使用时确定并缓存：`TZ` 环境变量 → 系统设置（unix 上是 `/etc/localtime`）→ UTC。
-//!
-//! # serde
-//!
-//! 时间段的 `_local` 版本：[`ymdhms_utc_range_local`]、[`ymdhms_offset_range_local`]，别的格式用
-//! [`utc_range_local_serde!`](crate::utc_range_local_serde) / [`offset_range_local_serde!`](crate::offset_range_local_serde) 生成。
-//! 和默认版本（`datetime_ext.rs`）的区别：写出同 `format_ext_local`，换算到系统时区（`2026-10-17 10:00:00 +08:00`）；
-//! `Range<OffsetDateTime>` 读入后也换算到系统时区。`Range<UtcDateTime>` 读入和默认版本一样，换算成 UTC。
+//! 按系统时区读写的 serde 模块（`ymdhms_utc_range_local` 等）在 `serde_ext.rs`。
 
 use std::sync::OnceLock;
 
@@ -72,7 +66,7 @@ fn detect_timezone(tz_env: Option<String>) -> &'static Tz {
 
 /// 换到系统时区在该时刻使用的 offset。time-tz 的 `to_timezone` 在时间贴近上下界（±9999 年）、
 /// 加上 offset 越界时会 panic，这里先取 offset，再用 time 的 `checked_to_offset`，越界返回 `DateError`
-fn to_local(datetime: &OffsetDateTime) -> Result<OffsetDateTime> {
+pub(super) fn to_local(datetime: &OffsetDateTime) -> Result<OffsetDateTime> {
     let offset = local_timezone().get_offset_utc(datetime).to_utc();
     datetime.checked_to_offset(offset).ok_or_else(|| {
         err!(
@@ -385,129 +379,32 @@ impl HygieaOffsetDateTimeExt for OffsetDateTime {
     }
 }
 
-// ---- serde：Range<UtcDateTime> / Range<OffsetDateTime>（按系统时区） -------
+/// 测试用的时区工具，`serde_ext.rs` 的测试也用
+#[cfg(test)]
+pub(super) mod test_tz {
+    use time_tz::Tz;
 
-// serde 用的 `Range<UtcDateTime>` 读写模块 `ymdhms_utc_range_local`，两头都按 `WithOffsetParser::YmdHMS`：
-// 写出系统时区的钟面时间和 offset（`2026-10-17 10:00:00 +08:00`），读入任意 offset 换算成 UTC
-crate::utc_range_local_serde!(pub ymdhms_utc_range_local, crate::datetime::WithOffsetParser::YmdHMS);
+    use super::set_local_timezone;
 
-// 同 `ymdhms_utc_range_local`，读写 `Range<OffsetDateTime>`：读入后也换算到系统时区
-crate::offset_range_local_serde!(pub ymdhms_offset_range_local, crate::datetime::WithOffsetParser::YmdHMS);
-/// 同 [`utc_range_serde!`](crate::utc_range_serde)，写出时同 `format_ext_local`：换算到系统时区，带系统时区的 offset。读入时一样，任意 offset 换算成 UTC
-///
-/// ```ignore
-/// hygiea::utc_range_local_serde!(utc_range_3f, hygiea::datetime::WithOffsetParser::YmdHMS3F);
-/// ```
-#[macro_export]
-macro_rules! utc_range_local_serde {
-    ($vis:vis $name:ident, $parser:expr) => {
-        $vis mod $name {
-            #[allow(unused_imports)]
-            use super::*;
+    pub(in crate::datetime) fn tz(name: &str) -> &'static Tz {
+        time_tz::timezones::get_by_name(name).expect("known timezone")
+    }
 
-            pub fn serialize<S>(
-                range: &::std::ops::Range<$crate::datetime::UtcDateTime>,
-                serializer: S,
-            ) -> ::std::result::Result<S::Ok, S::Error>
-            where
-                S: $crate::datetime::__serde::Serializer,
-            {
-                $crate::datetime::__datetime_range_local::serialize_utc(range, $parser, serializer)
-            }
+    /// 构造时覆盖本地时区，drop 时恢复。用到它的测试必须标 `#[serial(..)]`：
+    /// `LOCAL_TIMEZONE_OVERRIDE` 是进程内全局的，并行跑会互相覆盖对方设的时区
+    pub(in crate::datetime) struct TzGuard;
 
-            pub fn deserialize<'de, D>(
-                deserializer: D,
-            ) -> ::std::result::Result<::std::ops::Range<$crate::datetime::UtcDateTime>, D::Error>
-            where
-                D: $crate::datetime::__serde::Deserializer<'de>,
-            {
-                $crate::datetime::__datetime_range_local::deserialize_utc(deserializer, $parser)
-            }
+    impl TzGuard {
+        pub(in crate::datetime) fn new(tz: &'static Tz) -> Self {
+            set_local_timezone(Some(tz));
+            Self
         }
-    };
-}
-/// 同 [`offset_range_serde!`](crate::offset_range_serde)，按系统时区读写：写出时同 `format_ext_local`，读入后换算到系统时区
-#[macro_export]
-macro_rules! offset_range_local_serde {
-    ($vis:vis $name:ident, $parser:expr) => {
-        $vis mod $name {
-            #[allow(unused_imports)]
-            use super::*;
+    }
 
-            pub fn serialize<S>(
-                range: &::std::ops::Range<$crate::datetime::OffsetDateTime>,
-                serializer: S,
-            ) -> ::std::result::Result<S::Ok, S::Error>
-            where
-                S: $crate::datetime::__serde::Serializer,
-            {
-                $crate::datetime::__datetime_range_local::serialize_offset(range, $parser, serializer)
-            }
-
-            pub fn deserialize<'de, D>(
-                deserializer: D,
-            ) -> ::std::result::Result<::std::ops::Range<$crate::datetime::OffsetDateTime>, D::Error>
-            where
-                D: $crate::datetime::__serde::Deserializer<'de>,
-            {
-                $crate::datetime::__datetime_range_local::deserialize_offset(deserializer, $parser)
-            }
+    impl Drop for TzGuard {
+        fn drop(&mut self) {
+            set_local_timezone(None);
         }
-    };
-}
-
-/// [`utc_range_local_serde!`]、[`offset_range_local_serde!`] 生成的模块调用的实现
-#[doc(hidden)]
-pub mod __datetime_range_local {
-    use std::ops::Range;
-
-    use serde::de::Error as _;
-    use serde::ser::Error as _;
-    use serde::{Deserializer, Serialize, Serializer};
-    use time::{OffsetDateTime, UtcDateTime};
-
-    use super::{__datetime_range, HygieaOffsetDateTimeExt, WithOffsetParser, to_local};
-
-    pub fn serialize_utc<S: Serializer>(
-        range: &Range<UtcDateTime>,
-        parser: WithOffsetParser,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        let range = OffsetDateTime::from(range.start)..OffsetDateTime::from(range.end);
-        serialize_offset(&range, parser, serializer)
-    }
-
-    pub fn deserialize_utc<'de, D: Deserializer<'de>>(
-        deserializer: D,
-        parser: WithOffsetParser,
-    ) -> Result<Range<UtcDateTime>, D::Error> {
-        __datetime_range::deserialize_utc(deserializer, parser)
-    }
-
-    pub fn serialize_offset<S: Serializer>(
-        range: &Range<OffsetDateTime>,
-        parser: WithOffsetParser,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        let start = range
-            .start
-            .format_ext_local(parser.into())
-            .map_err(S::Error::custom)?;
-        let end = range
-            .end
-            .format_ext_local(parser.into())
-            .map_err(S::Error::custom)?;
-        (start..end).serialize(serializer)
-    }
-
-    pub fn deserialize_offset<'de, D: Deserializer<'de>>(
-        deserializer: D,
-        parser: WithOffsetParser,
-    ) -> Result<Range<OffsetDateTime>, D::Error> {
-        let range = __datetime_range::deserialize_offset(deserializer, parser)?;
-        let start = to_local(&range.start).map_err(D::Error::custom)?;
-        let end = to_local(&range.end).map_err(D::Error::custom)?;
-        Ok(start..end)
     }
 }
 
@@ -519,13 +416,10 @@ mod tests {
     use time::Date;
     use time::macros::{datetime, offset};
 
+    use super::test_tz::{TzGuard, tz};
     use super::*;
 
     // ---- fixtures --------------------------------------------------------
-
-    fn tz(name: &str) -> &'static Tz {
-        time_tz::timezones::get_by_name(name).expect("known timezone")
-    }
 
     fn unique(result: Result<OffsetResult<OffsetDateTime>>) -> OffsetDateTime {
         match result {
@@ -540,23 +434,6 @@ mod tests {
         assert_eq!(actual.offset(), expected.offset(), "UTC offset differs");
         assert_eq!(actual.date(), expected.date(), "local date differs");
         assert_eq!(actual.time(), expected.time(), "local time differs");
-    }
-
-    /// 测试专用：构造时覆盖本地时区，drop 时恢复。用到它的测试必须标 `#[serial(..)]`：
-    /// `LOCAL_TIMEZONE_OVERRIDE` 是进程内全局的，并行跑会互相覆盖对方设的时区
-    struct TzGuard;
-
-    impl TzGuard {
-        fn new(tz: &'static Tz) -> Self {
-            set_local_timezone(Some(tz));
-            Self
-        }
-    }
-
-    impl Drop for TzGuard {
-        fn drop(&mut self) {
-            set_local_timezone(None);
-        }
     }
 
     // ---- now_local -------------------------------------------------------
@@ -968,49 +845,5 @@ mod tests {
                 .unwrap(),
             "2024-11-03T01:30:00.000-05:00"
         );
-    }
-
-    // ---- serde：Range<UtcDateTime> / Range<OffsetDateTime>（按系统时区） ---
-
-    #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-    struct RangeFields {
-        #[serde(with = "ymdhms_utc_range_local")]
-        utc: std::ops::Range<UtcDateTime>,
-        #[serde(with = "ymdhms_offset_range_local")]
-        offset: std::ops::Range<OffsetDateTime>,
-    }
-
-    #[test]
-    #[serial]
-    fn datetime_range_local_writes_local_offset() {
-        let _tz_guard = TzGuard::new(tz("Asia/Shanghai"));
-        let start = time::macros::utc_datetime!(2026-10-17 02:00:00);
-        let end = time::macros::utc_datetime!(2026-10-17 06:00:00);
-        let fields = RangeFields {
-            utc: start..end,
-            // 值自身是 +09:00，写出时也换算到系统时区
-            offset: OffsetDateTime::from(start).to_offset(offset!(+9))
-                ..OffsetDateTime::from(end).to_offset(offset!(+9)),
-        };
-        let json = serde_json::to_string(&fields).unwrap();
-        let expected =
-            r#"{"start":"2026-10-17 10:00:00 +08:00","end":"2026-10-17 14:00:00 +08:00"}"#;
-        assert_eq!(json, format!(r#"{{"utc":{expected},"offset":{expected}}}"#));
-    }
-
-    #[test]
-    #[serial]
-    fn datetime_range_local_reads_any_offset_as_local() {
-        let _tz_guard = TzGuard::new(tz("Asia/Shanghai"));
-        let range = r#"{"start":"2026-10-17 11:00:00 +09:00","end":"2026-10-17 06:00:00 +00:00"}"#;
-        let fields: RangeFields =
-            serde_json::from_str(&format!(r#"{{"utc":{range},"offset":{range}}}"#)).unwrap();
-        let start = time::macros::utc_datetime!(2026-10-17 02:00:00);
-        let end = time::macros::utc_datetime!(2026-10-17 06:00:00);
-        assert_eq!(fields.utc, start..end);
-        // 时刻不变，offset 换成系统时区的
-        assert_eq!(fields.offset.start, OffsetDateTime::from(start));
-        assert_eq!(fields.offset.start.offset(), offset!(+8));
-        assert_eq!(fields.offset.end.offset(), offset!(+8));
     }
 }

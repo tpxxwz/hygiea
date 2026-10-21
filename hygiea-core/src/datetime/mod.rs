@@ -30,10 +30,12 @@
 //! # 文件
 //!
 //! - `datetime_ext.rs`：`UtcDateTime` / `OffsetDateTime` 的 Formatter / Parser 和格式名、[`HygieaDateTimeExt`]、
-//!   [`HygieaUtcDateTimeExt`]；serde 读写模块 [`rfc3339_utc`]、`Range` 的 [`ymdhms_utc_range`] / [`ymdhms_offset_range`]
-//! - `local.rs`：系统时区、`now_local`、`WithoutOffsetParser` 的解析、`HygieaOffsetDateTimeExt`、
-//!   `Range` 的 `_local` serde 读写模块（feature `datetime-iana`）
-//! - `time_ext.rs`：[`Time`] 的 [`TimeFormatter`] / [`TimeParser`]、[`HygieaTimeExt`]；serde 读写模块 [`hms`]、`Range` 的 [`hms_range`]
+//!   [`HygieaUtcDateTimeExt`]
+//! - `local.rs`：系统时区、`now_local`、`WithoutOffsetParser` 的解析、`HygieaOffsetDateTimeExt`（feature `datetime-iana`）
+//! - `time_ext.rs`：[`Time`] 的 [`TimeFormatter`] / [`TimeParser`]、[`HygieaTimeExt`]
+//! - `serde_ext.rs`：字段上 `#[serde(with = "..")]` 用的读写模块：`UtcDateTime` 的 [`rfc3339_utc`]，
+//!   时间段的 [`ymdhms_utc_range`] / [`ymdhms_offset_range`] 和 `_local` 版本，`Time` 的 [`hms`] / [`hms_range`]，
+//!   `std::time::Duration` 的 [`duration`] / [`duration_secs`] / [`duration_millis`] / [`duration_mins`]
 //! - `chrono_bridge.rs`：和 chrono 互转（feature `datetime-chrono`）
 
 /// 公开接口里用到了 time 的类型，再导出 time，下游不用自己加依赖，也不会和这里的版本对不上。
@@ -46,6 +48,7 @@ pub use serde as __serde;
 pub use time::{OffsetDateTime, Time, UtcDateTime};
 
 mod datetime_ext;
+mod serde_ext;
 mod time_ext;
 
 #[cfg(feature = "datetime-iana")]
@@ -55,13 +58,11 @@ pub(super) mod local;
 mod chrono_bridge;
 
 pub use datetime_ext::*;
+pub use serde_ext::*;
 pub use time_ext::*;
 
 #[cfg(feature = "datetime-iana")]
-pub use local::{
-    __datetime_range_local, HygieaOffsetDateTimeExt, now_local, ymdhms_offset_range_local,
-    ymdhms_utc_range_local,
-};
+pub use local::{HygieaOffsetDateTimeExt, now_local};
 
 /// `parse_ext_local` 的返回类型（钟面时间可能唯一、歧义或不存在）。再导出后下游不用自己加
 /// time-tz 依赖去 match 它，也不会撞上版本对不上

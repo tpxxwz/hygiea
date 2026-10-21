@@ -35,7 +35,7 @@
 | 模块 | 提供什么 |
 |---|---|
 | 错误处理（`hygiea::{HyErr, err!, bail!, ensure!, impossible!, hy_err}`） | 基于模板的错误信息，编译期校验的 8 位错误码，统一的 `HyErr` 类型，用 `with_source` 挂外部错误 |
-| 日期时间（`hygiea::datetime`） | 基于 `time` crate：UTC 时刻和钟面时间 `Time` 的格式化、解析，日 / 周 / 月 / 年的起止时刻，单个值和时间段（`Range`）的 serde 读写模块 |
+| 日期时间（`hygiea::datetime`） | 基于 `time` crate：UTC 时刻和钟面时间 `Time` 的格式化、解析，日 / 周 / 月 / 年的起止时刻，单个值和时间段（`Range`）的 serde 读写模块，`std::time::Duration` 的 serde 读写（带单位的字符串 `"30s"`、整数秒、整数毫秒、整数分钟） |
 | 环境变量（`hygiea::env`） | 环境变量读取 |
 | 字符串（`hygiea::string`） | 带缓存的正则，模板渲染（`fmt_tpl!`、`fmt_tpl_once!`），字符串固定地映射成整数（`xxh3_64` / `xxh32`，跨进程结果一样，不是解析数字） |
 

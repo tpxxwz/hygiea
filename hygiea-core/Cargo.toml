@@ -62,6 +62,9 @@ linkme = { workspace = true }
 ctor = { workspace = true }
 hygiea-macros = { workspace = true }
 
+# datetime 的 serde 读写模块 duration：std::time::Duration 读写成带单位的字符串（"500ms"、"1h 30m"）
+humantime-serde = { workspace = true }
+
 # 字符串工具的正则和模板编译缓存；string 模块常开，本身很轻（regex、minijinja 本来就是常开依赖）
 lru = { workspace = true }
 
