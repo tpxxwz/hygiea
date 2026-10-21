@@ -97,6 +97,8 @@ reqwest = { version = "0.13", features = [
     "gzip", "brotli", "zstd", "deflate",
     "cookies", "http2", "socks", "system-proxy", "rustls",
 ], default-features = false }
+# reqwest 的 Url 就是它，hygiea-http-client 直接依赖只为开 serde
+url = "2.5"
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 tokio-util = { version = "0.7", features = ["io"] }
 futures-util = "0.3"

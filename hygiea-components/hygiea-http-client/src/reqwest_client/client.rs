@@ -528,7 +528,7 @@ mod tests {
             );
         }
 
-        /// 超时、resolve、代理这些字段转成运行时类型
+        /// 超时、resolve、代理这些字段转成运行时类型；再导出的 Url 也能直接写在配置里，写错读的时候就报错
         #[tokio::test]
         async fn fields_convert_to_runtime_types() {
             let config: ReqwestConfig = toml::from_str(
@@ -560,6 +560,15 @@ mod tests {
                     .await
                     .is_ok()
             );
+
+            #[derive(serde::Deserialize)]
+            struct UrlConfig {
+                base_url: crate::reqwest_client::Url,
+            }
+            let url_config: UrlConfig =
+                toml::from_str(r#"base_url = "https://example.com/api""#).unwrap();
+            assert_eq!(url_config.base_url.as_str(), "https://example.com/api");
+            assert!(toml::from_str::<UrlConfig>(r#"base_url = "not a url""#).is_err());
         }
 
         /// 请求头的三种写法：字符串、同名头列表、带 sensitive 的文本或字节

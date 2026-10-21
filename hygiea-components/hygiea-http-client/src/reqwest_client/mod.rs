@@ -164,7 +164,10 @@ pub use reqwest;
 /// 日常最常用的几个，给个短路径
 pub use bytes::Bytes;
 pub use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-pub use reqwest::{Body, Method, Proxy, RequestBuilder, Response, StatusCode, Url, multipart};
+pub use reqwest::{Body, Method, Proxy, RequestBuilder, Response, StatusCode, multipart};
+
+/// URL 类型，实现了 serde 的 `Serialize` / `Deserialize`：可以直接写在配置结构体里，地址写错时加载配置就报错
+pub use reqwest::Url;
 
 /// [`FailedLogLevel`] 转换的目标类型
 pub use tracing::Level;
