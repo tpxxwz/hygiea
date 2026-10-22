@@ -11,7 +11,8 @@
 //! }
 //! ```
 //!
-//! struct 上写 `#[hy_live_config(cancel_condition)]` 时句柄多一个 `cancel_token`（转给 `LiveView::cancel_token`，
+//! 句柄上都有 `cancel_token_with`（转给 `LiveView::cancel_token_with`，取消规则由调用方给）。
+//! struct 上写 `#[hy_live_config(cancel_condition)]` 时句柄再多一个 `cancel_token`（转给 `LiveView::cancel_token`，
 //! struct 要实现 `CancelCondition`），其余一样。
 //!
 //! 展开成（路径按调用方的依赖名来，见 krate.rs）：
@@ -23,7 +24,7 @@
 //! impl LiveConfigFields for MarkjiSync { type Handle = MarkjiSyncLiveConfig; fn handle(view) -> MarkjiSyncLiveConfig { .. } }
 //!
 //! impl MarkjiSyncLiveConfig {
-//!     pub fn snapshot(&self) -> LiveRef<MarkjiSync>;           // 还有 changed / changed_by / on_change / on_change_by
+//!     pub fn snapshot(&self) -> LiveRef<MarkjiSync>;           // 还有 changed / changed_by / on_change / on_change_by / cancel_token_with
 //!     pub fn start_time(&self) -> String { self.view.read(|c| Clone::clone(&c.start_time)) }
 //!     pub fn levels(&self) -> LiveRef<Vec<i32>> { self.view.get().map(|c| &c.levels) }
 //!     pub fn retry(&self) -> <Retry as LiveConfigFields>::Handle { <Retry as LiveConfigFields>::handle(self.view.view(|c| &c.retry)) }
@@ -41,6 +42,7 @@ const RESERVED: &[&str] = &[
     "changed_by",
     "on_change",
     "on_change_by",
+    "cancel_token_with",
     "clone",
 ];
 
@@ -186,6 +188,18 @@ fn expand(ast: syn::DeriveInput) -> syn::Result<TokenStream> {
                 f: impl ::core::ops::Fn(&V) + ::core::marker::Send + ::core::marker::Sync + 'static,
             ) -> #live::OnChangeGuard {
                 self.view.on_change_by(project, f)
+            }
+
+            /// 从上级 token 得出一个子 token，上级取消、或者 `condition` 判断该取消了时取消，见 `LiveView::cancel_token_with`
+            #vis fn cancel_token_with(
+                &self,
+                parent: &#live::__private::CancellationToken,
+                condition: impl ::core::ops::Fn(&#name) -> (bool, ::core::option::Option<::core::time::Duration>)
+                    + ::core::marker::Send
+                    + ::core::marker::Sync
+                    + 'static,
+            ) -> #live::CancelTokenGuard {
+                self.view.cancel_token_with(parent, condition)
             }
 
             #cancel_token

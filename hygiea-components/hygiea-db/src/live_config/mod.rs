@@ -88,7 +88,10 @@
 //! 再实现 `recheck_after` 说多久后再判断），`cancel_token(&parent)` 得出一个子 `CancellationToken`：
 //! 上级取消、或者配置变了 / 到点后判断该取消了就取消，拿它包住一轮工作（`token.run_until_cancelled(..)`）。
 //! derive 时在 struct 上写 `#[hy_live_config(cancel_condition)]`，生成的句柄多一个 `cancel_token`，其余和不写时一样；
-//! 这样的 struct 放进别的配置里当 `nested` 字段也行，外层不受影响。见 [`LiveView::cancel_token`]
+//! 这样的 struct 放进别的配置里当 `nested` 字段也行，外层不受影响。见 [`LiveView::cancel_token`]。
+//!
+//! 规则不只看配置时（比如还要看这一轮开始时的状态），用 `cancel_token_with(&parent, |config| (该不该取消, 多久后再判断))`，
+//! 配置类型不用实现 [`CancelCondition`]，生成的句柄上都有这个方法。见 [`LiveView::cancel_token_with`]
 //!
 //! ## 观察过的版本（`changed` / `changed_by` 的基准）
 //!

@@ -76,6 +76,7 @@ impl Drop for CancelTokenGuard {
 
 impl<U: CancelCondition + 'static> LiveView<U> {
     /// 从上级 token 得出一个子 token：上级取消、或者这一块配置的 [`CancelCondition::should_cancel`] 返回 `true` 时取消。
+    /// 判断规则不只看配置时（比如还要看这一轮开始时的状态）用 [`cancel_token_with`](Self::cancel_token_with)。
     ///
     /// - 建的时候马上判断一次，已经该取消了就直接返回取消了的 token，不起后台任务
     /// - 否则内部 `tokio::spawn` 一个任务，配置变了（整份配置，同 [`changed`](Self::changed)）、或者过了
@@ -85,13 +86,35 @@ impl<U: CancelCondition + 'static> LiveView<U> {
     ///   不再等配置变化，只按 `recheck_after` 判断，没有 `recheck_after` 任务就退出
     /// - 返回的 [`CancelTokenGuard`] drop 掉任务就停，token 不会因此被取消
     pub fn cancel_token(&self, parent: &CancellationToken) -> CancelTokenGuard {
+        self.cancel_token_with(parent, |config| {
+            (config.should_cancel(), config.recheck_after())
+        })
+    }
+}
+
+impl<U: 'static> LiveView<U> {
+    /// 同 [`cancel_token`](Self::cancel_token)，判断规则由调用方给：`condition` 按当前那一版配置返回
+    /// （该不该取消，还不用时多久后再判断），含义同 [`CancelCondition`] 的两个方法。
+    /// 配置类型不用实现 [`CancelCondition`]；规则要用到配置以外的状态时，放进闭包里：
+    ///
+    /// ```ignore
+    /// // 这一轮开始时在时间段里，出了时间段就取消；开始时不在，进了时间段就取消
+    /// let started_in_range = view.read(|c| c.range.contains(&now_time_local()));
+    /// let cancel = view.cancel_token_with(&shutdown, move |c| {
+    ///     (!c.start || c.range.contains(&now_time_local()) != started_in_range, Some(/* 离下一个边界多久 */))
+    /// });
+    /// ```
+    pub fn cancel_token_with<F>(&self, parent: &CancellationToken, condition: F) -> CancelTokenGuard
+    where
+        F: Fn(&U) -> (bool, Option<Duration>) + Send + Sync + 'static,
+    {
         let token = parent.child_token();
-        let (should_cancel, recheck_after) = check(self);
+        let (should_cancel, recheck_after) = self.read(&condition);
         if should_cancel {
             token.cancel();
             return CancelTokenGuard { token, task: None };
         }
-        let task = tokio::spawn(watch(self.clone(), token.clone(), recheck_after));
+        let task = tokio::spawn(watch(self.clone(), token.clone(), recheck_after, condition));
         CancelTokenGuard {
             token,
             task: Some(task),
@@ -106,17 +129,23 @@ impl<T: CancelCondition + Send + Sync + 'static> LiveConfig<T> {
     }
 }
 
-/// 按当前那一版判断一次：该不该取消、还不用时多久后再判断
-fn check<U: CancelCondition + 'static>(view: &LiveView<U>) -> (bool, Option<Duration>) {
-    view.read(|c| (c.should_cancel(), c.recheck_after()))
+impl<T: Send + Sync + 'static> LiveConfig<T> {
+    /// 按整份配置得出子 token，判断规则由调用方给，见 [`LiveView::cancel_token_with`]
+    pub fn cancel_token_with<F>(&self, parent: &CancellationToken, condition: F) -> CancelTokenGuard
+    where
+        F: Fn(&T) -> (bool, Option<Duration>) + Send + Sync + 'static,
+    {
+        self.view(|c| c).cancel_token_with(parent, condition)
+    }
 }
 
-/// 后台任务：等上级取消、配置变化、`recheck_after` 到点，后两种重新判断，该取消了就取消 token 退出。
+/// 后台任务：等上级取消、配置变化、`recheck_after` 到点，后两种按 `condition` 重新判断，该取消了就取消 token 退出。
 /// 配置组件关闭了也重新判断一次（重新算 `recheck_after`），之后只按它到点判断
-async fn watch<U: CancelCondition + 'static>(
+async fn watch<U: 'static, F: Fn(&U) -> (bool, Option<Duration>)>(
     mut view: LiveView<U>,
     token: CancellationToken,
     mut recheck_after: Option<Duration>,
+    condition: F,
 ) {
     let mut closed = false;
     loop {
@@ -134,7 +163,7 @@ async fn watch<U: CancelCondition + 'static>(
             changed = view.changed(), if !closed => closed = changed.is_err(),
             _ = recheck => {}
         }
-        let (should_cancel, next_recheck_after) = check(&view);
+        let (should_cancel, next_recheck_after) = view.read(&condition);
         recheck_after = next_recheck_after;
         if should_cancel {
             token.cancel();
@@ -282,6 +311,45 @@ mod tests {
 
         expired.store(true, Ordering::SeqCst);
         cancelled_within(guard.token(), 2).await;
+    }
+
+    /// cancel_token_with：规则由调用方给，可以带上建 token 时的状态。这里是「开关和建的时候不一样了就取消」：
+    /// 建的时候是关的也不马上取消（cancel_token 按 Switch 的规则会马上取消），打开后取消
+    #[tokio::test]
+    async fn cancel_token_with_uses_caller_condition() {
+        let (sender, config) = channel(Root::default());
+        let view = config.view(|c| &c.switch);
+        let enabled_at_start = view.read(|switch| switch.enabled);
+        let guard = view.cancel_token_with(&CancellationToken::new(), move |switch| {
+            (switch.enabled != enabled_at_start, None)
+        });
+        assert!(!guard.token().is_cancelled());
+        update(&sender, |c| c.name = "x".to_string());
+        not_cancelled(guard.token()).await;
+
+        update(&sender, |c| c.switch.enabled = true);
+        cancelled_within(guard.token(), 5).await;
+        task_finishes(&guard).await;
+    }
+
+    /// cancel_token_with 的 recheck_after 由调用方给：配置不变，到点也重新判断
+    #[tokio::test]
+    async fn cancel_token_with_rechecks() {
+        let (_sender, config) = channel(Root::default());
+        let expired = Arc::new(AtomicBool::new(false));
+        let guard = config.cancel_token_with(&CancellationToken::new(), {
+            let expired = expired.clone();
+            move |_| {
+                (
+                    expired.load(Ordering::SeqCst),
+                    Some(Duration::from_millis(10)),
+                )
+            }
+        });
+        not_cancelled(guard.token()).await;
+
+        expired.store(true, Ordering::SeqCst);
+        cancelled_within(guard.token(), 5).await;
     }
 
     /// 上级取消了子 token 跟着取消，后台任务退出

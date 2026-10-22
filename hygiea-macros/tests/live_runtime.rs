@@ -86,6 +86,20 @@ fn handle_is_clone_and_from_view() {
     assert_eq!(retry.times(), 3);
 }
 
+/// 没开 cancel_condition 的句柄也有 cancel_token_with，规则由调用方给
+#[tokio::test]
+async fn cancel_token_with_handle() {
+    let job = config().fields().job();
+    let guard = job.cancel_token_with(&CancellationToken::new(), |job| {
+        (job.retry.times == 3, None)
+    });
+    assert!(guard.token().is_cancelled());
+    let guard = job.cancel_token_with(&CancellationToken::new(), |job| {
+        (job.retry.times != 3, None)
+    });
+    assert!(!guard.token().is_cancelled());
+}
+
 /// cancel_condition：句柄多一个 cancel_token，按当前的值判断，字段方法照常；放在不开的 Root 里当 nested 字段
 #[tokio::test]
 async fn cancel_condition_handle() {

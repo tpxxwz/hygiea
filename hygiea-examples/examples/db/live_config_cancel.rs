@@ -4,6 +4,7 @@
 //! 从上级 token（比如服务的退出信号）得出一个子 token，用它包住一轮工作，取消了这一轮的 future 被丢掉，
 //! 正在等的 sleep、请求也马上停。这里不经过 Registry，用 `DbResources::from_config` 直接建一个 SQLite 连接池组件的资源
 //! （`uses = 3`：业务池 + 动态配置，业务池拿来模拟别的程序改表），自己跑完退出。
+//! 判断规则要用到配置以外的状态时（比如这一轮开始时在不在时间段里），用句柄上的 `cancel_token_with` 由调用方给规则，这里不演示。
 //!
 //! 1. 配置 `job`：`start` 开关、`every_day_range` 每天哪段时间跑。`should_cancel`：开关关了、或者不在时间段里；
 //!    `recheck_after`：离时间段结束还有多久，配置不变到点也会再判断一次

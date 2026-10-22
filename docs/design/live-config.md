@@ -220,9 +220,10 @@ sequenceDiagram
 
 ---
 
-## 8. 按配置取消（`cancel_token`）
+## 8. 按配置取消（`cancel_token` / `cancel_token_with`）
 
 用法和行为见 `hygiea-components/hygiea-db/src/live_config/cancel.rs` 的文档，这里讲内部怎么做。
+`cancel_token` 就是把 `CancelCondition` 的两个方法当 `condition` 传给 `cancel_token_with`，两者流程一样，下图按 `cancel_token_with` 画。
 跑起来看效果：`cargo run -p hygiea-examples --example db_live_config_cancel`（开关关了、时间段到点，正在跑的那一轮停下）。
 
 ```mermaid
@@ -232,9 +233,9 @@ sequenceDiagram
     participant T as 后台任务
     participant W as watch（worker 发新值）
 
-    J->>V: cancel_token(&parent)
-    V->>V: parent.child_token()，当场判断一次
-    alt should_cancel() 是 true
+    J->>V: cancel_token_with(&parent, condition)
+    V->>V: parent.child_token()，按 condition 当场判断一次
+    alt 该取消
         V-->>J: 已取消的 token，不起后台任务
     else 还不用
         V->>T: spawn（带着这次算出的 recheck_after）
@@ -242,7 +243,7 @@ sequenceDiagram
         loop 直到取消
             T->>T: select! 上级取消 / changed() / recheck_after 到点
             W-->>T: changed()（配置变了）
-            T->>T: 按最新那一版重新判断，重新算 recheck_after、重新计时
+            T->>T: 按最新那一版调 condition 重新判断，重新算 recheck_after、重新计时
         end
         T->>T: 该取消了：token.cancel()，退出
     end
@@ -271,3 +272,6 @@ sequenceDiagram
 - **`recheck_after` 是可选的、默认 `None`**：不是每个条件都能说出什么时候会变；能说的（时间段到点）才写，写了才能在那一刻停下正在跑的
 - **`cancel_condition` 是 `hy_live_config` 上的属性，不另做 derive**：字段方法、`snapshot`、`changed`、`on_change` 只有一份生成逻辑，
   开了只多一个转发给 `LiveView::cancel_token` 的方法；`LiveConfig`、`LiveView` 上是泛型方法，不经过宏
+- **另有 `cancel_token_with`，规则由调用方给**：`CancelCondition` 只能看配置本身，规则要用到配置以外的状态时（比如这一轮开始时在不在时间段里，
+  同一份配置在不同的几段工作里按不同规则取消）写不进去。闭包把这些状态带进来，配置类型也不用实现 `CancelCondition`；
+  生成的句柄上都有这个方法（`cancel_token_with` 是保留名），`cancel_token` 由它实现，判断和后台任务只有一份
