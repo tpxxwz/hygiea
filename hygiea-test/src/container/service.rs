@@ -512,6 +512,60 @@ impl RunningS3 {
     pub fn container(&self) -> &RunningContainer {
         &self.container
     }
+
+    /// 用管理员身份建一个普通用户，权限是 `policy`（IAM 策略 JSON，比如只允许读写对象、不允许建 bucket），测权限不够时的行为用。
+    /// 在容器里用 curl 调 RustFS 的管理接口（`/rustfs/admin/v3` 下的建策略、建用户、把策略绑给用户，SigV4 签名用 curl 的 `--aws-sigv4`），
+    /// 策略名是 `<access_key>-policy`。`access_key`、`secret_key` 原样拼进 URL 和 JSON，只用字母、数字和 `-`。任何一步失败都 panic
+    pub async fn add_user(&self, access_key: &str, secret_key: &str, policy: &str) {
+        let policy_name = format!("{access_key}-policy");
+        let admin = format!("http://127.0.0.1:{S3_PORT}/rustfs/admin/v3");
+        self.admin_put(
+            &format!("{admin}/add-canned-policy?name={policy_name}"),
+            Some(policy),
+        )
+        .await;
+        self.admin_put(
+            &format!("{admin}/add-user?accessKey={access_key}"),
+            Some(&format!(
+                r#"{{"secretKey":"{secret_key}","status":"enabled"}}"#
+            )),
+        )
+        .await;
+        self.admin_put(
+            &format!(
+                "{admin}/set-user-or-group-policy?policyName={policy_name}&userOrGroup={access_key}&isGroup=false"
+            ),
+            None,
+        )
+        .await;
+    }
+
+    /// 在容器里用管理员身份 PUT 管理接口，不是 2xx 就 panic
+    async fn admin_put(&self, url: &str, body: Option<&str>) {
+        let user = format!("{}:{}", self.access_key, self.secret_key);
+        let mut cmd = vec![
+            "curl",
+            "-sS",
+            "--fail-with-body",
+            "--aws-sigv4",
+            "aws:amz:us-east-1:s3",
+            "--user",
+            &user,
+            "-X",
+            "PUT",
+            url,
+        ];
+        if let Some(body) = body {
+            cmd.extend(["-d", body]);
+        }
+        let output = self.container.exec(cmd).await;
+        if output.exit_code != 0 {
+            panic!(
+                "rustfs admin PUT {url}: exit {} stdout {:?} stderr {:?}",
+                output.exit_code, output.stdout, output.stderr
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -650,5 +704,60 @@ mod start {
             .unwrap()
             .status();
         assert_eq!(status, 200);
+    }
+
+    /// add_user 建的用户按策略来：能读写对象，不能建 bucket。在容器里用 curl 以各自的身份发请求
+    #[tokio::test]
+    async fn s3_add_user_with_policy() {
+        let s3 = S3Spec::new()
+            .access_key("admin")
+            .secret_key("admin-secret")
+            .start()
+            .await;
+        s3.add_user(
+            "limited",
+            "limited-secret",
+            r#"{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject","s3:PutObject"],"Resource":["arn:aws:s3:::*"]}]}"#,
+        )
+        .await;
+        let put = |user: &'static str, url: &'static str| {
+            let s3 = &s3;
+            async move {
+                s3.container()
+                    .exec([
+                        "curl",
+                        "-s",
+                        "-o",
+                        "/dev/null",
+                        "-w",
+                        "%{http_code}",
+                        "--aws-sigv4",
+                        "aws:amz:us-east-1:s3",
+                        "--user",
+                        user,
+                        "-X",
+                        "PUT",
+                        url,
+                    ])
+                    .await
+                    .stdout
+            }
+        };
+        assert_eq!(
+            put("admin:admin-secret", "http://127.0.0.1:9000/existing").await,
+            "200"
+        );
+        assert_eq!(
+            put(
+                "limited:limited-secret",
+                "http://127.0.0.1:9000/existing/a.txt"
+            )
+            .await,
+            "200"
+        );
+        assert_eq!(
+            put("limited:limited-secret", "http://127.0.0.1:9000/other").await,
+            "403"
+        );
     }
 }

@@ -3,6 +3,8 @@
 //! - 常用服务有现成的：[`PostgresSpec`]、[`MySqlSpec`]、[`RedisSpec`]、[`S3Spec`]（RustFS），默认值直接能用，
 //!   每一项都能改，返回值上拿地址、账号这些连接要用的值
 //! - 别的镜像用 [`ContainerSpec`]：镜像、环境变量、端口、怎样算就绪都由调用方传
+//! - 起来之后可以用 [`RunningContainer::exec`] 在容器里执行命令，准备测试数据（建用户、建库）；
+//!   S3 的 [`RunningS3::add_user`] 就是用它建权限受限的用户
 //!
 //! ```ignore
 //! let server = ContainerSpec::new("nginx", "1.31.7")
@@ -21,7 +23,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use testcontainers::core::wait::{HttpWaitStrategy, LogWaitStrategy};
-use testcontainers::core::{ContainerPort, WaitFor};
+use testcontainers::core::{CmdWaitFor, ContainerPort, ExecCommand, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 
@@ -171,7 +173,7 @@ impl ContainerSpec {
             name,
             host,
             ports,
-            _container: container,
+            container,
         }
     }
 }
@@ -181,7 +183,15 @@ pub struct RunningContainer {
     name: String,
     host: String,
     ports: HashMap<u16, u16>,
-    _container: ContainerAsync<GenericImage>,
+    container: ContainerAsync<GenericImage>,
+}
+
+/// [`RunningContainer::exec`] 的结果：退出码和输出（按 UTF-8 读，不合法的字节换成替换字符）
+#[derive(Debug)]
+pub struct ExecOutput {
+    pub exit_code: i64,
+    pub stdout: String,
+    pub stderr: String,
 }
 
 impl RunningContainer {
@@ -205,6 +215,38 @@ impl RunningContainer {
     pub fn addr(&self, container_port: u16) -> String {
         format!("{}:{}", self.host, self.port(container_port))
     }
+
+    /// 在容器里执行命令，等它退出后返回退出码和输出。不经过 shell：第一个是程序，后面是参数，要用 shell 的语法就传
+    /// `["sh", "-c", "..."]`。比如在容器里准备测试数据（建用户、建库）。
+    /// Docker 调用失败时 panic；命令本身失败（退出码不是 0）不 panic，由调用方看 [`ExecOutput::exit_code`]
+    pub async fn exec(&self, cmd: impl IntoIterator<Item = impl Into<String>>) -> ExecOutput {
+        let name = &self.name;
+        let mut result = self
+            .container
+            .exec(ExecCommand::new(cmd).with_cmd_ready_condition(CmdWaitFor::exit()))
+            .await
+            .unwrap_or_else(|e| panic!("container {name} exec: {e}"));
+        let stdout = result
+            .stdout_to_vec()
+            .await
+            .unwrap_or_else(|e| panic!("container {name} exec stdout: {e}"));
+        let stderr = result
+            .stderr_to_vec()
+            .await
+            .unwrap_or_else(|e| panic!("container {name} exec stderr: {e}"));
+        let exit_code = result
+            .exit_code()
+            .await
+            .unwrap_or_else(|e| panic!("container {name} exec exit code: {e}"))
+            .unwrap_or_else(|| {
+                panic!("container {name} exec: no exit code after waiting for exit")
+            });
+        ExecOutput {
+            exit_code,
+            stdout: String::from_utf8_lossy(&stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&stderr).into_owned(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -224,6 +266,18 @@ mod tests {
     async fn env_cmd_and_log_wait() {
         let c = echo_ready().start().await;
         assert!(!c.host().is_empty());
+    }
+
+    /// exec 返回退出码、stdout、stderr；命令失败不 panic
+    #[tokio::test]
+    async fn exec_returns_output() {
+        let c = echo_ready().start().await;
+        let output = c
+            .exec(["sh", "-c", "echo out-$GREETING; echo err >&2; exit 3"])
+            .await;
+        assert_eq!(output.exit_code, 3);
+        assert_eq!(output.stdout, "out-hello\n");
+        assert_eq!(output.stderr, "err\n");
     }
 
     /// 查没暴露的端口时 panic，提示先调用 ContainerSpec::port
