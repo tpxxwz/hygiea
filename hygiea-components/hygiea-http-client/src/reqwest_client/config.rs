@@ -6,7 +6,6 @@ use serde::Deserialize;
 use hygiea_core::app::AppErr;
 use hygiea_core::{HyErr, err};
 
-use super::error::client_build_failed;
 use super::{HeaderMap, HeaderName, HeaderValue, Proxy};
 
 #[derive(Clone, Default, Deserialize)]
@@ -209,7 +208,9 @@ impl TryFrom<ProxyConfig> for Proxy {
             ProxyKind::Http => Self::http(&config.url),
             ProxyKind::Https => Self::https(&config.url),
         }
-        .map_err(client_build_failed)?;
+        .map_err(|e| {
+            err!(AppErr::InvalidConfig, "invalid proxy url").with_source(e.without_url())
+        })?;
         if let Some(auth) = config.basic_auth {
             proxy = proxy.basic_auth(&auth.username, &auth.password);
         }

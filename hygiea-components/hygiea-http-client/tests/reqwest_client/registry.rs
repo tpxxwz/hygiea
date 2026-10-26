@@ -5,7 +5,7 @@ use std::error::Error as _;
 use hygiea_core::app::{AppErr, Registry, Resources};
 use hygiea_core::{HyErr, Result};
 use hygiea_http_client::reqwest_client::{
-    HttpClientErr, Json, Method, RequestConfig, ReqwestClient, ReqwestComponent, ReqwestConfig,
+    Json, Method, RequestConfig, ReqwestClient, ReqwestComponent, ReqwestConfig,
 };
 use test_support::http_server::{echo, serve};
 
@@ -107,5 +107,5 @@ async fn invalid_config_fails_startup() {
         .source()
         .and_then(|e| e.downcast_ref::<HyErr>())
         .unwrap();
-    assert!(source.is(HttpClientErr::ClientBuildFailed), "{err:#}");
+    assert!(source.is(AppErr::InvalidConfig), "{err:#}");
 }

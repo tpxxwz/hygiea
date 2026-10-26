@@ -11,10 +11,10 @@ use hygiea_core::app::{
 };
 use hygiea_core::{Result, err};
 
-use super::HeaderMap;
 use super::config::{HeaderMapConfig, ProxyConfig};
 use super::error::{client_build_failed, invalid_header};
 use super::headers::{IntoHeaders, checked_headers};
+use super::{HeaderMap, HeaderValue};
 use reqwest::{Client, ClientBuilder};
 
 // ---------------------------- 客户端配置 ----------------------------
@@ -249,6 +249,9 @@ fn client_builder(config: ReqwestConfig) -> Result<ClientBuilder> {
     }
 
     if let Some(ua) = config.user_agent {
+        // 先自己解析：交给 reqwest 的话，不合法的值要到 build 时才报，分不出是配置写错还是别的原因
+        let ua = HeaderValue::try_from(ua)
+            .map_err(|e| err!(AppErr::InvalidConfig, format!("user agent: {e}")))?;
         builder = builder.user_agent(ua);
     }
     let headers = HeaderMap::try_from(config.default_headers)
@@ -283,13 +286,14 @@ fn client_builder(config: ReqwestConfig) -> Result<ClientBuilder> {
 impl ConfigResource for ReqwestClient {
     type Config = ReqwestConfig;
 
-    /// 请求头无效时返回 `InvalidConfig`；代理 URL 或 reqwest 构建失败时返回
+    /// 配置值不合法（User-Agent、请求头、代理 URL、代理的认证和请求头）时返回 `InvalidConfig`；
+    /// 配置值没问题、reqwest 仍然构建失败（比如 TLS 后端初始化失败）时返回
     /// [`ClientBuildFailed`](super::HttpClientErr::ClientBuildFailed)，reqwest 错误保留在 source 上
     async fn from_config(
         config: &ReqwestConfig,
         _registry_config: &RegistryConfig,
     ) -> Result<Self> {
-        // reqwest 先校验（UA 不合法时报 ClientBuildFailed），再算 debug 状态
+        // 先建 reqwest 的 client（配置值在 client_builder 里检查过），再算 debug 状态
         let inner = client_builder(config.clone())?
             .build()
             .map_err(client_build_failed)?;
@@ -312,7 +316,6 @@ pub type ReqwestComponent = ImmediateResourceComponent<ReqwestClient>;
 mod tests {
     use crate::reqwest_client::IntoHeaders;
     use crate::reqwest_client::error::HttpClientErr;
-    use std::error::Error as _;
 
     use super::*;
 
@@ -490,9 +493,9 @@ mod tests {
             .unwrap();
         }
 
-        /// reqwest 在构建 Client 时校验 User-Agent，错误保留为 source
+        /// User-Agent 不合法是配置错误，在交给 reqwest 之前就报
         #[tokio::test]
-        async fn invalid_user_agent_is_client_build_failed() {
+        async fn invalid_user_agent_is_invalid_config() {
             let err = ReqwestClient::from_config(
                 &ReqwestConfig {
                     user_agent: Some("bad\nvalue".into()),
@@ -502,8 +505,7 @@ mod tests {
             )
             .await
             .unwrap_err();
-            assert!(err.is(HttpClientErr::ClientBuildFailed));
-            assert!(err.source().is_some());
+            assert!(err.is(AppErr::InvalidConfig), "{err:#}");
         }
     }
 
@@ -609,12 +611,10 @@ mod tests {
 
             async fn build_err(toml: &str) {
                 let config: ReqwestConfig = toml::from_str(toml).unwrap();
-                assert!(
-                    ReqwestClient::from_config(&config, &Default::default())
-                        .await
-                        .is_err(),
-                    "{toml}"
-                );
+                let err = ReqwestClient::from_config(&config, &Default::default())
+                    .await
+                    .unwrap_err();
+                assert!(err.is(AppErr::InvalidConfig), "{toml}: {err:#}");
             }
 
             #[tokio::test]
