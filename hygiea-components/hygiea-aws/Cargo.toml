@@ -8,17 +8,40 @@ repository.workspace = true
 rust-version.workspace = true
 description = "AWS SDK component for hygiea: shared config and service clients (S3)"
 
+# 框架内置错误（S3Err）用项目前缀 999
+[package.metadata.hygiea]
+err_code_project_prefix = "999"
+
 # 选服务：每个服务一个 feature，只引入对应的 aws-sdk-* crate。默认什么都不开
 [features]
 default = []
-s3 = ["dep:aws-sdk-s3"]
+s3 = ["dep:aws-sdk-s3", "dep:bytes", "dep:indexmap", "dep:infer", "dep:mime_guess", "dep:sha2", "dep:base64", "dep:percent-encoding"]
+# 让 SDK 自己从环境加载没写的配置：AWS_* 环境变量、~/.aws/config 和 ~/.aws/credentials、容器和 EC2 的实例凭证。
+# 引入 aws-config（以及它必带的 aws-sdk-sts）。不开时客户端只用配置里写的，不读这些
+sdk-env = ["dep:aws-config"]
+# SDK 环境里取凭证的两种方式，用到才开：~/.aws/config 里的 SSO profile（会引入 aws-sdk-sso、aws-sdk-ssooidc）、
+# credential_process（跑外部程序取凭证）。没开时 profile 里写了它们，第一次调用服务取凭证时报错
+sso = ["sdk-env", "aws-config/sso"]
+credentials-process = ["sdk-env", "aws-config/credentials-process"]
+# S3 的 SigV4a 签名，只有 AWS 的多区域访问点（Multi-Region Access Points）要用
+s3-sigv4a = ["s3", "aws-sdk-s3/sigv4a"]
+# 管理 bucket 的能力：客户端可以设 manage_buckets = true，bucket 可以设 create_if_missing，S3Bucket 上有删 bucket 的方法。
+# 不开时这些都不能用，只读写对象的应用不开
+s3-bucket-admin = ["s3"]
 
 [dependencies]
 hygiea-core = { workspace = true, features = ["app"] }
-aws-config = { workspace = true }
+aws-config = { workspace = true, optional = true }
 aws-credential-types = { workspace = true }
 aws-sdk-s3 = { workspace = true, optional = true }
-tokio = { workspace = true, features = ["rt"] }
+bytes = { workspace = true, optional = true }
+indexmap = { workspace = true, optional = true }
+infer = { workspace = true, optional = true }
+mime_guess = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
+percent-encoding = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["rt", "fs", "io-util"] }
 tracing = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 
@@ -28,11 +51,14 @@ toml = { workspace = true }
 # #[container] / #[live] 和启动容器。hygiea-test 只依赖 core，cargo publish --workspace 会把它排在组件前面发布，
 # 所以可以带版本号
 hygiea-test = { workspace = true, features = ["container"] }
+# 测试里用 HTTP 访问预签名 URL、准备上传用的本地文件
+reqwest = { workspace = true }
+tempfile = { workspace = true }
 
 [[test]]
 name = "s3"
 path = "tests/s3.rs"
-required-features = ["s3"]
+required-features = ["s3", "s3-bucket-admin"]
 
 [package.metadata.docs.rs]
 all-features = true

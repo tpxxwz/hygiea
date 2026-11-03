@@ -1,0 +1,419 @@
+//! [`AwsS3Client`]：一个客户端（服务地址 + 凭证），`Deref` 到 `aws_sdk_s3::Client`，只在组件内部用，bucket 句柄拿着它发请求。
+
+use std::ops::Deref;
+
+use aws_sdk_s3::Client;
+use aws_sdk_s3::config::{AppName, BehaviorVersion, Builder, Region};
+use aws_sdk_s3::types::BucketLocationConstraint;
+use hygiea_core::app::{AppErr, RegistryConfig};
+use hygiea_core::{HyErr, Result, bail, ensure, err, impossible};
+
+use super::{S3ClientConfig, S3Region};
+
+/// S3 客户端，`Deref` 到 `aws_sdk_s3::Client`，SDK 的操作照常调。内部是 `Arc`，clone 很便宜
+#[derive(Clone, Debug)]
+pub(super) struct AwsS3Client {
+    inner: Client,
+    /// [`S3ClientConfig::presign_public_origin`]，检查、规整过（`scheme://host[:port]`，结尾没有 `/`）
+    presign_public_origin: Option<String>,
+    /// [`S3ClientConfig::presign_path_prefix`]，检查、规整过（以 `/` 开头，结尾没有 `/`）
+    presign_path_prefix: Option<String>,
+    /// 配置里的客户端名，删 bucket 报错时用
+    #[cfg_attr(not(feature = "s3-bucket-admin"), allow(dead_code))]
+    name: String,
+    /// 建 bucket 时决定要不要带 LocationConstraint
+    region: Option<S3Region>,
+    /// 能不能管理 bucket，见 [`S3ClientConfig::manage_buckets`]
+    manage_buckets: bool,
+}
+
+impl AwsS3Client {
+    /// 按客户端配置建，`name` 是客户端名，报错时带上。两种方式见 [`S3ClientConfig`]：
+    /// 不用 SDK 环境时少了 `region`、`credentials`，或者写了 `profile`，以及设了 `use_sdk_env` 却没开 `sdk-env` feature，
+    /// 报 `AppErr::InvalidConfig`。不发请求；SDK 环境里的凭证用到时才解析，缺了要第一次调用服务时才报错。
+    /// 应用名（`registry_config.app_name`）设成 SDK 的 app name，每个请求的 User-Agent 里带上它，服务端的访问日志里能看出是哪个应用发的。
+    /// `presign_public_origin` 带了路径、`presign_path_prefix` 不合规则也报 `AppErr::InvalidConfig`
+    pub(super) async fn from_config(
+        name: &str,
+        config: &S3ClientConfig,
+        registry_config: &RegistryConfig,
+    ) -> Result<Self> {
+        #[cfg(not(feature = "s3-bucket-admin"))]
+        ensure!(
+            !config.manage_buckets,
+            AppErr::InvalidConfig,
+            format!("s3 client {name:?}: manage_buckets needs hygiea feature aws-s3-bucket-admin")
+        );
+        let presign_public_origin = match &config.presign_public_origin {
+            Some(origin) => Some(normalize_presign_public_origin(name, origin)?),
+            None => None,
+        };
+        let presign_path_prefix = match &config.presign_path_prefix {
+            Some(prefix) => Some(normalize_presign_path_prefix(name, prefix)?),
+            None => None,
+        };
+        let builder = if config.use_sdk_env {
+            sdk_env_builder(name, config).await?
+        } else {
+            explicit_builder(name, config)?
+        };
+        let app_name = AppName::new(registry_config.app_name.clone()).map_err(|e| {
+            impossible!(
+                "registry.app_name 读配置时按 [a-z][a-z0-9_]* 检查过，都能当 SDK 的 app name：{:?} {e}",
+                registry_config.app_name
+            )
+        })?;
+        let sdk_config = config.apply_s3_options(builder.app_name(app_name)).build();
+        Ok(Self {
+            inner: Client::from_conf(sdk_config),
+            presign_public_origin,
+            presign_path_prefix,
+            name: name.to_owned(),
+            region: config.region.clone(),
+            manage_buckets: config.manage_buckets,
+        })
+    }
+
+    /// 配置里的客户端名
+    #[cfg_attr(not(feature = "s3-bucket-admin"), allow(dead_code))]
+    pub(super) fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// 能不能管理 bucket，见 [`S3ClientConfig::manage_buckets`]
+    pub(super) fn manage_buckets(&self) -> bool {
+        self.manage_buckets
+    }
+
+    /// 按服务地址签好的预签名 URL 交出去之前的处理：配置了 [`S3ClientConfig::presign_public_origin`] 的换掉 `scheme://host[:port]`，
+    /// 配置了 [`S3ClientConfig::presign_path_prefix`] 的插到路径最前面，签名覆盖的路径、query 不动
+    pub(super) fn finish_presigned_url(&self, url: String) -> Result<String> {
+        if self.presign_public_origin.is_none() && self.presign_path_prefix.is_none() {
+            return Ok(url);
+        }
+        let (origin, path_and_query) = split_origin(&url)?;
+        Ok(format!(
+            "{}{}{path_and_query}",
+            self.presign_public_origin.as_deref().unwrap_or(origin),
+            self.presign_path_prefix.as_deref().unwrap_or("")
+        ))
+    }
+
+    /// 建 bucket 时要带的 LocationConstraint，规则见 [`S3Region::location_constraint`]；没写 region 不带
+    pub(super) fn location_constraint(&self) -> Option<BucketLocationConstraint> {
+        self.region.as_ref().and_then(S3Region::location_constraint)
+    }
+}
+
+impl Deref for AwsS3Client {
+    type Target = Client;
+
+    fn deref(&self) -> &Client {
+        &self.inner
+    }
+}
+
+/// `presign_public_origin` 只能有 scheme、host、端口（结尾多一个 `/` 也行），返回去掉结尾 `/` 的。要加路径用 `presign_path_prefix`
+fn normalize_presign_public_origin(name: &str, origin: &str) -> Result<String> {
+    let Some((_, rest)) = origin.split_once("://") else {
+        bail!(
+            AppErr::InvalidConfig,
+            format!("s3 client {name:?}: presign_public_origin has no scheme: {origin:?}")
+        );
+    };
+    let authority = rest.strip_suffix('/').unwrap_or(rest);
+    ensure!(
+        !authority.is_empty() && !authority.contains(['/', '?', '#']),
+        AppErr::InvalidConfig,
+        format!(
+            "s3 client {name:?}: presign_public_origin must be scheme://host[:port] without path, use presign_path_prefix: {origin:?}"
+        )
+    );
+    Ok(origin.strip_suffix('/').unwrap_or(origin).to_owned())
+}
+
+/// `presign_path_prefix` 的规则见 [`S3ClientConfig::presign_path_prefix`]，返回去掉结尾 `/` 的
+fn normalize_presign_path_prefix(name: &str, prefix: &str) -> Result<String> {
+    let normalized = prefix.trim_end_matches('/');
+    ensure!(
+        normalized.starts_with('/') && !normalized.contains("//"),
+        AppErr::InvalidConfig,
+        format!(
+            "s3 client {name:?}: presign_path_prefix must start with '/', not be '/', and not contain '//': {prefix:?}"
+        )
+    );
+    Ok(normalized.to_owned())
+}
+
+/// 把 URL 拆成 `scheme://host[:port]` 和后面的路径加 query：`https://x.com/b/k?q` → (`https://x.com`, `/b/k?q`)
+fn split_origin(url: &str) -> Result<(&str, &str)> {
+    let authority_start = url
+        .find("://")
+        .map(|index| index + 3)
+        .ok_or_else(|| impossible!("SDK 签出来的 URL 没有 scheme：{url}"))?;
+    let path_start = url[authority_start..]
+        .find('/')
+        .map(|index| authority_start + index)
+        .ok_or_else(|| impossible!("SDK 签出来的 URL 没有路径：{url}"))?;
+    Ok(url.split_at(path_start))
+}
+
+/// 不用 SDK 环境：只用配置里写的，SDK 的其他设置（重试、超时等）是内置默认值
+fn explicit_builder(name: &str, config: &S3ClientConfig) -> Result<Builder> {
+    ensure!(
+        config.profile.is_none(),
+        AppErr::InvalidConfig,
+        format!("s3 client {name:?}: profile needs use_sdk_env")
+    );
+    let region = config
+        .region
+        .as_ref()
+        .ok_or_else(|| required_without_sdk_env(name, "region"))?;
+    let credentials = config
+        .credentials
+        .as_ref()
+        .ok_or_else(|| required_without_sdk_env(name, "credentials"))?;
+    let mut builder = Builder::new()
+        .behavior_version(BehaviorVersion::latest())
+        .region(Region::new(region.as_str().to_owned()))
+        .credentials_provider(credentials.to_sdk());
+    if let Some(url) = &config.endpoint_url {
+        builder = builder.endpoint_url(url);
+    }
+    Ok(builder)
+}
+
+fn required_without_sdk_env(name: &str, field: &str) -> HyErr {
+    err!(
+        AppErr::InvalidConfig,
+        format!("s3 client {name:?}: {field} is required without use_sdk_env")
+    )
+}
+
+/// 用 SDK 环境：没写的项由 SDK 从环境加载，写了的项优先
+#[cfg(feature = "sdk-env")]
+async fn sdk_env_builder(name: &str, config: &S3ClientConfig) -> Result<Builder> {
+    let sdk_config = crate::config::load_sdk_config(
+        config.region.as_ref().map(S3Region::as_str),
+        config.endpoint_url.as_deref(),
+        config.profile.as_deref(),
+        config.credentials.as_ref(),
+    )
+    .await;
+    tracing::info!(
+        "S3 client config loaded from sdk env [client={name}, region={:?}]",
+        sdk_config.region().map(|r| r.as_ref())
+    );
+    Ok(Builder::from(&sdk_config))
+}
+
+#[cfg(not(feature = "sdk-env"))]
+async fn sdk_env_builder(name: &str, _config: &S3ClientConfig) -> Result<Builder> {
+    hygiea_core::bail!(
+        AppErr::InvalidConfig,
+        format!("s3 client {name:?}: use_sdk_env needs hygiea feature aws-sdk-env")
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::StaticCredentials;
+
+    fn credentials() -> Option<StaticCredentials> {
+        Some(StaticCredentials {
+            access_key_id: "ak".into(),
+            secret_access_key: "sk".into(),
+            session_token: None,
+        })
+    }
+
+    /// 不用 SDK 环境时：少了 region、credentials，写了 profile，都报 InvalidConfig
+    #[tokio::test]
+    async fn explicit_mode_requires_region_and_credentials() {
+        let complete = S3ClientConfig {
+            region: Some("auto".into()),
+            credentials: credentials(),
+            ..S3ClientConfig::default()
+        };
+        AwsS3Client::from_config("test", &complete, &RegistryConfig::default())
+            .await
+            .unwrap();
+        for config in [
+            S3ClientConfig {
+                region: None,
+                ..complete.clone()
+            },
+            S3ClientConfig {
+                credentials: None,
+                ..complete.clone()
+            },
+            S3ClientConfig {
+                profile: Some("default".into()),
+                ..complete.clone()
+            },
+        ] {
+            let err = AwsS3Client::from_config("test", &config, &RegistryConfig::default())
+                .await
+                .unwrap_err();
+            assert!(err.is(AppErr::InvalidConfig), "{config:?}: {err:#}");
+        }
+    }
+
+    /// 没开 s3-bucket-admin feature 时设了 manage_buckets：报 InvalidConfig
+    #[cfg(not(feature = "s3-bucket-admin"))]
+    #[tokio::test]
+    async fn manage_buckets_needs_feature() {
+        let config = S3ClientConfig {
+            region: Some("auto".into()),
+            credentials: credentials(),
+            manage_buckets: true,
+            ..S3ClientConfig::default()
+        };
+        let err = AwsS3Client::from_config("test", &config, &RegistryConfig::default())
+            .await
+            .unwrap_err();
+        assert!(err.is(AppErr::InvalidConfig), "{err:#}");
+    }
+
+    /// 没开 sdk-env feature 时设了 use_sdk_env：报 InvalidConfig
+    #[cfg(not(feature = "sdk-env"))]
+    #[tokio::test]
+    async fn sdk_env_needs_feature() {
+        let config = S3ClientConfig {
+            use_sdk_env: true,
+            ..S3ClientConfig::default()
+        };
+        let err = AwsS3Client::from_config("test", &config, &RegistryConfig::default())
+            .await
+            .unwrap_err();
+        assert!(err.is(AppErr::InvalidConfig), "{err:#}");
+    }
+
+    /// 开了 sdk-env 时设了 use_sdk_env：没写 region、凭证也能建（由 SDK 环境提供，用到时才解析）
+    #[cfg(feature = "sdk-env")]
+    #[tokio::test]
+    async fn sdk_env_allows_missing_fields() {
+        let config = S3ClientConfig {
+            use_sdk_env: true,
+            ..S3ClientConfig::default()
+        };
+        AwsS3Client::from_config("test", &config, &RegistryConfig::default())
+            .await
+            .unwrap();
+    }
+
+    /// presign_public_origin 带路径、没有 scheme，presign_path_prefix 不合规则：报 InvalidConfig
+    #[tokio::test]
+    async fn invalid_presign_options_rejected() {
+        let base = S3ClientConfig {
+            region: Some("auto".into()),
+            credentials: credentials(),
+            ..S3ClientConfig::default()
+        };
+        let invalid = [
+            S3ClientConfig {
+                presign_public_origin: Some("https://x.com/s3".into()),
+                ..base.clone()
+            },
+            S3ClientConfig {
+                presign_public_origin: Some("x.com".into()),
+                ..base.clone()
+            },
+            S3ClientConfig {
+                presign_path_prefix: Some("s3".into()),
+                ..base.clone()
+            },
+            S3ClientConfig {
+                presign_path_prefix: Some("/".into()),
+                ..base.clone()
+            },
+            S3ClientConfig {
+                presign_path_prefix: Some("/a//b".into()),
+                ..base.clone()
+            },
+        ];
+        for config in invalid {
+            let err = AwsS3Client::from_config("test", &config, &RegistryConfig::default())
+                .await
+                .unwrap_err();
+            assert!(err.is(AppErr::InvalidConfig), "{config:?}: {err:#}");
+        }
+        let config = S3ClientConfig {
+            presign_public_origin: Some("https://x.com:8443/".into()),
+            presign_path_prefix: Some("/s3/".into()),
+            ..base
+        };
+        let client = AwsS3Client::from_config("test", &config, &RegistryConfig::default())
+            .await
+            .unwrap();
+        assert_eq!(
+            client.presign_public_origin.as_deref(),
+            Some("https://x.com:8443")
+        );
+        assert_eq!(client.presign_path_prefix.as_deref(), Some("/s3"));
+    }
+
+    /// 签完的 URL：换掉 origin、插上路径前缀，原来的路径、query 不动；两项都没配原样返回
+    #[tokio::test]
+    async fn finishes_presigned_url() {
+        let base = S3ClientConfig {
+            region: Some("auto".into()),
+            credentials: credentials(),
+            ..S3ClientConfig::default()
+        };
+        let signed = "http://10.0.0.1:9000/b/k.mp3?X-Amz-Signature=1".to_owned();
+        for (origin, prefix, expected) in [
+            (None, None, "http://10.0.0.1:9000/b/k.mp3?X-Amz-Signature=1"),
+            (
+                Some("https://x.com"),
+                None,
+                "https://x.com/b/k.mp3?X-Amz-Signature=1",
+            ),
+            (
+                None,
+                Some("/s3"),
+                "http://10.0.0.1:9000/s3/b/k.mp3?X-Amz-Signature=1",
+            ),
+            (
+                Some("https://x.com/"),
+                Some("/a/b"),
+                "https://x.com/a/b/b/k.mp3?X-Amz-Signature=1",
+            ),
+        ] {
+            let config = S3ClientConfig {
+                presign_public_origin: origin.map(Into::into),
+                presign_path_prefix: prefix.map(Into::into),
+                ..base.clone()
+            };
+            let client = AwsS3Client::from_config("test", &config, &RegistryConfig::default())
+                .await
+                .unwrap();
+            assert_eq!(
+                client.finish_presigned_url(signed.clone()).unwrap(),
+                expected
+            );
+        }
+    }
+
+    /// 应用名设成 SDK 的 app name
+    #[tokio::test]
+    async fn app_name_goes_to_sdk() {
+        let config = S3ClientConfig {
+            region: Some("auto".into()),
+            credentials: credentials(),
+            ..S3ClientConfig::default()
+        };
+        let registry_config = RegistryConfig {
+            app_name: "dict_jp".into(),
+            ..RegistryConfig::default()
+        };
+        let client = AwsS3Client::from_config("test", &config, &registry_config)
+            .await
+            .unwrap();
+        assert_eq!(
+            client.config().app_name().map(|name| name.as_ref()),
+            Some("dict_jp")
+        );
+    }
+}

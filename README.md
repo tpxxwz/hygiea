@@ -26,7 +26,7 @@
 | 配置加载 | 环境配置文件 → 额外配置文件 → 环境变量 → 命令行，后面的覆盖前面的；环境用 `--env` 或 `HYGIEA_ENV` 选 |
 | 优雅关闭 | 收到 Ctrl+C / SIGTERM 后先关 Deferred 组件（停止接请求），再按启动的逆序关其余组件，每个组件单独计时，超时强制结束；支持关闭前延迟，方便 k8s 摘流量 |
 | 日志 | 启动时按配置初始化 tracing（控制台、按时间滚动的文件） |
-| 现成组件 | 数据库连接池（sqlx / SeaORM × PostgreSQL / MySQL / SQLite）、Redis 连接池、HTTP 服务（axum）、gRPC 服务（tonic）、AWS S3 客户端，见下文「组件」 |
+| 现成组件 | 数据库连接池（sqlx / SeaORM × PostgreSQL / MySQL / SQLite）、Redis 连接池、HTTP 服务（axum）、gRPC 服务（tonic）、S3 客户端（多个客户端、多个 bucket，AWS S3 和 R2、RustFS 这类兼容服务都能连），见下文「组件」 |
 
 ### 基础能力（常开）
 
@@ -72,7 +72,12 @@
 | `http-client-reqwest` | `hygiea-http-client`（`reqwest`） | `hygiea::http_client::reqwest_client`：`ReqwestComponent`，在 `Resources` 中提供 `ReqwestClient`，见下文「HTTP 客户端与日志打码」 |
 | `http-client-reqwest-debug-log` | `hygiea-http-client`（`debug-log`，带上 `reqwest`） | 带原文和请求头、响应头的 debug 日志，只在 dev-dependencies 里开 |
 | `grpc-tonic` | `hygiea-grpc`（`tonic`） | `hygiea::grpc::TonicComponent` |
-| `aws-s3` | `hygiea-aws`（`s3`） | `hygiea::aws::AwsS3Component` / `AwsConfig`；在 `Resources` 中提供 `AwsS3Client`（`Deref` 到 `aws_sdk_s3::Client`） |
+| `aws-s3` | `hygiea-aws`（`s3`） | `hygiea::aws::AwsS3Component`，在 `Resources` 中提供 `AwsS3Store` |
+| `aws-sdk-env` | `hygiea-aws`（`sdk-env`） | 客户端可以设 `use_sdk_env`：没写的项由 SDK 从环境加载（`AWS_*` 环境变量、`~/.aws`、实例凭证），连 AWS 时用。引入 aws-config |
+| `aws-sso` | `hygiea-aws`（`sso`），带上 `aws-sdk-env` | SDK 环境里的 SSO profile，用到才开 |
+| `aws-credentials-process` | `hygiea-aws`（`credentials-process`），带上 `aws-sdk-env` | SDK 环境里的 `credential_process`（跑外部程序取凭证），用到才开 |
+| `aws-s3-sigv4a` | `hygiea-aws`（`s3-sigv4a`），带上 `aws-s3` | S3 的 SigV4a 签名，AWS 的多区域访问点要用 |
+| `aws-s3-bucket-admin` | `hygiea-aws`（`s3-bucket-admin`），带上 `aws-s3` | 管理 bucket：客户端可以设 `manage_buckets`（启动时建不存在的 bucket），`S3Bucket` 上有删 bucket 的方法 |
 
 db 的三个维度各自独立、只增加功能，同时打开的组合才有东西，比如 `features = ["db-sqlx", "db-postgres", "db-lock"]`。支持的组合：
 
@@ -196,7 +201,7 @@ async fn main() -> Result<()> {
   | `AxumConfig`（`http-axum`） | [hygiea-components/hygiea-http/config/axum.toml](hygiea-components/hygiea-http/config/axum.toml) |
   | `ReqwestConfig`（`http-client-reqwest`） | [hygiea-components/hygiea-http-client/config/reqwest.toml](hygiea-components/hygiea-http-client/config/reqwest.toml) |
   | `TonicConfig`（`grpc-tonic`） | [hygiea-components/hygiea-grpc/config/tonic.toml](hygiea-components/hygiea-grpc/config/tonic.toml) |
-  | `AwsConfig`（`aws-s3`） | [hygiea-components/hygiea-aws/config/aws.toml](hygiea-components/hygiea-aws/config/aws.toml) |
+  | `S3Config`（`aws-s3`） | [hygiea-components/hygiea-aws/config/aws.toml](hygiea-components/hygiea-aws/config/aws.toml) |
 
 - 配置的通用规则：所有配置项都可以不写，不写用默认值；写了不存在的配置项（拼错也算）启动加载配置时报错，不会被静默忽略。
 - 配置目录默认是相对当前目录的 `config/`，可以用命令行 `-d <目录>`（`--config-dir`）或代码里 `ConfigArgs::from_cli().default_config_dir(..)` 换，命令行优先。
@@ -315,7 +320,7 @@ hygiea                         facade：重新导出全部内容，按 feature �
 | `hygiea-http` | 是 | HTTP 服务组件 |
 | `hygiea-http-client` | 是 | reqwest HTTP 客户端及组件 |
 | `hygiea-grpc` | 是 | gRPC 服务组件 |
-| `hygiea-aws` | 是 | AWS SDK 组件（公共配置 + S3 客户端） |
+| `hygiea-aws` | 是 | AWS SDK 组件（S3：多个客户端、多个 bucket） |
 | `hygiea-test` | 是 | 给使用方写测试用，作为 dev-dependency：测试日志、mock HTTP 服务（httpmock + TOML cassette + Rhai）、测试分层宏（`#[container]` / `#[live]`）、启动容器（PostgreSQL、MySQL、Redis、S3 有现成的预设，能在容器里执行命令） |
 | `hygiea-test-macros` | 是 | `hygiea-test` 的过程宏（`#[container]` / `#[live]`），经 `hygiea-test` 使用 |
 
@@ -369,7 +374,7 @@ pub enum LegacyErrors {
   | `000`、`999` | `BaseErr`：不需要 feature 的模块，没有模块前缀，5 位编号。只用 `000xx`（`Impossible` 是 `00000`），兜底的 `SysErr` 是 `99999`；别的 5 位码会落进其他模块的区间 |
   | `001`～`089` | core：app `001`、log `002`、lock `003` |
   | `090`～`099` | core 的测试（`hygiea-core/tests/` 里自定义的错误 enum） |
-  | `100`～`799` | components：db（`RepoErr`）`100`、http-client（`HttpClientErr`）`101` |
+  | `100`～`799` | components：db（`RepoErr`）`100`、http-client（`HttpClientErr`）`101`、aws（`S3Err`）`102` |
   | `800`～`998` | hygiea-test：http_mock `800`（构建）、`801`（运行时） |
 
 - 同一模块内重复会编译报错；跨模块或跨 crate 的重复在启动时检查（进程打印重复的错误码后以状态码 1 退出）。
@@ -434,6 +439,21 @@ pub enum LegacyErrors {
 | `99910122` | `HttpClientErr::NonSuccessStatus` | Http {{ status }}: {{ method }} {{ url }} |
 | `99910123` | `HttpClientErr::WriteFailed` | Write response body failed |
 | `99910124` | `HttpClientErr::DecodeFailed` | Http response decode failed: {{ method }} {{ url }} |
+| `99910201` | `S3Err::BucketNotFound` | S3 bucket not found: {{ client }} {{ bucket }} |
+| `99910202` | `S3Err::BucketNotConfigured` | S3 bucket not configured: {{ client }} {{ bucket }} |
+| `99910203` | `S3Err::BucketCreateFailed` | S3 bucket create failed: {{ client }} {{ bucket }} |
+| `99910204` | `S3Err::ClientNotConfigured` | S3 client not configured: {{ client }} |
+| `99910211` | `S3Err::ReadFileFailed` | S3 read file failed: {{ path }} |
+| `99910212` | `S3Err::BucketAdminDisabled` | S3 bucket admin disabled: {{ client }} {{ bucket }} |
+| `99910213` | `S3Err::ContentTypeMismatch` | S3 content type mismatch: .{{ file_ext }} is {{ detected }} |
+| `99910214` | `S3Err::InvalidFileExt` | S3 invalid file ext: {{ file_ext }} |
+| `99910215` | `S3Err::InvalidKey` | S3 invalid key {{ part }}: {{ value }} ({{ reason }}) |
+| `99910216` | `S3Err::InvalidPresignExpiry` | S3 invalid presign expiry: {{ expires_in }} (max {{ max }}) for {{ bucket }} {{ key }} |
+| `99910221` | `S3Err::RequestFailed` | S3 request failed: {{ op }} {{ bucket }} {{ key }} |
+| `99910222` | `S3Err::ServiceError` | S3 {{ status }} {{ code }}: {{ op }} {{ bucket }} {{ key }} |
+| `99910223` | `S3Err::InvalidResponse` | S3 invalid response: {{ op }} {{ bucket }} missing {{ field }} |
+| `99910224` | `S3Err::DeleteObjectsFailed` | S3 delete objects failed: {{ bucket }} {{ failed }} failed, first {{ key }} {{ code }} |
+| `99910225` | `S3Err::MissingSha256` | S3 object missing sha256: {{ bucket }} {{ key }} |
 | `99999999` | `BaseErr::SysErr` | System Error |
 <!-- /gen:err-codes -->
 

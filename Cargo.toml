@@ -93,6 +93,16 @@ proc-macro-crate = "3"
 toml = "1"
 encoding_rs = "0.8"
 bytes = "1"
+# 保持插入顺序的 map / set（hygiea-aws 按顺序取 bucket 句柄），开 serde 让使用方能直接写在配置里
+indexmap = { version = "2", features = ["serde"] }
+# 按文件头（magic number）识别类型、按扩展名推断类型（hygiea-aws 的 content_type_of）
+infer = "0.22"
+mime_guess = "2"
+# 内容的 sha256（hygiea-aws 上传前算摘要、带 x-amz-checksum-sha256）和它的 base64
+sha2 = "0.10"
+base64 = "0.22"
+# 百分号编码（hygiea-aws 预签名 GET 的 Content-Disposition 里 filename* 的文件名）
+percent-encoding = "2"
 reqwest = { version = "0.13", features = [
     "json", "query", "form", "stream", "multipart", "charset",
     "gzip", "brotli", "zstd", "deflate",
@@ -110,10 +120,13 @@ regex-automata = "0.4"
 tonic = "0.14"
 tokio-stream = { version = "0.1", features = ["sync", "net"] }
 
-# AWS：公共配置和凭证链，各服务的 SDK 各是一个 crate
-aws-config = "1.12"
+# AWS：公共配置和凭证链，各服务的 SDK 各是一个 crate。
+# 不开默认 feature，只留 tokio 运行时和默认的 HTTPS 客户端（hyper 1 + rustls）：默认 feature 还会带上旧版的 HTTPS 客户端
+# （hyper 0.14 + rustls 0.21，SDK 的 rustls feature）、SSO 的两个 SDK crate、sigv4a 的加密库。
+# 要用的由 hygiea-aws 的 feature 按需打开（sdk-env、sso、credentials-process、s3-sigv4a）
+aws-config = { version = "1.12", default-features = false, features = ["rt-tokio", "default-https-client"] }
 aws-credential-types = "1"
-aws-sdk-s3 = "1.151"
+aws-sdk-s3 = { version = "1.151", default-features = false, features = ["rt-tokio", "default-https-client"] }
 
 # Time
 chrono = { version = "0.4", features = ["serde"] }

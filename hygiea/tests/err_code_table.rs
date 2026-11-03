@@ -22,7 +22,10 @@ fn table() -> String {
     let mut out = String::from("| 错误码 | 变体 | 模板 |\n|---|---|---|\n");
     for r in regs {
         let tpl = r.err_tpl.replace('|', "\\|").replace('\n', " ");
-        out.push_str(&format!("| `{}` | `{}` | {} |\n", r.err_code, r.err_name, tpl));
+        out.push_str(&format!(
+            "| `{}` | `{}` | {} |\n",
+            r.err_code, r.err_name, tpl
+        ));
     }
     out
 }
@@ -31,8 +34,13 @@ fn table() -> String {
 fn readme_err_code_table_is_current() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../README.md");
     let readme = std::fs::read_to_string(path).unwrap();
-    let begin = readme.find(BEGIN).expect("README 里没有 <!-- gen:err-codes --> 标记") + BEGIN.len();
-    let end = readme.find(END).expect("README 里没有 <!-- /gen:err-codes --> 标记");
+    let begin = readme
+        .find(BEGIN)
+        .expect("README 里没有 <!-- gen:err-codes --> 标记")
+        + BEGIN.len();
+    let end = readme
+        .find(END)
+        .expect("README 里没有 <!-- /gen:err-codes --> 标记");
     let expected = format!("\n{}", table());
     if readme[begin..end] == expected {
         return;

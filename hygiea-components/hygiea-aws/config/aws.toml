@@ -1,32 +1,56 @@
-# AwsConfig（hygiea::aws，feature aws-s3）的配置模板
+# S3Config（hygiea::aws，feature aws-s3）的配置模板
 #
 # 列出全部配置项：生效的值等于代码默认值，默认不启用的可选项写成注释。复制到自己项目的 config/<env>.toml，
-# 删掉用不到的项、改需要改的值；只需要写和默认值不同的项。互斥的写法（二选一）都在这里，注释里写明了怎么切换。
-# 段名 [aws] 是应用配置结构体里这个字段的名字（`struct AppConfig { aws: AwsConfig, .. }`），按自己的改。
+# 删掉用不到的项、改需要改的值；只需要写和默认值不同的项。
+# 段名 [s3] 是应用配置结构体里这个字段的名字（`struct AppConfig { s3: S3Config, .. }`），按自己的改。
 # 通用规则（写错的配置项启动报错、配置来源的覆盖顺序、环境变量写法）见 hygiea 的 README「配置」。
 #
-# 本文件由所在 crate 的 src/config.rs 的单元测试（template_is_code_defaults） 按 AwsConfig 解析校验，改了配置结构体要同步改这里。
+# 本文件由所在 crate 的 src/s3/config.rs 的单元测试（template_is_code_defaults） 按 S3Config 解析校验，改了配置结构体要同步改这里。
 
-# 所有服务共用的配置，对应 aws_config::SdkConfig。都不写时走 AWS 官方的默认链：
-# 环境变量（AWS_REGION、AWS_ACCESS_KEY_ID、AWS_ENDPOINT_URL 等）、~/.aws/config 和 ~/.aws/credentials、
-# 容器和 EC2 的实例凭证。写了的项优先于默认链
-[aws]
-# 区域，比如 "us-east-1"；Cloudflare R2 填 "auto"
+[s3]
+
+# ---- 客户端：连哪个服务、用什么凭证 ----
+# 默认的客户端 [s3.default] 必须写；其他客户端一个名字一段，写成 [s3.extra.<名字>]，名字不能是空的、不能是 default，配置项和默认的客户端一样。
+# 默认只用这里写的，不读 SDK 自己的环境（AWS_* 环境变量、~/.aws、实例凭证）：region、credentials 必须写，不能写 profile
+[s3.default]
+# 没写的项让 SDK 从环境加载（AWS_REGION、AWS_ACCESS_KEY_ID、AWS_ENDPOINT_URL 等环境变量、~/.aws/config 和 ~/.aws/credentials、
+# 容器和 EC2 的实例凭证），写了的项优先。要开 hygiea 的 aws-sdk-env feature，没开时设了启动报错
+# use_sdk_env = false
+# 区域，比如 "us-east-1"；Cloudflare R2 填 "auto"；RustFS、MinIO 随便填一个（一般是 "us-east-1"）
 # region = "auto"
-# 连兼容 S3 的第三方服务（R2、MinIO、七牛）时填
+# 服务地址，连兼容 S3 的第三方服务（R2、RustFS、MinIO）时填；连 AWS 不用填，按 region 算出官方地址
 # endpoint_url = "https://<ACCOUNT_ID>.r2.cloudflarestorage.com"
-# ~/.aws/config 里的 profile 名，不写用 AWS_PROFILE 或 default
+# 预签名 URL（给前端等外部直接访问）对外的地址，只能写 scheme、host、端口，带路径启动报错；不写就是服务地址。
+# 签名照常按服务地址算，签完把 URL 的 scheme://host[:port] 换成它，配合反向代理用（内网的 RustFS 经公网域名访问、R2 换成自己的域名）。
+# 代理转给服务时要把 Host 头改回服务地址的 host（带端口），除了 presign_path_prefix 不改路径、不改 query，否则验签失败
+# presign_public_origin = "https://x.com"
+# 签完名插到预签名 URL 路径最前面的一段（如 "/s3"），不参与签名，给反向代理按路径分流，代理转给服务之前要切掉它。
+# 以 / 开头，结尾的 / 去掉，不能是 /、中间不能有 //
+# presign_path_prefix = "/s3"
+# ~/.aws/config 里的 profile 名，不写用 AWS_PROFILE 或 default。只在 use_sdk_env 时能用
 # profile = "default"
-# 写死的凭证，写了就不走默认的凭证链；session_token 只有临时凭证（STS）才有
+# 写死的凭证（use_sdk_env 时写了就不从环境取）；session_token 只有临时凭证（STS）才有。
+# 不要写进提交的文件，用环境变量按名字给：<前缀>__S3__DEFAULT__CREDENTIALS__ACCESS_KEY_ID、<前缀>__S3__EXTRA__<名字>__CREDENTIALS__.. 等
 # credentials = { access_key_id = "...", secret_access_key = "...", session_token = "..." }
-
-# S3 专属项，叠加在上面的公共配置之上
-[aws.s3]
-# 只给 S3 用的 endpoint，覆盖上面的 endpoint_url
-# endpoint_url = "http://localhost:9000"
-# 用路径形式寻址（https://host/bucket/key）。MinIO、RustFS 这类自建服务一般要开，AWS 和 R2 不用
-force_path_style = false
+# 用路径形式寻址（https://host/bucket/key）。RustFS、MinIO 这类自建服务一般要开，AWS 和 R2 不用
+# force_path_style = false
+# 能不能管理 bucket：开了时启动发现 bucket 不存在就建、删 bucket 的方法能用；没开时 bucket 不存在启动报错。
+# 要开 hygiea 的 aws-s3-bucket-admin feature，没开时设了启动报错；凭证也要有对应的权限
+# （R2 是 Admin Read & Write，AWS、RustFS 是策略里允许 s3:CreateBucket 等）
+# manage_buckets = false
 # 什么时候给请求算校验和 / 校验响应的校验和：when_supported / when_required。
-# 不写用 SDK 默认的 when_supported；不认新校验和头的第三方服务报错时改成 when_required
+# 不写用 SDK 默认的 when_supported；不认新校验和请求头的第三方服务报错时改成 when_required
 # request_checksum_calculation = "when_required"
 # response_checksum_validation = "when_required"
+
+# ---- bucket：每个客户端都要有默认 bucket [s3.default.buckets.default]，段名就是 default
+# （代码里默认客户端的用 store.default_client_default_bucket()，其他客户端的用 store.client_default_bucket("<名字>")）；
+# 其他 bucket 一个段名一段，写成 [s3.default.buckets.extra.<段名>]，段名不能是空的、不能是 default，配置项和默认 bucket 一样 ----
+# 启动时每个 bucket 发一次 HeadBucket 检查：不存在时客户端开了 manage_buckets 就建，没开报错；没权限、网络错误都报错，启动失败
+[s3.default.buckets.default]
+# 服务上实际的 bucket 名，不写就是段名（默认 bucket 是 default）。各环境的 bucket 名不一样时写。
+# 不能是空的，不能和同一个客户端下别的段的段名一样；同一个客户端下各段的实际 bucket 名不能重复，否则启动报错
+# name = "myapp-files"
+# 这个 bucket 预签名 URL 的最长有效期：签名时传的有效期不能超过它，不传就用它。
+# 写成带单位的字符串（"30m"、"1h"、"7d"），要在 1 秒到 7 天之间，否则启动报错
+# presign_max_expires_in = "7d"

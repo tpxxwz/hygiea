@@ -1,33 +1,9 @@
-//! 公共配置 [`AwsConfig`]：所有服务共用的项，加载成 `SdkConfig`。
+//! 各服务共用的部分：写死的凭证 [`StaticCredentials`]；开了 `sdk-env` 时按 region、endpoint、profile、凭证从 SDK 环境加载 `SdkConfig`。
 
 use std::fmt;
 
-use aws_config::{BehaviorVersion, Region, SdkConfig};
 use aws_credential_types::Credentials;
 use serde::Deserialize;
-
-#[cfg(feature = "s3")]
-use crate::s3::S3Config;
-
-/// `aws_config::SdkConfig` 的配置文件镜像。没写的项走 AWS 官方的默认链：
-/// 环境变量（`AWS_REGION`、`AWS_ACCESS_KEY_ID`、`AWS_ENDPOINT_URL` 等）、`~/.aws/config` 和
-/// `~/.aws/credentials`、容器和 EC2 的实例凭证。写了的项优先于默认链。
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct AwsConfig {
-    /// 区域，比如 `us-east-1`；Cloudflare R2 填 `auto`。不写走默认链
-    pub region: Option<String>,
-    /// 所有服务共用的 endpoint，连兼容 S3 的第三方服务（R2、MinIO、七牛）时填。
-    /// 不写走默认链，都没有就用 AWS 按 region 算出的官方地址
-    pub endpoint_url: Option<String>,
-    /// `~/.aws/config` 里的 profile 名，不写用 `AWS_PROFILE` 或 `default`
-    pub profile: Option<String>,
-    /// 写死的 AccessKey / SecretKey。写了就不走默认的凭证链
-    pub credentials: Option<StaticCredentials>,
-    /// S3 的专属配置，叠加在上面的公共配置之上
-    #[cfg(feature = "s3")]
-    pub s3: S3Config,
-}
 
 /// 写死在配置里的凭证。`Debug` 不输出 secret 和 session token
 #[derive(Clone, Deserialize)]
@@ -50,78 +26,54 @@ impl fmt::Debug for StaticCredentials {
     }
 }
 
-impl AwsConfig {
-    /// 按配置加载 `SdkConfig`。默认链里的凭证是用到时才解析的，所以这里不会因为凭证缺失而失败，
-    /// 第一次调用服务时才会报错
+impl StaticCredentials {
+    /// SDK 的凭证类型
     // 没开任何服务 feature 时没有调用方
     #[cfg_attr(not(feature = "s3"), allow(dead_code))]
-    pub(crate) async fn load(&self) -> SdkConfig {
-        let mut loader = aws_config::defaults(BehaviorVersion::latest());
-        if let Some(region) = &self.region {
-            loader = loader.region(Region::new(region.clone()));
-        }
-        if let Some(url) = &self.endpoint_url {
-            loader = loader.endpoint_url(url);
-        }
-        if let Some(profile) = &self.profile {
-            loader = loader.profile_name(profile);
-        }
-        if let Some(c) = &self.credentials {
-            loader = loader.credentials_provider(Credentials::new(
-                &c.access_key_id,
-                &c.secret_access_key,
-                c.session_token.clone(),
-                None,
-                "hygiea-config",
-            ));
-        }
-        loader.load().await
+    pub(crate) fn to_sdk(&self) -> Credentials {
+        Credentials::new(
+            &self.access_key_id,
+            &self.secret_access_key,
+            self.session_token.clone(),
+            None,
+            "hygiea-config",
+        )
     }
+}
+
+/// 按配置加载 `SdkConfig`，没给的项由 SDK 从环境加载：环境变量（`AWS_REGION`、`AWS_ACCESS_KEY_ID`、`AWS_ENDPOINT_URL` 等）、
+/// `~/.aws/config` 和 `~/.aws/credentials`、容器和 EC2 的实例凭证。给了的项优先。
+/// 环境里的凭证是用到时才解析的，所以这里不会因为凭证缺失而失败，第一次调用服务时才会报错
+#[cfg(feature = "sdk-env")]
+// 没开任何服务 feature 时没有调用方
+#[cfg_attr(not(feature = "s3"), allow(dead_code))]
+pub(crate) async fn load_sdk_config(
+    region: Option<&str>,
+    endpoint_url: Option<&str>,
+    profile: Option<&str>,
+    credentials: Option<&StaticCredentials>,
+) -> aws_config::SdkConfig {
+    use aws_config::{BehaviorVersion, Region};
+
+    let mut loader = aws_config::defaults(BehaviorVersion::latest());
+    if let Some(region) = region {
+        loader = loader.region(Region::new(region.to_owned()));
+    }
+    if let Some(url) = endpoint_url {
+        loader = loader.endpoint_url(url);
+    }
+    if let Some(profile) = profile {
+        loader = loader.profile_name(profile);
+    }
+    if let Some(credentials) = credentials {
+        loader = loader.credentials_provider(credentials.to_sdk());
+    }
+    loader.load().await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// 配置模板 `config/aws.toml` 就是代码里的默认值：按配置结构体解析（deny_unknown_fields，写错、多写的项解析失败），
-    /// 结构体没有实现 PartialEq，比 Debug 输出。模板里有 `[aws.s3]`，要开 `s3`
-    #[cfg(feature = "s3")]
-    #[test]
-    fn template_is_code_defaults() {
-        #[derive(serde::Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Template {
-            aws: AwsConfig,
-        }
-        let template: Template = toml::from_str(include_str!("../config/aws.toml")).unwrap();
-        assert_eq!(
-            format!("{:?}", template.aws),
-            format!("{:?}", AwsConfig::default())
-        );
-    }
-
-    /// 配置文件写法：公共项加上 `[s3]` 子表
-    #[test]
-    fn deserializes_from_toml() {
-        let c: AwsConfig = toml::from_str(
-            r#"
-            region = "auto"
-            endpoint_url = "https://example.r2.cloudflarestorage.com"
-            credentials = { access_key_id = "ak", secret_access_key = "sk" }
-            "#,
-        )
-        .unwrap();
-        assert_eq!(c.region.as_deref(), Some("auto"));
-        let creds = c.credentials.unwrap();
-        assert_eq!(creds.access_key_id, "ak");
-        assert_eq!(creds.session_token, None);
-    }
-
-    /// 拼错的项启动时报错，不被静默忽略
-    #[test]
-    fn rejects_unknown_fields() {
-        assert!(toml::from_str::<AwsConfig>(r#"regoin = "x""#).is_err());
-    }
 
     /// Debug 不输出 secret 和 session token
     #[test]
@@ -137,20 +89,22 @@ mod tests {
         assert!(!out.contains("token-secret"));
     }
 
-    /// 写了的项优先于默认链
+    /// 给了的项优先于 SDK 环境
+    #[cfg(feature = "sdk-env")]
     #[tokio::test]
     async fn load_applies_explicit_values() {
-        let c = AwsConfig {
-            region: Some("auto".into()),
-            endpoint_url: Some("https://example.com".into()),
-            credentials: Some(StaticCredentials {
-                access_key_id: "ak".into(),
-                secret_access_key: "sk".into(),
-                session_token: None,
-            }),
-            ..AwsConfig::default()
+        let credentials = StaticCredentials {
+            access_key_id: "ak".into(),
+            secret_access_key: "sk".into(),
+            session_token: None,
         };
-        let sdk = c.load().await;
+        let sdk = load_sdk_config(
+            Some("auto"),
+            Some("https://example.com"),
+            None,
+            Some(&credentials),
+        )
+        .await;
         assert_eq!(sdk.region().map(|r| r.as_ref()), Some("auto"));
         assert_eq!(sdk.endpoint_url(), Some("https://example.com"));
         assert!(sdk.credentials_provider().is_some());

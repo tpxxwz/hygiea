@@ -29,6 +29,7 @@
 | 动态配置 | `hygiea-db/src/live_config/mod.rs`、`hygiea-macros/src/live_config.rs` | `docs/design/live-config.md` |
 | 数据库组件 | `hygiea-db/src/lib.rs`、`component.rs`（`uses`、建和关的顺序）、`build.rs`（feature 组合的 cfg 别名） | |
 | HTTP 客户端 | `hygiea-http-client/src/reqwest_client/mod.rs` | `docs/design/http-client.md` |
+| S3 | `hygiea-aws/src/s3/mod.rs` | `docs/design/aws-s3.md` |
 | 宏生成的代码怎么引用 hygiea | `hygiea-macros/src/krate.rs` | |
 | 测试分层、给使用方的测试工具 | `hygiea-test/src/lib.rs` | 容器：`docs/design/test-container.md` |
 | 还没做的、没定的 | `docs/todo/` | |
@@ -51,7 +52,9 @@
     参考 `research/db-drivers` 分支
   - 连接池一种数据库一个文件（`sqlx/pool/`、`seaorm/pool/`），再导出到 crate 根
 - hygiea-http-client：`lib.rs` 按 feature 声明各实现的模块，不在 crate 根上再导出（以后加别的实现时名字不撞）；`reqwest_client/mod.rs` 只放结构说明和再导出
-- hygiea-aws：`AwsConfig` 是所有服务共用的配置，每个服务一个子配置，在它上面叠加
+- hygiea-aws：每个服务一个组件、一个 `src/<服务>/` 目录，配置里按名字建多个客户端（S3 的客户端下面再嵌套 bucket）。
+  客户端默认只用配置里写的，不读 SDK 自己的环境；读 SDK 环境（aws-config）只在 `sdk-env` feature 下。
+  各服务共用的只放在 `src/config.rs`：写死的凭证、按 SDK 环境加载 `SdkConfig`
 - 框架和每个组件的配置模板在各自 crate 的 `config/` 下。改了配置结构体同步改模板，结构体所在源文件的单元测试 `template_is_code_defaults`
   会按结构体解析模板（`deny_unknown_fields`）并确认和 `Default` 一致（db 的模板例外：`uses` 写全开、各段都列出来，对照全开的配置）
 
@@ -63,11 +66,12 @@
   新加模块按区间取号，取完更新 README「保留和内置错误码」的区间表（错误码表本身是生成的，见「文档」）：
   - `000`、`999`：`BaseErr`（不写前缀，5 位码），只用 `000xx` 和兜底的 `99999`
   - `001`～`089`：core（app `001`、log `002`、lock `003`）；`090`～`099`：core 测试里自定义的错误 enum
-  - `100`～`799`：components（db `100`、http-client `101`）
+  - `100`～`799`：components（db `100`、http-client `101`、aws `102`）
   - `800`～`998`：hygiea-test（http_mock `800` / `801`）
 - 组件的错误：只看配置值本身就能判断的（解析不了、不在允许的取值里、范围不对、几项互相矛盾、写重了），报 `AppErr::InvalidConfig`，
   具体是哪一项、怎么不对写进 cause，不为它另定义组件自己的变体。运行起来和外部交互出的错（连不上、服务端不存在、没权限），
-  以及按名字取资源取不到这类，报组件自己的具体错误，带上能排查的参数
+  以及按名字取资源取不到这类，报组件自己的具体错误，带上能排查的参数。调用方传的参数不合规则的（文件名、key 前缀、有效期这类），
+  也报组件自己的变体，不报 `InvalidConfig`：它们不是配置
 - 一个配置按开关建多个资源的组件参考 hygiea-db：几种连接池共用一个泛型组件（`DbComponent<C>`），
   不经过 Registry 用 `DbResources::from_config` 一次建出全部
 
@@ -118,15 +122,14 @@
 
 ## 怎么验证
 
-- nextest 的配置在 `.config/nextest.toml`：默认不跑 trybuild（`_ui` 结尾的测试二进制）和 live 层。命令：
-  - 全量：`cargo nextest run --workspace --all-features --run-ignored all`（默认、container 层；要 Docker）。
-    跑完看一眼 Summary 里的 skipped，应该只有 live 层那 1 个。本机有 Docker，container 层直接跑，不用问
-  - trybuild：`cargo nextest run --workspace --all-features --ignore-default-filter -E 'binary(/_ui$/)'`
-  - doc test：可运行的只有 core 里的两个
-  - live 层：默认过滤已经排除了它，不要用 `--ignore-default-filter`、`-E 'test(/::live::/)'`
-- 改了有 container 层测试的代码，一定跑对应 crate 的 container 层。
-- 仓库目前没有 CI。以后加 CI 时：普通测试 `cargo nextest run --workspace --all-features`；有 Docker 的 runner 上加
-  `--run-ignored all`；trybuild、doc test 另跑；live 层不放进 CI。
+- 只跑改动涉及的 crate（`-p <crate>`），收尾也一样；clippy、rustdoc 同样按 crate 跑。`--workspace` 的全量只在用户要求时跑。
+- 测试用 nextest，配置在 `.config/nextest.toml`，默认不跑 trybuild（`_ui` 结尾的测试二进制）和 live 层：
+  - 改了的 crate：`cargo nextest run -p <crate> <测试文件头写的 feature> --run-ignored all`（普通测试加 container 层；本机有 Docker，不用问）
+  - 改了宏：只跑改到的那个 trybuild（见下面重新生成快照的命令，去掉 `TRYBUILD=overwrite` 就是只跑不改）
+  - doc test：可运行的只有 core 里的两个，改到它们时跑 `cargo test -p hygiea-core --all-features --doc`
+  - live 层：agent 不跑，不要用 `--ignore-default-filter`、`-E 'test(/::live::/)'` 把它选进来
+- 全量（用户要求时）：`cargo nextest run --workspace --all-features --run-ignored all`，Summary 里 skipped 的应该只有 live 层。
+  以后加 CI 用：普通测试 `cargo nextest run --workspace --all-features`，有 Docker 的 runner 加 `--run-ignored all`，live 层不放进 CI
 - 重新生成 trybuild 快照（只跑改到的那个 `--test`）：
   - hygiea-macros：`TRYBUILD=overwrite cargo test -p hygiea-macros --test hy_err_ui --test redact_ui --test component_ui --test lock_ui --test live_ui`
   - `#[container]` / `#[live]`：`TRYBUILD=overwrite cargo test -p hygiea-test-macros --test test_tier_ui`
@@ -142,11 +145,13 @@
 | 模块、文件是什么，用法、行为、配置、限制、注意事项（使用方看得到、要依赖的） | 它自己的 `//!` / `///`。`//!` 的第一段写一两句话的概括（`tools/docs.py tree` 和示例列表取的就是它），`src/` 下每个 `.rs` 都要有 |
 | 内部流程、实现方式、为什么这样做、考虑过不用的方案（使用方看不到的） | `docs/design/<主题>.md`，开头链到对应的模块文档，不重复写行为 |
 | 还没做的、没定的，以及为它做的调查 | `docs/todo/<主题>.md`。做完的从 todo 删掉：用法和行为写进 rustdoc，原因和机制写进 design，调查记录随条目删掉、结论留在 design |
-| 给使用方的入口 | `README.md`：定位、安装、feature 表和组件表、core 的简短用法、错误码规则；组件每项一句话加链接，细节在组件 crate 的文档 |
+| 给使用方的入口 | `README.md`：定位、安装、feature 表和组件表、core 的简短用法、错误码规则；组件每项一句话，细节在组件 crate 的文档 |
 | 示例列表 | `hygiea-examples/README.md`，生成的 |
 
 - 一句话里既有行为又有原因的拆开：行为写进 rustdoc，原因写进 design。
 - 文件的 `//!` 跟着代码一起改（它是代码的一部分）；README、design、todo 的同步等用户说「收尾」再做。
+- README 的组件表、feature 表每项一句话：提供什么（入口类型、资源），不链到源文件（模块文档从本文件「从哪里开始看」找）。方法名、参数、key 怎么拼、常量这类细节
+  只写 rustdoc 和 design，收尾时 API 改了不往 README 里补；写之前先看同一张表别的行写到多细，跟它们对齐。
 - 不维护目录、文件清单这类文档：要看结构跑 `tools/docs.py tree [路径]`。
 - `<!-- gen:xxx -->` 和 `<!-- /gen:xxx -->` 之间是生成的，不要手改：README 的内置错误码表（`hygiea/tests/err_code_table.rs`）、
   示例列表。改了错误码、示例、feature 后跑 `tools/docs.py gen`，再跑 `tools/docs.py check`。
