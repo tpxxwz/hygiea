@@ -18,7 +18,8 @@ pub use bucket::{
     PutOutcome, S3Bucket, S3BucketHandle, S3BucketWithPrefix, S3KeyPrefix,
 };
 pub use config::{
-    ChecksumWhen, S3BucketConfig, S3BucketsConfig, S3ClientConfig, S3Config, S3Region,
+    ChecksumWhen, DEFAULT_CLIENT_SECTION, S3BucketConfig, S3BucketsConfig, S3ClientConfig,
+    S3Config, S3Region,
 };
 pub use error::S3Err;
 pub use store::{AwsS3Component, AwsS3Store, S3BucketName};

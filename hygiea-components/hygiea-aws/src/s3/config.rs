@@ -9,8 +9,9 @@ use serde::Deserialize;
 
 use crate::StaticCredentials;
 
-/// 默认客户端的段名：报错时当客户端名用，[`S3Config::extra`] 里不能用它
-pub(crate) const DEFAULT_CLIENT_SECTION: &str = "default";
+/// 默认客户端的段名：报错时当客户端名用，[`S3Config::extra`] 里不能用它。
+/// 调用方要在日志、错误里指明是默认客户端时也用它
+pub const DEFAULT_CLIENT_SECTION: &str = "default";
 
 /// 默认 bucket 的段名：没写 `name` 时就是实际的 bucket 名，[`S3BucketsConfig::extra`] 里不能用它
 pub(crate) const DEFAULT_BUCKET_SECTION: &str = "default";

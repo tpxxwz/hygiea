@@ -58,10 +58,10 @@ mod s3;
 pub use config::StaticCredentials;
 #[cfg(feature = "s3")]
 pub use s3::{
-    AwsS3Component, AwsS3Store, ChecksumWhen, ObjectMeta, ObjectStream, PresignGetOptions,
-    PutDecision, PutDigest, PutFile, PutKey, PutOutcome, S3Bucket, S3BucketConfig, S3BucketHandle,
-    S3BucketName, S3BucketWithPrefix, S3BucketsConfig, S3ClientConfig, S3Config, S3Err,
-    S3KeyPrefix, S3Region,
+    AwsS3Component, AwsS3Store, ChecksumWhen, DEFAULT_CLIENT_SECTION, ObjectMeta, ObjectStream,
+    PresignGetOptions, PutDecision, PutDigest, PutFile, PutKey, PutOutcome, S3Bucket,
+    S3BucketConfig, S3BucketHandle, S3BucketName, S3BucketWithPrefix, S3BucketsConfig,
+    S3ClientConfig, S3Config, S3Err, S3KeyPrefix, S3Region,
 };
 
 // ---------------------------- 再导出 ----------------------------
