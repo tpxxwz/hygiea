@@ -11,6 +11,7 @@ use std::sync::OnceLock;
 
 use linkme::distributed_slice;
 use minijinja::Environment;
+use minijinja::value::Serde;
 
 use crate::builtin::LOCK_CODE;
 
@@ -116,7 +117,7 @@ impl LockType {
 ///
 /// 模板渲染失败（`{ .. }` 写法里 key 用了表达式，编译期查不了，运行时缺变量）时 [`as_str`](Self::as_str) 返回错误
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct LockKey(pub(super) std::result::Result<String, String>);
+pub struct LockKey(pub(super) Result<String, String>);
 
 /// key 开头 `<9 位编号>:` 的长度：编号是 9 位数字，前缀都是 ASCII
 const PREFIX_LEN: usize = 10;
@@ -200,7 +201,7 @@ pub fn registered(value: i32) -> LockType {
 pub fn lock_key(code: &'static str, args: Option<serde_json::Value>) -> LockKey {
     let rendered = templates()
         .get_template(code)
-        .and_then(|tpl| tpl.render(args.unwrap_or_default()))
+        .and_then(|tpl| tpl.render(Serde(args.unwrap_or_default())))
         .map(|rendered| format!("{code}:{rendered}"))
         .map_err(|e| format!("{code}: {e}"));
     LockKey(rendered)

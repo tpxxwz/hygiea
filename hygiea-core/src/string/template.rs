@@ -2,6 +2,7 @@
 
 use crate::{BaseErr, HyErr, Result, ResultExt, bail, err};
 use lru::LruCache;
+use minijinja::value::Serde;
 use minijinja::{Environment, UndefinedBehavior};
 use parking_lot::RwLock;
 use serde::Serialize;
@@ -35,14 +36,16 @@ static CACHE: LazyLock<RwLock<LruCache<String, Arc<Environment<'static>>>>> =
 /// 渲染模板，不缓存，每次重新解析。语法错误、变量缺失（Strict 模式）返回 `TemplateError`，
 /// minijinja 的原始错误挂在 source 上
 pub fn tpl_once(source: &str, args: impl Serialize) -> Result<String> {
-    ONCE_ENV.render_str(source, args).wrap_err(render_failed)
+    ONCE_ENV
+        .render_str(source, Serde(args))
+        .wrap_err(render_failed)
 }
 
 /// 渲染模板，解析结果按模板原文缓存复用（上限 1024 条，满了淘汰最早插入的）。错误同 [`tpl_once`]
 pub fn tpl_cached(source: &str, args: impl Serialize) -> Result<String> {
     let env = cached_env(source)?;
     env.get_template(NAME)
-        .and_then(|t| t.render(args))
+        .and_then(|t| t.render(Serde(args)))
         .wrap_err(render_failed)
 }
 

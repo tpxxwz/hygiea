@@ -170,7 +170,7 @@ async fn sdk_env_builder(name: &str, config: &S3ClientConfig) -> Result<Builder>
 
 #[cfg(not(feature = "sdk-env"))]
 async fn sdk_env_builder(name: &str, _config: &S3ClientConfig) -> Result<Builder> {
-    hygiea_core::bail!(
+    bail!(
         AppErr::InvalidConfig,
         format!("s3 client {name:?}: use_sdk_env needs hygiea feature aws-sdk-env")
     )

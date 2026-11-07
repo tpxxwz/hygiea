@@ -1,6 +1,7 @@
 //! 错误体系：统一的错误类型 `HyErr`、`err!` / `bail!`、内置错误 `BaseErr`，以及错误码的注册（`#[derive(hy_err)]` 生成）和进程启动时的查重。
 
 use linkme::distributed_slice;
+use minijinja::value::Serde;
 use minijinja::{Environment, UndefinedBehavior};
 use std::backtrace::{Backtrace, BacktraceStatus};
 use std::collections::HashSet;
@@ -176,7 +177,7 @@ impl HyErr {
     fn write_message(&self, f: &mut fmt::Formatter<'_>, detailed: bool) -> fmt::Result {
         let rendered = templates()
             .get_template(self.err_code)
-            .and_then(|template| template.render(&self.err_args));
+            .and_then(|template| template.render(Serde(&self.err_args)));
         match rendered {
             Ok(output) => f.write_str(&output),
             Err(e) => {

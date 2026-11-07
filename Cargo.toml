@@ -24,7 +24,7 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 authors = ["wjj"]
 repository = "https://github.com/tpxxwz/hygiea"
-rust-version = "1.94.1"
+rust-version = "1.95"
 
 [workspace.dependencies]
 # 内部依赖，版本由 release/release.sh（cargo set-version）发版时自动对齐，无需手动修改
@@ -58,11 +58,11 @@ humantime-serde = "1.1"
 serde_json = "1.0"
 linkme = "0.3"
 ctor = "1.0"
-minijinja = "2.24"
-parking_lot = "0.12"
+minijinja = { version = "3.0", features = ["serde"] }
+parking_lot = "0.13"
 dashmap = "6.2"
 xxhash-rust = "0.8"
-lru = "0.18"
+lru = "0.19"
 
 # CLI & 配置文件加载
 clap   = { version = "4.6", features = ["derive"] }
@@ -70,7 +70,7 @@ config = "0.15"
 
 # 可选功能依赖
 # 不在这里开 features：workspace 继承只能加不能减，各 crate 按实际用到的自己声明
-tokio = { version = "1.53", default-features = false }
+tokio = { version = "1.54", default-features = false }
 async-trait = "0.1"
 anyhow = "1.0"
 
@@ -99,8 +99,8 @@ indexmap = { version = "2", features = ["serde"] }
 infer = "0.22"
 mime_guess = "2"
 # 内容的 sha256（hygiea-aws 上传前算摘要、带 x-amz-checksum-sha256）和它的 base64
-sha2 = "0.10"
-base64 = "0.22"
+sha2 = "0.11"
+base64 = "0.23"
 # 百分号编码（hygiea-aws 预签名 GET 的 Content-Disposition 里 filename* 的文件名）
 percent-encoding = "2"
 reqwest = { version = "0.13", features = [
@@ -124,9 +124,9 @@ tokio-stream = { version = "0.1", features = ["sync", "net"] }
 # 不开默认 feature，只留 tokio 运行时和默认的 HTTPS 客户端（hyper 1 + rustls）：默认 feature 还会带上旧版的 HTTPS 客户端
 # （hyper 0.14 + rustls 0.21，SDK 的 rustls feature）、SSO 的两个 SDK crate、sigv4a 的加密库。
 # 要用的由 hygiea-aws 的 feature 按需打开（sdk-env、sso、credentials-process、s3-sigv4a）
-aws-config = { version = "1.12", default-features = false, features = ["rt-tokio", "default-https-client"] }
+aws-config = { version = "1.13", default-features = false, features = ["rt-tokio", "default-https-client"] }
 aws-credential-types = "1"
-aws-sdk-s3 = { version = "1.151", default-features = false, features = ["rt-tokio", "default-https-client"] }
+aws-sdk-s3 = { version = "1.157", default-features = false, features = ["rt-tokio", "default-https-client"] }
 
 # Time
 chrono = { version = "0.4", features = ["serde"] }
@@ -141,6 +141,6 @@ testcontainers = { version = "0.28", features = ["http_wait_plain"] }
 tempfile = "3.27"
 # hygiea-test 的 http-mock：本地 mock HTTP 服务（再导出给使用方）、cassette 里的 Rhai 脚本、
 # 脚本里解析表单 body
-httpmock = "0.8"
-rhai = { version = "1.26", features = ["sync", "serde"] }
+httpmock = "0.9"
+rhai = { version = "1.27", features = ["sync", "serde"] }
 form_urlencoded = "1"
