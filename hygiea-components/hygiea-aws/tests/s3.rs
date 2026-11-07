@@ -1040,10 +1040,9 @@ mod rustfs {
         }
     }
 
-    /// 本地反向代理：请求路径以 `prefix` 开头的切掉它，Host 头改成 `upstream`（`host:port`，和签名时的服务地址一样），
-    /// query 原样，转给 `upstream`。每个连接只转一个请求（只读请求头，给 GET 用），返回代理的地址 `127.0.0.1:<端口>`
-    async fn start_proxy(upstream: String, prefix: &'static str) -> String {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    /// 本地反向代理：请求原样（Host 头、路径、query 都不改）转给 `upstream`（`host:port`），
+    /// 返回代理的地址 `127.0.0.1:<端口>`
+    async fn start_proxy(upstream: String) -> String {
         use tokio::net::{TcpListener, TcpStream};
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1053,31 +1052,7 @@ mod rustfs {
                 let (mut downstream, _) = listener.accept().await.unwrap();
                 let upstream = upstream.clone();
                 tokio::spawn(async move {
-                    let mut head = Vec::new();
-                    let mut buffer = [0; 4096];
-                    while !head.windows(4).any(|w| w == b"\r\n\r\n") {
-                        let read = downstream.read(&mut buffer).await.unwrap();
-                        assert!(read > 0, "connection closed before request head ended");
-                        head.extend_from_slice(&buffer[..read]);
-                    }
-                    let head = String::from_utf8(head).unwrap();
-                    let mut forwarded = String::new();
-                    for (index, line) in head.split("\r\n").enumerate() {
-                        if index > 0 {
-                            forwarded.push_str("\r\n");
-                        }
-                        if index == 0 {
-                            let (method, target) = line.split_once(' ').unwrap();
-                            let target = target.strip_prefix(prefix).unwrap();
-                            forwarded.push_str(&format!("{method} {target}"));
-                        } else if line.to_ascii_lowercase().starts_with("host:") {
-                            forwarded.push_str(&format!("host: {upstream}"));
-                        } else {
-                            forwarded.push_str(line);
-                        }
-                    }
                     let mut upstream = TcpStream::connect(&upstream).await.unwrap();
-                    upstream.write_all(forwarded.as_bytes()).await.unwrap();
                     tokio::io::copy_bidirectional(&mut downstream, &mut upstream)
                         .await
                         .ok();
@@ -1087,16 +1062,15 @@ mod rustfs {
         addr
     }
 
-    /// 配了 presign_public_origin（代理的地址）和 presign_path_prefix：签完 URL 换成代理的地址、路径前面插了前缀，
-    /// 经代理切掉前缀、Host 改回服务地址后服务端验签通过，能读到内容
+    /// 配了 presign_public_origin（代理的地址）：按代理的地址签名，经代理原样转给服务后验签通过，能读到内容；
+    /// 服务端照常连服务地址（上传走的是它）
     #[tokio::test]
-    async fn presign_path_prefix_through_proxy() {
+    async fn presign_public_origin_through_proxy() {
         let server = start().await;
         let upstream = server.endpoint().trim_start_matches("http://").to_owned();
-        let proxy = start_proxy(upstream, "/s3").await;
+        let proxy = start_proxy(upstream).await;
         let client = S3ClientConfig {
             presign_public_origin: Some(format!("http://{proxy}")),
-            presign_path_prefix: Some("/s3".into()),
             ..client_config(&server, server.secret_key(), default_bucket_named("test"))
         };
         let store = AwsS3Store::from_config(&s3_config(client), &Default::default())
@@ -1116,7 +1090,7 @@ mod rustfs {
             .await
             .unwrap();
         assert!(
-            url.starts_with(&format!("http://{proxy}/s3/test/{key}?")),
+            url.starts_with(&format!("http://{proxy}/test/{key}?")),
             "{url}"
         );
         let response = reqwest::get(&url).await.unwrap();

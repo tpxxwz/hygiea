@@ -232,8 +232,7 @@ pub trait S3BucketHandle: sealed::Sealed + Sync {
     /// 传了的要在 1 秒到它之间，不然报 [`S3Err::InvalidPresignExpiry`](super::S3Err::InvalidPresignExpiry)。
     /// 签名在本地算，不访问服务，也不检查对象在不在。
     /// `options` 签进 URL，读取时覆盖对象上存的响应头（见 [`PresignGetOptions`]），不用覆盖传 `PresignGetOptions::default()`。
-    /// 按服务地址签名；客户端配了 [`presign_public_origin`](super::S3ClientConfig::presign_public_origin)、
-    /// [`presign_path_prefix`](super::S3ClientConfig::presign_path_prefix) 的，签完换掉 URL 的地址、插上路径前缀
+    /// 客户端配了 [`presign_public_origin`](super::S3ClientConfig::presign_public_origin) 的按它签名，没配的按服务地址签名
     async fn presigned_get_url(
         &self,
         key: &str,
@@ -250,12 +249,12 @@ pub trait S3BucketHandle: sealed::Sealed + Sync {
             .set_response_content_type(options.response_content_type)
             .set_response_content_disposition(options.response_content_disposition)
             .set_response_cache_control(options.response_cache_control)
+            .customize()
+            .config_override(bucket.client.presign_config_override())
             .presigned(presigning_config(bucket, &full_key, expires_in)?)
             .await
             .map_err(|e| sdk_error("presign_get_object", &bucket.bucket, &full_key, e))?;
-        bucket
-            .client
-            .finish_presigned_url(request.uri().to_string())
+        Ok(request.uri().to_string())
     }
 }
 

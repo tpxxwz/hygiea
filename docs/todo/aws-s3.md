@@ -34,7 +34,7 @@ AWS 官方的分片上传、下载库：
 
 ## 自定义域名 + CDN 的公开地址（没做，等要用 R2 的自定义域名时再定）
 
-现在给外部的只有预签名 URL（可以用 `presign_public_origin`、`presign_path_prefix` 换成自己的域名，经反向代理转给服务），
+现在给外部的只有预签名 URL（可以用 `presign_public_origin` 换成自己的域名，经反向代理原样转给服务），
 不走 CDN 缓存。想走 Cloudflare 的 CDN，只能给 R2 的 bucket 绑自定义域名：
 
 - R2 的预签名 URL 只能用 S3 API 的域名（`<ACCOUNT_ID>.r2.cloudflarestorage.com`），不能用在自定义域名上；这个域名不走 CDN 缓存

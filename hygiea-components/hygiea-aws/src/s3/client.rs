@@ -14,10 +14,8 @@ use super::{S3ClientConfig, S3Region};
 #[derive(Clone, Debug)]
 pub(super) struct AwsS3Client {
     inner: Client,
-    /// [`S3ClientConfig::presign_public_origin`]，检查、规整过（`scheme://host[:port]`，结尾没有 `/`）
+    /// [`S3ClientConfig::presign_public_origin`]，检查过（`scheme://host[:port]`，结尾可以有 `/`）
     presign_public_origin: Option<String>,
-    /// [`S3ClientConfig::presign_path_prefix`]，检查、规整过（以 `/` 开头，结尾没有 `/`）
-    presign_path_prefix: Option<String>,
     /// 配置里的客户端名，删 bucket 报错时用
     #[cfg_attr(not(feature = "s3-bucket-admin"), allow(dead_code))]
     name: String,
@@ -32,7 +30,7 @@ impl AwsS3Client {
     /// 不用 SDK 环境时少了 `region`、`credentials`，或者写了 `profile`，以及设了 `use_sdk_env` 却没开 `sdk-env` feature，
     /// 报 `AppErr::InvalidConfig`。不发请求；SDK 环境里的凭证用到时才解析，缺了要第一次调用服务时才报错。
     /// 应用名（`registry_config.app_name`）设成 SDK 的 app name，每个请求的 User-Agent 里带上它，服务端的访问日志里能看出是哪个应用发的。
-    /// `presign_public_origin` 带了路径、`presign_path_prefix` 不合规则也报 `AppErr::InvalidConfig`
+    /// `presign_public_origin` 没有 scheme、带了路径也报 `AppErr::InvalidConfig`
     pub(super) async fn from_config(
         name: &str,
         config: &S3ClientConfig,
@@ -44,14 +42,9 @@ impl AwsS3Client {
             AppErr::InvalidConfig,
             format!("s3 client {name:?}: manage_buckets needs hygiea feature aws-s3-bucket-admin")
         );
-        let presign_public_origin = match &config.presign_public_origin {
-            Some(origin) => Some(normalize_presign_public_origin(name, origin)?),
-            None => None,
-        };
-        let presign_path_prefix = match &config.presign_path_prefix {
-            Some(prefix) => Some(normalize_presign_path_prefix(name, prefix)?),
-            None => None,
-        };
+        if let Some(origin) = &config.presign_public_origin {
+            check_presign_public_origin(name, origin)?;
+        }
         let builder = if config.use_sdk_env {
             sdk_env_builder(name, config).await?
         } else {
@@ -66,8 +59,7 @@ impl AwsS3Client {
         let sdk_config = config.apply_s3_options(builder.app_name(app_name)).build();
         Ok(Self {
             inner: Client::from_conf(sdk_config),
-            presign_public_origin,
-            presign_path_prefix,
+            presign_public_origin: config.presign_public_origin.clone(),
             name: name.to_owned(),
             region: config.region.clone(),
             manage_buckets: config.manage_buckets,
@@ -85,18 +77,13 @@ impl AwsS3Client {
         self.manage_buckets
     }
 
-    /// 按服务地址签好的预签名 URL 交出去之前的处理：配置了 [`S3ClientConfig::presign_public_origin`] 的换掉 `scheme://host[:port]`，
-    /// 配置了 [`S3ClientConfig::presign_path_prefix`] 的插到路径最前面，签名覆盖的路径、query 不动
-    pub(super) fn finish_presigned_url(&self, url: String) -> Result<String> {
-        if self.presign_public_origin.is_none() && self.presign_path_prefix.is_none() {
-            return Ok(url);
+    /// 签预签名 URL 时这一次请求要覆盖的配置：配了 [`S3ClientConfig::presign_public_origin`] 的把服务地址换成它，签名就按它算；
+    /// 没配的是空的，什么都不覆盖，按服务地址签
+    pub(super) fn presign_config_override(&self) -> Builder {
+        match &self.presign_public_origin {
+            Some(origin) => Builder::new().endpoint_url(origin),
+            None => Builder::new(),
         }
-        let (origin, path_and_query) = split_origin(&url)?;
-        Ok(format!(
-            "{}{}{path_and_query}",
-            self.presign_public_origin.as_deref().unwrap_or(origin),
-            self.presign_path_prefix.as_deref().unwrap_or("")
-        ))
     }
 
     /// 建 bucket 时要带的 LocationConstraint，规则见 [`S3Region::location_constraint`]；没写 region 不带
@@ -113,8 +100,8 @@ impl Deref for AwsS3Client {
     }
 }
 
-/// `presign_public_origin` 只能有 scheme、host、端口（结尾多一个 `/` 也行），返回去掉结尾 `/` 的。要加路径用 `presign_path_prefix`
-fn normalize_presign_public_origin(name: &str, origin: &str) -> Result<String> {
+/// `presign_public_origin` 只能有 scheme、host、端口（结尾多一个 `/` 也行）
+fn check_presign_public_origin(name: &str, origin: &str) -> Result<()> {
     let Some((_, rest)) = origin.split_once("://") else {
         bail!(
             AppErr::InvalidConfig,
@@ -126,36 +113,10 @@ fn normalize_presign_public_origin(name: &str, origin: &str) -> Result<String> {
         !authority.is_empty() && !authority.contains(['/', '?', '#']),
         AppErr::InvalidConfig,
         format!(
-            "s3 client {name:?}: presign_public_origin must be scheme://host[:port] without path, use presign_path_prefix: {origin:?}"
+            "s3 client {name:?}: presign_public_origin must be scheme://host[:port] without path: {origin:?}"
         )
     );
-    Ok(origin.strip_suffix('/').unwrap_or(origin).to_owned())
-}
-
-/// `presign_path_prefix` 的规则见 [`S3ClientConfig::presign_path_prefix`]，返回去掉结尾 `/` 的
-fn normalize_presign_path_prefix(name: &str, prefix: &str) -> Result<String> {
-    let normalized = prefix.trim_end_matches('/');
-    ensure!(
-        normalized.starts_with('/') && !normalized.contains("//"),
-        AppErr::InvalidConfig,
-        format!(
-            "s3 client {name:?}: presign_path_prefix must start with '/', not be '/', and not contain '//': {prefix:?}"
-        )
-    );
-    Ok(normalized.to_owned())
-}
-
-/// 把 URL 拆成 `scheme://host[:port]` 和后面的路径加 query：`https://x.com/b/k?q` → (`https://x.com`, `/b/k?q`)
-fn split_origin(url: &str) -> Result<(&str, &str)> {
-    let authority_start = url
-        .find("://")
-        .map(|index| index + 3)
-        .ok_or_else(|| impossible!("SDK 签出来的 URL 没有 scheme：{url}"))?;
-    let path_start = url[authority_start..]
-        .find('/')
-        .map(|index| authority_start + index)
-        .ok_or_else(|| impossible!("SDK 签出来的 URL 没有路径：{url}"))?;
-    Ok(url.split_at(path_start))
+    Ok(())
 }
 
 /// 不用 SDK 环境：只用配置里写的，SDK 的其他设置（重试、超时等）是内置默认值
@@ -303,96 +264,72 @@ mod tests {
             .unwrap();
     }
 
-    /// presign_public_origin 带路径、没有 scheme，presign_path_prefix 不合规则：报 InvalidConfig
+    /// presign_public_origin 带路径、没有 scheme：报 InvalidConfig；结尾多一个 `/` 的可以
     #[tokio::test]
-    async fn invalid_presign_options_rejected() {
+    async fn invalid_presign_public_origin_rejected() {
         let base = S3ClientConfig {
             region: Some("auto".into()),
             credentials: credentials(),
             ..S3ClientConfig::default()
         };
-        let invalid = [
-            S3ClientConfig {
-                presign_public_origin: Some("https://x.com/s3".into()),
+        for origin in ["https://x.com/s3", "x.com"] {
+            let config = S3ClientConfig {
+                presign_public_origin: Some(origin.into()),
                 ..base.clone()
-            },
-            S3ClientConfig {
-                presign_public_origin: Some("x.com".into()),
-                ..base.clone()
-            },
-            S3ClientConfig {
-                presign_path_prefix: Some("s3".into()),
-                ..base.clone()
-            },
-            S3ClientConfig {
-                presign_path_prefix: Some("/".into()),
-                ..base.clone()
-            },
-            S3ClientConfig {
-                presign_path_prefix: Some("/a//b".into()),
-                ..base.clone()
-            },
-        ];
-        for config in invalid {
+            };
             let err = AwsS3Client::from_config("test", &config, &RegistryConfig::default())
                 .await
                 .unwrap_err();
-            assert!(err.is(AppErr::InvalidConfig), "{config:?}: {err:#}");
+            assert!(err.is(AppErr::InvalidConfig), "{origin:?}: {err:#}");
         }
         let config = S3ClientConfig {
             presign_public_origin: Some("https://x.com:8443/".into()),
-            presign_path_prefix: Some("/s3/".into()),
             ..base
         };
-        let client = AwsS3Client::from_config("test", &config, &RegistryConfig::default())
+        AwsS3Client::from_config("test", &config, &RegistryConfig::default())
             .await
             .unwrap();
-        assert_eq!(
-            client.presign_public_origin.as_deref(),
-            Some("https://x.com:8443")
-        );
-        assert_eq!(client.presign_path_prefix.as_deref(), Some("/s3"));
     }
 
-    /// 签完的 URL：换掉 origin、插上路径前缀，原来的路径、query 不动；两项都没配原样返回
+    /// 预签名 URL：配了 presign_public_origin 的按它签（URL 的地址就是它），没配的按服务地址签
     #[tokio::test]
-    async fn finishes_presigned_url() {
+    async fn presigned_url_origin() {
         let base = S3ClientConfig {
             region: Some("auto".into()),
             credentials: credentials(),
+            endpoint_url: Some("http://10.0.0.1:9000".into()),
+            force_path_style: true,
             ..S3ClientConfig::default()
         };
-        let signed = "http://10.0.0.1:9000/b/k.mp3?X-Amz-Signature=1".to_owned();
-        for (origin, prefix, expected) in [
-            (None, None, "http://10.0.0.1:9000/b/k.mp3?X-Amz-Signature=1"),
-            (
-                Some("https://x.com"),
-                None,
-                "https://x.com/b/k.mp3?X-Amz-Signature=1",
-            ),
-            (
-                None,
-                Some("/s3"),
-                "http://10.0.0.1:9000/s3/b/k.mp3?X-Amz-Signature=1",
-            ),
-            (
-                Some("https://x.com/"),
-                Some("/a/b"),
-                "https://x.com/a/b/b/k.mp3?X-Amz-Signature=1",
-            ),
+        for (origin, expected) in [
+            (None, "http://10.0.0.1:9000/b/k.mp3?"),
+            (Some("https://x.com"), "https://x.com/b/k.mp3?"),
+            (Some("https://x.com:8443/"), "https://x.com:8443/b/k.mp3?"),
         ] {
             let config = S3ClientConfig {
                 presign_public_origin: origin.map(Into::into),
-                presign_path_prefix: prefix.map(Into::into),
                 ..base.clone()
             };
             let client = AwsS3Client::from_config("test", &config, &RegistryConfig::default())
                 .await
                 .unwrap();
-            assert_eq!(
-                client.finish_presigned_url(signed.clone()).unwrap(),
-                expected
-            );
+            let request = client
+                .get_object()
+                .bucket("b")
+                .key("k.mp3")
+                .customize()
+                .config_override(client.presign_config_override())
+                .presigned(
+                    aws_sdk_s3::presigning::PresigningConfig::expires_in(
+                        std::time::Duration::from_secs(60),
+                    )
+                    .unwrap(),
+                )
+                .await
+                .unwrap();
+            let url = request.uri();
+            assert!(url.starts_with(expected), "{origin:?}: {url}");
+            assert!(url.contains("X-Amz-SignedHeaders=host"), "{url}");
         }
     }
 

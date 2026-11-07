@@ -20,13 +20,10 @@
 # region = "auto"
 # 服务地址，连兼容 S3 的第三方服务（R2、RustFS、MinIO）时填；连 AWS 不用填，按 region 算出官方地址
 # endpoint_url = "https://<ACCOUNT_ID>.r2.cloudflarestorage.com"
-# 预签名 URL（给前端等外部直接访问）对外的地址，只能写 scheme、host、端口，带路径启动报错；不写就是服务地址。
-# 签名照常按服务地址算，签完把 URL 的 scheme://host[:port] 换成它，配合反向代理用（内网的 RustFS 经公网域名访问、R2 换成自己的域名）。
-# 代理转给服务时要把 Host 头改回服务地址的 host（带端口），除了 presign_path_prefix 不改路径、不改 query，否则验签失败
+# 预签名 URL（给前端等外部直接访问）对外的地址，只能写 scheme、host、端口，带路径启动报错；不写就按服务地址签名。
+# 预签名按它签名，其余请求照常连服务地址（比如服务端连集群内的 RustFS、前端经公网域名访问）。
+# 外部的请求要原样转到服务：Host 头、路径、query 都不改，否则验签失败
 # presign_public_origin = "https://x.com"
-# 签完名插到预签名 URL 路径最前面的一段（如 "/s3"），不参与签名，给反向代理按路径分流，代理转给服务之前要切掉它。
-# 以 / 开头，结尾的 / 去掉，不能是 /、中间不能有 //
-# presign_path_prefix = "/s3"
 # ~/.aws/config 里的 profile 名，不写用 AWS_PROFILE 或 default。只在 use_sdk_env 时能用
 # profile = "default"
 # 写死的凭证（use_sdk_env 时写了就不从环境取）；session_token 只有临时凭证（STS）才有。

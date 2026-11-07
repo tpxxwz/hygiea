@@ -64,14 +64,11 @@ pub struct S3ClientConfig {
     pub region: Option<S3Region>,
     /// 服务地址，连兼容 S3 的第三方服务（R2、RustFS、MinIO）时填；连 AWS 不用填
     pub endpoint_url: Option<String>,
-    /// 预签名 URL（给前端等外部直接访问）对外的地址，只能有 scheme、host、端口（如 `https://x.com`），带路径的启动报错；不写就是服务地址。
-    /// 签名照常按服务地址算（`endpoint_url` 或 SDK 算出的），签完把 URL 的 `scheme://host[:port]` 换成它，配合反向代理用：
-    /// 比如服务端在内网连 RustFS、前端经公网域名访问，或者给 R2 换成自己的域名。代理转给服务时要把 Host 头改回服务地址的 host（带端口），
-    /// 路径除了 `presign_path_prefix` 都不改、query 不改，服务端收到的和签名时一样才能验签通过
+    /// 预签名 URL（给前端等外部直接访问）对外的地址，只能有 scheme、host、端口（如 `https://x.com`），带路径的启动报错。
+    /// 预签名按它签名，URL 就是这个地址，其余请求照常连服务地址（`endpoint_url` 或 SDK 算出的）；不写就按服务地址签名。
+    /// 用在服务端连内网地址、外部经别的地址访问同一个服务的时候，比如服务端连集群内的 RustFS、前端经公网域名访问：
+    /// 签名覆盖 Host、路径、query，外部的请求要原样（Host 头、路径、query 都不改）转到服务，服务端收到的和签名时一样才能验签通过
     pub presign_public_origin: Option<String>,
-    /// 签完名插到预签名 URL 路径最前面的一段，如 `/s3`：不参与签名，给反向代理按路径分流用，代理转给服务之前要切掉它（见 `presign_public_origin`）。
-    /// 以 `/` 开头，结尾的 `/` 去掉，不能是 `/`、中间不能有 `//`，不对的启动报错。不写就不插
-    pub presign_path_prefix: Option<String>,
     /// `~/.aws/config` 里的 profile 名，不写用 `AWS_PROFILE` 或 `default`。只在 `use_sdk_env` 时能用
     pub profile: Option<String>,
     /// 写死的 AccessKey / SecretKey。`use_sdk_env` 时写了就不从环境取凭证

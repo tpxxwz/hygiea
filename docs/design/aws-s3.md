@@ -163,23 +163,23 @@
   分片上传的对象给的是各片 sha256 的组合值（带 `-N`，`COMPOSITE`），不是内容的 sha256，hygiea 自己不分片上传，
   读别处分片传的对象时 `*_with_sha256` 拿到的是这个组合值（R2 不支持分片上传带 sha256，不会有）
 
-## 5. 预签名 GET 给外部访问：按服务地址签名、签完再换地址，有效期的上限在 bucket 上
+## 5. 预签名 GET 给外部访问：按对外地址签名，有效期的上限在 bucket 上
 
-前端等外部访问的地址常常不是服务端连服务的地址：服务端在内网连 RustFS，前端经公网域名、反向代理访问；R2 不想暴露带账号 ID 的 S3 接口地址，经自己的域名、代理访问。
+前端等外部访问的地址常常不是服务端连服务的地址：服务端连集群内的 RustFS，前端经公网域名访问。
 SigV4 的签名覆盖 Host、路径、query，服务端按它**自己收到的**请求验签。考虑过三种做法：
 
-- 用公网地址签名（另建一个服务地址换成公网地址的 SDK 客户端，只用来签名），代理原样转发 Host：
-  只对不按 Host 路由的服务（RustFS、MinIO）成立。R2、AWS 靠 Host 找到账号和 bucket，Host 是公网域名时路由不到；
-  代理把 Host 改成服务的域名又和签名对不上
-- 签名地址里带上分流用的路径（`https://x.com/s3`）：路径进了签名，代理切掉它就验签失败；不切的话 RustFS 把第一段当成 bucket 名
-- 按服务地址签名，签完把 URL 的 `scheme://host[:port]` 换成 `presign_public_origin`、在路径前面插上 `presign_path_prefix`（现在的做法）：
-  代理切掉路径前缀、把 Host 改回服务地址的 host，服务端收到的和签名时一模一样，所以哪种兼容 S3 的服务都能用。
-  代价是代理要改 Host，而且要和服务地址一字不差（带端口）；换地址、插前缀只是改字符串，不需要第二个 SDK 客户端
+- 按对外地址签名，代理原样转发（现在的做法）：签名时用 `customize().config_override(..)` 把这一次请求的 `endpoint_url` 换成 `presign_public_origin`，
+  还是同一个 SDK 客户端，凭证、region、path-style 都沿用，不用另建一个只签名的客户端。代理 Host、路径、query 都不改，
+  traefik、nginx 这类反向代理默认就这样转发，部署时不用另外配
+- 按服务地址签名，签完把 URL 的 `scheme://host[:port]` 换成对外地址：代理要把 Host 改回服务地址的 host，而且要一字不差（带端口）。
+  Gateway API 的 URLRewrite 改 hostname 时不能带端口，traefik 这类按 Gateway API 配的代理做不到，不用
+- 按路径分流：签名地址里带上路径（`https://x.com/s3`）的，路径进了签名，代理切掉它就验签失败，不切的话 RustFS 把第一段当成 bucket 名；
+  签完再插一段不参与签名、给代理切掉的路径前缀的能验签通过，但只有存储服务和网站共用一个域名时才用得上，给存储服务单独一个域名就不需要，不做
 
-`presign_public_origin` 只允许 `scheme://host[:port]`、不能带路径：要插的路径都在 `presign_path_prefix` 里，两项各管一件事，
-不会出现「换掉的地址里带路径、又插了一段前缀」这种不知道该怎么拼的组合。
-R2 绑在 bucket 上的自定义域名不接受 SigV4 签名，`presign_public_origin` 不能填它，只能填自己代理的地址；
-想走自定义域名、CDN 缓存的是不签名的公开地址，还没做（见 todo）。
+`presign_public_origin` 只允许 `scheme://host[:port]`、不能带路径：路径会签进去，代理原样转发后服务把它当成 bucket 名。
+结尾的 `/` 不去掉，SDK 处理 `endpoint_url` 时会去掉。
+没配时覆盖的是空配置，不能写成 `set_endpoint_url(None)`：它在覆盖层里显式取消 endpoint，签名会落到 AWS 按 region 算出的地址。
+R2 绑在 bucket 上的自定义域名不接受 SigV4 签名；想走自定义域名、CDN 缓存的是不签名的公开地址，还没做（见 todo）。
 
 有效期的上限配在 bucket 上（`presign_max_expires_in`，不写是 SigV4 允许的 7 天），签名时不传就用它、传了的不能超过它：
 
