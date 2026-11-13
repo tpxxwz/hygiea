@@ -25,8 +25,10 @@
 //! 配置在 `[db.live_config]`，见 [`live_config`] 模块文档。开了 `lock`、`uses` 带 4 时（PG、MySQL）组件匿名放一个
 //! `DbLockClient`，整个应用只能有一个，配置在 `[db.lock]`，见 [`lock`] 模块文档。
 //!
+//! 一份代码同时支持 PostgreSQL、SQLite、MySQL 时，类型、建表、查询、SQL 函数按 [`cross_db`] 的规则来。
+//!
 //! 和框架无关、开 `sqlx` 或 `seaorm` 就有的：
-//! - UTC 时间列类型 [`HyUtcDateTime`]，两个框架同时开也是同一个类型
+//! - UTC 时间列类型 [`HyUtcDateTime`]，两个框架同时开也是同一个类型。SQLite 上它存成文本，在 SQL 里比较、排序不可靠，见 [`cross_db`]
 //! - 分页的请求和结果 [`PageRequest`]、[`Page`]
 //! - 数据库错误 [`RepoErr`]，按操作分：0x 事务、1x 执行语句（10 兜底，11-14 增删改查）、2x 动态配置、3x 锁表、9x 参数
 //!
@@ -128,6 +130,9 @@ extern crate self as hygiea_db;
 
 #[cfg(any(sqlx_pg, sqlx_sqlite, sqlx_mysql))]
 mod component;
+#[cfg(any(feature = "sqlx", feature = "seaorm"))]
+#[doc = include_str!("../docs/cross-db.md")]
+pub mod cross_db {}
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]
 mod config;
 #[cfg(any(feature = "sqlx", feature = "seaorm"))]
