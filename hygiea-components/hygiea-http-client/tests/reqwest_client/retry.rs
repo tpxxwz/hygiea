@@ -128,6 +128,28 @@ mod attempts {
         assert!(recorder.attempts().is_empty());
     }
 
+    /// 关掉 non_success_as_err：非 2xx 按正常响应直接返回，不问 Retry
+    #[cfg(feature = "verbatim")]
+    #[tokio::test]
+    async fn non_2xx_returned_without_retry_when_not_error() {
+        let (base, count) = counted(|_, _| Reply::json(500, r#"{"id":1}"#)).await;
+        let recorder = Recorder::default();
+        let resp = RequestConfig::plain(Method::GET, format!("{base}/x"))
+            .non_success_as_err(false)
+            .send::<Json<Item>>((
+                &ReqwestClient::from_config(&local_config(), &Default::default())
+                    .await
+                    .unwrap(),
+                RetryCtx::new(3, recorder.clone()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status, 500);
+        assert_eq!(resp.body, Item { id: 1 });
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        assert!(recorder.attempts().is_empty());
+    }
+
     /// 第一次就成功：不问 Retry
     #[tokio::test]
     async fn success_does_not_call_retry() {

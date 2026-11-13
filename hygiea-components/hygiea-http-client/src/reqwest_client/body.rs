@@ -13,10 +13,17 @@ use super::{Body, Bytes, RequestBuilder, multipart};
 
 /// 裸 body 支持的 content-type。不开放任意字符串，要加类型就在这里加变体。
 ///
-/// `json` / `form` / `multipart` 不在这里——它们不只是换个头，body 的编码方式也不同，
-/// 由 [`Json`] / [`Form`] / `multipart::Form` 表示，content-type 由 reqwest 自动设。
+/// 要把一个值序列化后发出去，用 [`Json`] / [`Form`] / `multipart::Form`，content-type 由 reqwest 自动设；
+/// 开了 feature `verbatim` 时，这里的 `ContentType::Json` 给已经编码好的 JSON 文本用，字节原样发出
+/// （比如按这段文本签名，发出去的必须一字不差）。`form` / `multipart` 不在这里。
+///
+/// 变体会随 feature 增加，所以标了 `#[non_exhaustive]`，外部 `match` 要写 `_ =>`
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ContentType {
+    /// （feature `verbatim`）`application/json`，body 是已经编码好的 JSON 文本，原样发出，不重新序列化
+    #[cfg(feature = "verbatim")]
+    Json,
     /// `application/x-ndjson`，一行一个 JSON 对象的流式格式
     Ndjson,
     /// `application/xml`，RFC 7303 里机器处理 XML 的首选，默认 UTF-8
@@ -37,6 +44,8 @@ impl ContentType {
     /// 对应的 MIME 字符串，就是请求头里 `Content-Type` 的值
     pub fn as_str(self) -> &'static str {
         match self {
+            #[cfg(feature = "verbatim")]
+            Self::Json => "application/json",
             Self::Ndjson => "application/x-ndjson",
             Self::Xml => "application/xml",
             Self::XmlText => "text/xml",
@@ -365,6 +374,8 @@ mod tests {
         #[test]
         fn as_str_maps_every_variant() {
             let expected = [
+                #[cfg(feature = "verbatim")]
+                (ContentType::Json, "application/json"),
                 (Ndjson, "application/x-ndjson"),
                 (Xml, "application/xml"),
                 (XmlText, "text/xml"),
@@ -433,6 +444,16 @@ mod tests {
                 assert_eq!(content_type(&req), Some(ct.as_str()));
                 assert_eq!(body_bytes(&req), b"a,b");
             }
+        }
+
+        /// `ContentType::Json`：已经编码好的 JSON 文本原样发出，空格、key 的顺序、数字的写法都不变
+        #[cfg(feature = "verbatim")]
+        #[test]
+        fn raw_json_text_sent_as_is() {
+            let text = r#"{"b": 2,  "a": 1.50, "c": "\u00e9"}"#;
+            let req = build(Raw::new(ContentType::Json, text));
+            assert_eq!(content_type(&req), Some("application/json"));
+            assert_eq!(body_bytes(&req), text.as_bytes());
         }
 
         /// multipart 的 boundary 由 reqwest 生成

@@ -59,6 +59,8 @@ http-axum = ["dep:hygiea-http", "hygiea-http/axum"]
 http-client-reqwest = ["dep:hygiea-http-client", "hygiea-http-client/reqwest"]
 # ReqwestConfig::debug：日志带原文和请求头、响应头，只在 dev-dependencies 里开
 http-client-reqwest-debug-log = ["http-client-reqwest", "hygiea-http-client/debug-log"]
+# 原样发、原样收：编码好的 JSON 原样发出，非 2xx 按正常响应返回，见 hygiea-http-client 的 Cargo.toml
+http-client-reqwest-verbatim = ["http-client-reqwest", "hygiea-http-client/verbatim"]
 grpc-tonic = ["dep:hygiea-grpc", "hygiea-grpc/tonic"]
 aws-s3 = ["dep:hygiea-aws", "hygiea-aws/s3"]
 # SDK 自己从环境（AWS_* 环境变量、~/.aws、实例凭证）加载配置；SDK 环境里的 SSO profile、credential_process；

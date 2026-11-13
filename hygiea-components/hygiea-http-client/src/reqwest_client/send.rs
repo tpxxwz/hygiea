@@ -24,7 +24,8 @@ use super::{Bytes, HeaderMap, Method, ReqwestClient, StatusCode, Url};
 
 impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
     /// 发请求，2xx 时按 `Decoder` 把 body 变成 `Decoder::Output`（见 [`FromBody`]），否则返回
-    /// `HttpClientErr::NonSuccessStatus`。要原样的字节就用 [`Bytes`](super::Bytes)（整个读进内存）；
+    /// `HttpClientErr::NonSuccessStatus`；开了 feature `verbatim` 并关掉 `non_success_as_err` 时任何状态码都按 2xx 处理。
+    /// 要原样的字节就用 [`Bytes`](super::Bytes)（整个读进内存）；
     /// 大文件用 [`BodyStream`](super::BodyStream) 流式读，或者 `write_to` 直接写进文件。
     /// 解码器写在 turbofish 里（同一个 `Output` 可能来自不同解码器，没法从接收处的类型推断）：
     ///
@@ -47,8 +48,8 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
     ///   带重试时也直接返回，不交给重试判断
     /// - 发出之后的传输失败（超时、连不上、TLS 握手失败、读 body 中断）是
     ///   [`RequestFailed`](super::HttpClientErr::RequestFailed)，并打一条失败日志
-    /// - 非 2xx 是 [`NonSuccessStatus`](super::HttpClientErr::NonSuccessStatus)；2xx 但 [`FromBytes::from_bytes`](super::FromBytes::from_bytes)
-    ///   失败是 [`DecodeFailed`](super::HttpClientErr::DecodeFailed)。状态码和 body 原文在 `err_args` 里
+    /// - 非 2xx 是 [`NonSuccessStatus`](super::HttpClientErr::NonSuccessStatus)（`non_success_as_err` 开着时）；
+    ///   交给解码器后 [`FromBytes::from_bytes`](super::FromBytes::from_bytes) 失败是 [`DecodeFailed`](super::HttpClientErr::DecodeFailed)。状态码和 body 原文在 `err_args` 里
     ///   （打日志可见，不渲染进对外消息）
     ///
     /// 响应日志：非 2xx 和解码失败打原文，排查问题要看对方到底回了什么；
@@ -68,12 +69,13 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
         self,
         client: &ReqwestClient,
     ) -> Result<HttpResponse<Decoder::Output>> {
+        let rejects_non_success = self.rejects_non_success();
         let (ctx, resp) = match self.dispatch(client).await? {
             Ok(sent) => sent,
             Err(failure) => return Err(failure.err),
         };
         let (status, headers) = (resp.status(), resp.headers().clone());
-        if !status.is_success() {
+        if rejects_non_success && !status.is_success() {
             return Err(read_status_failure(&ctx, resp).await?.err);
         }
         // 读 body 失败、解码失败的日志由 RespBody 打
@@ -87,12 +89,13 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
         self,
         client: &ReqwestClient,
     ) -> Result<Result<HttpResponse<Decoder::Output>, SendFailure>> {
+        let rejects_non_success = self.rejects_non_success();
         let (ctx, resp) = match self.dispatch(client).await? {
             Ok(sent) => sent,
             Err(failure) => return Ok(Err(failure)),
         };
         let (status, headers) = (resp.status(), resp.headers().clone());
-        if !status.is_success() {
+        if rejects_non_success && !status.is_success() {
             return Ok(Err(read_status_failure(&ctx, resp).await?));
         }
         match RespBody::new(resp, &ctx).decode::<Decoder>().await? {

@@ -49,6 +49,11 @@ pub struct RequestConfig<Params = (), Req = ()> {
     pub enable_logging: bool,
     /// 请求失败时用哪个级别打日志，见 [`FailedLogLevel`]
     pub failed_log_level: FailedLogLevel,
+    /// （feature `verbatim`）非 2xx 算不算失败，默认 `true`：报 [`NonSuccessStatus`](super::HttpClientErr::NonSuccessStatus)，打失败日志。
+    /// `false` 时任何状态码都和 2xx 一样交给解码器，返回 [`HttpResponse`]，由调用方看 `status`；
+    /// 打的是成功日志（带状态码）；带重试时不交给 [`Retry`](super::Retry)，直接返回
+    #[cfg(feature = "verbatim")]
+    pub non_success_as_err: bool,
 }
 
 impl RequestConfig {
@@ -89,6 +94,8 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
             params,
             enable_logging: true,
             failed_log_level: FailedLogLevel::Warn,
+            #[cfg(feature = "verbatim")]
+            non_success_as_err: true,
         }
     }
 
@@ -122,6 +129,21 @@ impl<Params: serde::Serialize, Req: IntoBody> RequestConfig<Params, Req> {
     pub fn failed_log_level(mut self, level: FailedLogLevel) -> Self {
         self.failed_log_level = level;
         self
+    }
+
+    /// （feature `verbatim`）非 2xx 算不算失败，见 [`RequestConfig::non_success_as_err`] 字段
+    #[cfg(feature = "verbatim")]
+    pub fn non_success_as_err(mut self, enable: bool) -> Self {
+        self.non_success_as_err = enable;
+        self
+    }
+
+    /// 非 2xx 算不算失败。没开 `verbatim` 时没有这个开关，一律算失败
+    pub(super) fn rejects_non_success(&self) -> bool {
+        #[cfg(feature = "verbatim")]
+        return self.non_success_as_err;
+        #[cfg(not(feature = "verbatim"))]
+        return true;
     }
 
     /// 把本配置铺到 reqwest 的 `RequestBuilder` 上。
@@ -235,7 +257,7 @@ mod tests {
         use super::*;
 
         /// `new` 之后除了四个入参，其余都是默认值：没有额外的头和认证、不覆盖超时、
-        /// 正常日志打开、失败日志用 Warn
+        /// 正常日志打开、失败日志用 Warn、非 2xx 算失败
         #[test]
         fn new_fills_defaults() {
             let cfg = RequestConfig::new(Method::PUT, URL, (), ());
@@ -246,6 +268,7 @@ mod tests {
             assert_eq!(cfg.timeout, None);
             assert!(cfg.enable_logging);
             assert_eq!(cfg.failed_log_level, FailedLogLevel::Warn);
+            assert!(cfg.rejects_non_success());
         }
 
         /// `plain` / `with_params` / `with_body` 只是 `new` 的简写，没给的那项是 `()`
@@ -299,6 +322,15 @@ mod tests {
             assert_eq!(cfg.timeout, Some(Duration::from_millis(300)));
             assert!(!cfg.enable_logging);
             assert_eq!(cfg.failed_log_level, FailedLogLevel::Error);
+        }
+
+        /// 非 2xx 的开关
+        #[cfg(feature = "verbatim")]
+        #[test]
+        fn non_success_switch() {
+            let cfg = RequestConfig::plain(Method::GET, URL).non_success_as_err(false);
+            assert!(!cfg.non_success_as_err);
+            assert!(!cfg.rejects_non_success());
         }
     }
 

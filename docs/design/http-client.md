@@ -33,7 +33,7 @@ cfg.send(sender)
      ├─ &ReqwestClient ────────────────────────────────────── 不重试
      │   └─ send_once::<Decoder: FromBody>
      │       ├─ dispatch ───────────────────────────────┐ 共用的前半段（见下）
-     │       ├─ 非 2xx → read_status_failure → Err(NonSuccessStatus)
+     │       ├─ 非 2xx → read_status_failure → Err(NonSuccessStatus)        rejects_non_success() 为 false 时不进这一支，和 2xx 一样往下
      │       ├─ 2xx    → Decoder::from_body(RespBody)
      │       │           ├─ FromBytes 类型：RespBody::decode → 失败 Err(DecodeFailed)
      │       │           └─ BodyStream：into_stream，不读 body
@@ -44,7 +44,7 @@ cfg.send(sender)
               kept = cfg.clone()                        发出去的那份会被消费，先留一份
               send_once_bytes::<Decoder: FromBytes>
                ├─ dispatch ─────────────────────────────┤ 外层 Err（发出之前的错误）→ 直接返回，不进 Retry
-               ├─ 非 2xx → read_status_failure → SendFailure { Status(原始响应) }
+               ├─ 非 2xx → read_status_failure → SendFailure { Status(原始响应) }   同上
                ├─ 2xx    → RespBody::decode → 失败 SendFailure { Decode(原始响应) }
                └─ 成功   → SendCtx::succeeded → 直接返回 Ok
               次数用完 → 返回 failure.err
@@ -64,6 +64,11 @@ dispatch(cfg, client)                                   两条路共用
 为什么拆成两条路：不重试时响应可以是流（`BodyStream`），读不读 body 由 `Decoder` 决定；
 重试时失败要把原始响应交给 `Retry`，body 必须先整个读进内存，所以只接受 `FromBytes`，失败带 `SendFailure`。
 两条路的前半段（`dispatch`）、非 2xx 处理、日志都是同一套，行为一致。
+
+非 2xx 算不算失败由 `RequestConfig::rejects_non_success()` 决定（request.rs）：开了 feature `verbatim` 时是字段 `non_success_as_err`，
+没开时没有这个字段，恒为 true。两条路判断非 2xx 的地方都调它，cfg 只写在这一个函数里。
+`verbatim` 下的东西（这个开关、`ContentType::Json`）只给接口调试、测试工具这类要原样发、原样收的调用方用，普通用法里看不到；
+`ContentType` 标了 `#[non_exhaustive]`，变体随 feature 增加时外部的 `match` 不会因为 feature 被合并打开而编译不过。
 
 ## 3. 日志里的文本和打码
 

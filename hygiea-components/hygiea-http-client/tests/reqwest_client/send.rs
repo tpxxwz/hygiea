@@ -346,6 +346,69 @@ mod responses {
         assert_eq!(err.err_args()["body"], r#"{"error":"boom"}"#);
     }
 
+    /// 关掉 non_success_as_err：非 2xx 按正常响应返回，body 照常解码；打的是成功日志，不打失败日志
+    #[cfg(feature = "verbatim")]
+    #[tokio::test]
+    async fn non_2xx_returned_when_not_error() {
+        let base = serve_routes(ROUTES).await;
+        let (out, _guard) = capture();
+        let resp = RequestConfig::plain(Method::GET, format!("{base}/fail"))
+            .non_success_as_err(false)
+            .send::<Json<serde_json::Value>>(
+                &ReqwestClient::from_config(&local_config(), &Default::default())
+                    .await
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status, 500);
+        assert_eq!(resp.body["error"], "boom");
+        let log = out.text();
+        assert!(log.contains("http call success"), "{log}");
+        assert!(log.contains("status=500"), "{log}");
+        assert!(!log.contains("non-2xx"), "{log}");
+    }
+
+    /// 关掉 non_success_as_err 后，非 2xx 的 body 解码不了照样报 DecodeFailed
+    #[cfg(feature = "verbatim")]
+    #[tokio::test]
+    async fn non_2xx_decode_failure_when_not_error() {
+        let base = serve_routes(ROUTES).await;
+        let err = RequestConfig::plain(Method::GET, format!("{base}/fail"))
+            .non_success_as_err(false)
+            .send::<Json<Login>>(
+                &ReqwestClient::from_config(&local_config(), &Default::default())
+                    .await
+                    .unwrap(),
+            )
+            .await
+            .unwrap_err();
+        assert!(err.is(HttpClientErr::DecodeFailed), "{err:#}");
+        assert_eq!(err.err_args()["status"], 500);
+    }
+
+    /// 关掉 non_success_as_err 后流式读也能拿到非 2xx 的 body
+    #[cfg(feature = "verbatim")]
+    #[tokio::test]
+    async fn stream_non_2xx_when_not_error() {
+        let base = serve_routes(ROUTES).await;
+        let mut resp = RequestConfig::plain(Method::GET, format!("{base}/fail"))
+            .non_success_as_err(false)
+            .send::<BodyStream>(
+                &ReqwestClient::from_config(&local_config(), &Default::default())
+                    .await
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status, 500);
+        let mut body = Vec::new();
+        while let Some(chunk) = resp.body.next().await {
+            body.extend_from_slice(&chunk.unwrap());
+        }
+        assert_eq!(body, br#"{"error":"boom"}"#);
+    }
+
     /// GBK 编码的 String 响应：按 Content-Type 里的 charset 正确解码成中文，不是原样字节或乱码
     #[tokio::test]
     async fn gbk_response_decodes_to_original_text() {
