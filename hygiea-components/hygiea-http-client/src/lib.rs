@@ -7,8 +7,8 @@
 //! `debug-log`（带上 `reqwest`）：带原文和请求头、响应头的 debug 日志，只给测试用，放在 dev-dependencies 里开，
 //! 用法见 [`reqwest_client`] 的「debug 日志」
 //!
-//! `verbatim`（带上 `reqwest`）：原样发、原样收，给接口调试、测试工具这类调用方用。编码好的 JSON 文本原样发出
-//! （[`ContentType::Json`](reqwest_client::ContentType)），非 2xx 按正常响应返回（`RequestConfig::non_success_as_err`）
+//! `verbatim`（带上 `reqwest`）：原样发、原样收，给接口调试、测试工具这类调用方用。编码好的 JSON、表单文本原样发出
+//! （[`ContentType::Json`](reqwest_client::ContentType)、`ContentType::Form`），非 2xx 按正常响应返回（`RequestConfig::non_success_as_err`）
 //!
 //! 每种实现单独一个模块，不在 crate 根上再导出，以后加别的实现时名字不会撞：
 //! `hygiea::http_client::reqwest_client::{ReqwestConfig, RequestConfig, …}`。

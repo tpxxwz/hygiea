@@ -26,7 +26,7 @@ reqwest = [
 ]
 # debug 日志：ReqwestConfig::debug 打开后日志带原文和请求头、响应头，只给测试用
 debug-log = ["reqwest"]
-# 原样发、原样收：编码好的 body 原样发出（ContentType::Json），非 2xx 按正常响应返回（RequestConfig::non_success_as_err），
+# 原样发、原样收：编码好的 body 原样发出（ContentType::Json、Form），非 2xx 按正常响应返回（RequestConfig::non_success_as_err），
 # 给接口调试、测试工具这类调用方用
 verbatim = ["reqwest"]
 

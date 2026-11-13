@@ -15,7 +15,7 @@ use super::{Body, Bytes, RequestBuilder, multipart};
 ///
 /// 要把一个值序列化后发出去，用 [`Json`] / [`Form`] / `multipart::Form`，content-type 由 reqwest 自动设；
 /// 开了 feature `verbatim` 时，这里的 `ContentType::Json` 给已经编码好的 JSON 文本用，字节原样发出
-/// （比如按这段文本签名，发出去的必须一字不差）。`form` / `multipart` 不在这里。
+/// （比如按这段文本签名，发出去的必须一字不差），`ContentType::Form` 给已经编码好的表单文本用。`multipart` 不在这里。
 ///
 /// 变体会随 feature 增加，所以标了 `#[non_exhaustive]`，外部 `match` 要写 `_ =>`
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,6 +24,9 @@ pub enum ContentType {
     /// （feature `verbatim`）`application/json`，body 是已经编码好的 JSON 文本，原样发出，不重新序列化
     #[cfg(feature = "verbatim")]
     Json,
+    /// （feature `verbatim`）`application/x-www-form-urlencoded`，body 是已经编码好的表单文本（`a=1&b=2`），原样发出
+    #[cfg(feature = "verbatim")]
+    Form,
     /// `application/x-ndjson`，一行一个 JSON 对象的流式格式
     Ndjson,
     /// `application/xml`，RFC 7303 里机器处理 XML 的首选，默认 UTF-8
@@ -46,6 +49,8 @@ impl ContentType {
         match self {
             #[cfg(feature = "verbatim")]
             Self::Json => "application/json",
+            #[cfg(feature = "verbatim")]
+            Self::Form => "application/x-www-form-urlencoded",
             Self::Ndjson => "application/x-ndjson",
             Self::Xml => "application/xml",
             Self::XmlText => "text/xml",
@@ -376,6 +381,8 @@ mod tests {
             let expected = [
                 #[cfg(feature = "verbatim")]
                 (ContentType::Json, "application/json"),
+                #[cfg(feature = "verbatim")]
+                (ContentType::Form, "application/x-www-form-urlencoded"),
                 (Ndjson, "application/x-ndjson"),
                 (Xml, "application/xml"),
                 (XmlText, "text/xml"),
