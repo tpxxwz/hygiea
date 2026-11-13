@@ -8,6 +8,10 @@ pub use pattern::*;
 pub use template::{tpl_cached, tpl_once, tpl_pos};
 pub use xxhash::{xxh3_64, xxh32};
 
+/// minijinja 整个再导出：给 [`tpl_once`] / [`tpl_cached`] 传 `Value` 上下文、实现用到才取值的 `Object` 时从这里取，
+/// 调用方不必自己依赖 minijinja，也就不会撞上两个版本的同名类型对不上的问题
+pub use minijinja;
+
 /// 渲染 minijinja 模板，解析结果缓存复用（上限 1024 条，满了淘汰最早插入的）。
 ///
 /// 参数可以直接写 JSON 字面量 `{ "a": 1 }`，也可以传任何 `Serialize` 的表达式（`ctx`、`&ctx.args`）
