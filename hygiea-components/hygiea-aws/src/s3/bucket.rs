@@ -1,9 +1,11 @@
 //! [`S3Bucket`]：一个 bucket 的句柄（客户端 + bucket 名），key 原样发出；[`S3BucketWithPrefix`]：限定在一个前缀下的句柄，
-//! key 都加上这个前缀。两者共有的对象操作（上传、读、删、预签名 GET）在 [`S3BucketHandle`] 里；
+//! key 都加上这个前缀。两者共有的对象操作（上传、读、删、按前缀列、预签名 GET）在 [`S3BucketHandle`] 里；
 //! 按现成的 key 写入（[`S3Bucket::put_object`]）、删 bucket 只在 `S3Bucket` 上。
 //! 上传的内容是 [`PutFile`]，key 按 [`PutKey`] 拼（上传前算出 [`PutDigest`]，调用方给出 [`PutDecision`]，结果是 [`PutOutcome`]），
-//! key 的前缀实现 [`S3KeyPrefix`]。读出来的是 [`ObjectStream`]、[`ObjectMeta`]；预签名 GET 的选项是 [`PresignGetOptions`]。
+//! key 的前缀实现 [`S3KeyPrefix`]。读出来的是 [`ObjectStream`]、[`ObjectMeta`]；按前缀列的选项是 [`ListOptions`]，
+//! 结果是 [`ListPage`]（一页里的 [`ListedObject`]）；预签名 GET 的选项是 [`PresignGetOptions`]。
 
+use std::num::NonZeroU16;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -13,8 +15,8 @@ use aws_sdk_s3::types::ChecksumMode;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use bytes::Bytes;
-#[cfg(feature = "s3-bucket-admin")]
 use hygiea_core::bail;
+use hygiea_core::datetime::UtcDateTime;
 use hygiea_core::{Result, ensure, impossible};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use sha2::{Digest, Sha256};
@@ -23,10 +25,10 @@ use tokio::io::AsyncReadExt;
 use super::client::AwsS3Client;
 use super::config::PRESIGN_MIN_EXPIRES_IN;
 #[cfg(feature = "s3-bucket-admin")]
-use super::error::{bucket_admin_disabled, delete_objects_failed, invalid_response};
+use super::error::{bucket_admin_disabled, delete_objects_failed};
 use super::error::{
-    content_type_mismatch, invalid_file_ext, invalid_key, invalid_presign_expiry, missing_sha256,
-    read_file_failed, request_failed, sdk_error,
+    content_type_mismatch, invalid_file_ext, invalid_key, invalid_presign_expiry, invalid_response,
+    missing_sha256, read_file_failed, request_failed, sdk_error,
 };
 
 // ---------------- 句柄 ----------------
@@ -227,6 +229,17 @@ pub trait S3BucketHandle: sealed::Sealed + Sync {
         Ok(())
     }
 
+    /// 按前缀列对象，一次一页（一次 ListObjectsV2），选项见 [`ListOptions`]，结果见 [`ListPage`]。
+    /// 列的范围是句柄下（`S3BucketWithPrefix` 只列它的前缀下的），返回的 key 和文件夹都相对句柄。
+    /// 要全部的就带着上一页的 [`ListPage::next_token`] 接着调，直到它是 `None`。
+    ///
+    /// 服务端返回的内容逐项核对：对象缺 key、大小、改动时间，key 不在要列的前缀下，文件夹缺名字或不在前缀下，
+    /// 对象和文件夹加起来比 `max_keys` 多，说还有下一页却没给 token，都报 [`S3Err::InvalidResponse`](super::S3Err::InvalidResponse)。
+    /// bucket 不存在等服务端的错误报 [`S3Err::ServiceError`](super::S3Err::ServiceError)
+    async fn list(&self, options: ListOptions) -> Result<ListPage> {
+        list_objects(self.s3_bucket(), &self.request_key(""), options).await
+    }
+
     /// GET 的预签名 URL。`expires_in` 是有效期，不传（`None`）用 bucket 配的最长有效期
     /// （[`S3BucketConfig::presign_max_expires_in`](super::S3BucketConfig::presign_max_expires_in)），
     /// 传了的要在 1 秒到它之间，不然报 [`S3Err::InvalidPresignExpiry`](super::S3Err::InvalidPresignExpiry)。
@@ -293,6 +306,87 @@ impl S3Bucket {
             .map_err(|e| sdk_error("put_object", &self.bucket, key, e))?;
         Ok(())
     }
+}
+
+/// ListObjectsV2 的一页。`handle_prefix` 是句柄的前缀（`S3Bucket` 是空的），请求时加在 `prefix`、`start_after` 前面，
+/// 返回的 key、文件夹去掉它
+async fn list_objects(
+    bucket: &S3Bucket,
+    handle_prefix: &str,
+    options: ListOptions,
+) -> Result<ListPage> {
+    const OP: &str = "list_objects_v2";
+    let full_prefix = format!("{handle_prefix}{}", options.prefix);
+    let output = bucket
+        .client
+        .list_objects_v2()
+        .bucket(&bucket.bucket)
+        .prefix(&full_prefix)
+        .set_delimiter(options.shallow.then(|| "/".to_owned()))
+        .set_max_keys(options.max_keys.map(|n| i32::from(n.get())))
+        .set_start_after(
+            options
+                .start_after
+                .map(|key| format!("{handle_prefix}{key}")),
+        )
+        .set_continuation_token(options.continuation_token)
+        .send()
+        .await
+        .map_err(|e| sdk_error(OP, &bucket.bucket, &full_prefix, e))?;
+    let invalid = |field: &str| invalid_response(OP, &bucket.bucket, field);
+
+    let mut objects = Vec::with_capacity(output.contents().len());
+    for object in output.contents() {
+        let full_key = object.key().ok_or_else(|| invalid("object key"))?;
+        if !full_key.starts_with(&full_prefix) {
+            bail!(from: invalid("object key under the prefix"));
+        }
+        let size = object.size().ok_or_else(|| invalid("object size"))?;
+        let last_modified = object
+            .last_modified()
+            .ok_or_else(|| invalid("object last modified"))?;
+        let nanos = i128::from(last_modified.secs()) * 1_000_000_000
+            + i128::from(last_modified.subsec_nanos());
+        let last_modified = UtcDateTime::from_unix_timestamp_nanos(nanos)
+            .map_err(|_| invalid("object last modified in range"))?;
+        objects.push(ListedObject {
+            key: full_key[handle_prefix.len()..].to_owned(),
+            size,
+            last_modified,
+            etag: object.e_tag().map(str::to_owned),
+        });
+    }
+
+    let mut folders = Vec::with_capacity(output.common_prefixes().len());
+    for common_prefix in output.common_prefixes() {
+        let full_folder = common_prefix
+            .prefix()
+            .ok_or_else(|| invalid("folder prefix"))?;
+        if !full_folder.starts_with(&full_prefix) {
+            bail!(from: invalid("folder under the prefix"));
+        }
+        folders.push(full_folder[handle_prefix.len()..].to_owned());
+    }
+
+    if let Some(max_keys) = options.max_keys
+        && objects.len() + folders.len() > usize::from(max_keys.get())
+    {
+        bail!(from: invalid("at most max_keys entries"));
+    }
+
+    let next_token = if output.is_truncated() == Some(true) {
+        let token = output
+            .next_continuation_token()
+            .ok_or_else(|| invalid("next continuation token"))?;
+        Some(token.to_owned())
+    } else {
+        None
+    };
+    Ok(ListPage {
+        objects,
+        folders,
+        next_token,
+    })
 }
 
 /// GetObject：对象和响应里内容的 sha256 的 base64（`checksum_mode` 为 true 时向服务端要）。对象不存在（NoSuchKey）返回 `None`
@@ -707,6 +801,43 @@ fn normalized_key_prefix(prefix: impl S3KeyPrefix) -> Result<String> {
 }
 
 // ---------------- 读、预签名用的类型 ----------------
+
+/// [`S3BucketHandle::list`] 的选项，不设的项用 `Default`：`ListOptions { prefix: "kyc/".into(), shallow: true, ..Default::default() }`
+#[derive(Clone, Debug, Default)]
+pub struct ListOptions {
+    /// 只列 key 以它开头的（相对句柄），空的是句柄下全部。按原样匹配，不补 `/`：`kyc` 也会列出 `kyc2/a`，只要文件夹下的写 `kyc/`
+    pub prefix: String,
+    /// 只列一层：key 在 `prefix` 之后还有 `/` 的不单独列出，到第一个 `/` 为止的部分归成一个文件夹，放进 [`ListPage::folders`]
+    pub shallow: bool,
+    /// 这一页最多几个，对象和文件夹合起来算。不给用服务端的默认值，S3 是 1000，比它大的也只给 1000
+    pub max_keys: Option<NonZeroU16>,
+    /// 从这个 key（相对句柄）之后开始列，不含它本身；按 key 的字典序
+    pub start_after: Option<String>,
+    /// 接着上一页列：上一页的 [`ListPage::next_token`]。和 `start_after` 同时给时服务端以它为准
+    pub continuation_token: Option<String>,
+}
+
+/// [`S3BucketHandle::list`] 的一页结果，对象、文件夹都按 key 的字典序
+#[derive(Clone, Debug)]
+pub struct ListPage {
+    pub objects: Vec<ListedObject>,
+    /// 下一层的文件夹（相对句柄，以 `/` 结尾），只在 [`ListOptions::shallow`] 时有
+    pub folders: Vec<String>,
+    /// 还有下一页时有，传给下一次的 [`ListOptions::continuation_token`]；列完了是 `None`
+    pub next_token: Option<String>,
+}
+
+/// 列出来的一个对象
+#[derive(Clone, Debug)]
+pub struct ListedObject {
+    /// 相对句柄的 key
+    pub key: String,
+    /// 字节数
+    pub size: i64,
+    /// 最后改动的时间
+    pub last_modified: UtcDateTime,
+    pub etag: Option<String>,
+}
 
 /// 预签名 GET 的选项：签进 URL（`response-*` 参数），读取时服务端用它们覆盖对象上存的响应头，没设的不带、用对象上存的。
 /// 签在 URL 里，拿到 URL 的人改不了。要指定文件名的用 [`attachment`](Self::attachment)、[`inline`](Self::inline) 建，

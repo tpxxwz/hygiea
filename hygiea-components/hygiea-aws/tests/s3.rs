@@ -454,6 +454,127 @@ mod rustfs {
         assert!(err.is(S3Err::MissingSha256), "{err:#}");
     }
 
+    /// 按前缀列对象：带前缀的句柄只列它的前缀下的，key 和文件夹相对句柄；只列一层、按前缀筛、
+    /// 分页（max_keys + next_token）、从某个 key 之后接着列；不带前缀的句柄按整个 bucket 列，前缀不补 `/`
+    #[tokio::test]
+    async fn list_objects() {
+        use hygiea_aws::{ListOptions, ListPage};
+        use hygiea_core::datetime::UtcDateTime;
+        use std::num::NonZeroU16;
+
+        let server = start().await;
+        let store = store(&server, default_bucket_named("test")).await;
+        let sdk = sdk_client(&client_config(
+            &server,
+            server.secret_key(),
+            S3BucketsConfig::default(),
+        ));
+        let before = UtcDateTime::now() - Duration::from_secs(60);
+        for key in [
+            "root/a.txt",
+            "root/b/c.txt",
+            "root/b/d.txt",
+            "root/e/f.txt",
+            "root2/x.txt",
+            "outside.txt",
+        ] {
+            sdk.put_object()
+                .bucket("test")
+                .key(key)
+                .body(Bytes::copy_from_slice(key.as_bytes()).into())
+                .send()
+                .await
+                .unwrap();
+        }
+        let bucket = store.default_client_default_bucket();
+        let prefixed = bucket.with_prefix("root").unwrap();
+        let keys = |page: &ListPage| -> Vec<String> {
+            page.objects.iter().map(|o| o.key.clone()).collect()
+        };
+
+        // 全部：相对前缀的 key，大小、改动时间对得上，没有文件夹、没有下一页
+        let page = prefixed.list(ListOptions::default()).await.unwrap();
+        assert_eq!(keys(&page), ["a.txt", "b/c.txt", "b/d.txt", "e/f.txt"]);
+        assert_eq!(page.objects[1].size, "root/b/c.txt".len() as i64);
+        assert!(page.objects.iter().all(|o| o.last_modified > before));
+        assert!(page.folders.is_empty());
+        assert!(page.next_token.is_none());
+
+        // 只列一层：下一层归成文件夹
+        let page = prefixed
+            .list(ListOptions {
+                shallow: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(keys(&page), ["a.txt"]);
+        assert_eq!(page.folders, ["b/", "e/"]);
+
+        // 按前缀筛
+        let page = prefixed
+            .list(ListOptions {
+                prefix: "b/".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(keys(&page), ["b/c.txt", "b/d.txt"]);
+
+        // 分页：每页 2 个，带着 next_token 接着列，列完 next_token 是 None
+        let first = prefixed
+            .list(ListOptions {
+                max_keys: NonZeroU16::new(2),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(keys(&first), ["a.txt", "b/c.txt"]);
+        let second = prefixed
+            .list(ListOptions {
+                max_keys: NonZeroU16::new(2),
+                continuation_token: first.next_token.clone(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(first.next_token.is_some());
+        assert_eq!(keys(&second), ["b/d.txt", "e/f.txt"]);
+        assert!(second.next_token.is_none());
+
+        // 从某个 key（相对句柄）之后接着列，不含它
+        let page = prefixed
+            .list(ListOptions {
+                start_after: Some("b/c.txt".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(keys(&page), ["b/d.txt", "e/f.txt"]);
+
+        // 不带前缀的句柄：整个 bucket
+        let page = bucket
+            .list(ListOptions {
+                shallow: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(keys(&page), ["outside.txt"]);
+        assert_eq!(page.folders, ["root/", "root2/"]);
+
+        // 前缀按原样匹配，不补 `/`：root 也列出 root2 下的
+        let page = bucket
+            .list(ListOptions {
+                prefix: "root".into(),
+                shallow: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(page.folders, ["root/", "root2/"]);
+    }
+
     /// 默认的客户端和其他客户端（各连一个服务）下可以有同名的 bucket，互不干扰；没配的其他客户端报 ClientNotConfigured。
     /// 按名字取其他客户端的默认 bucket（client_default_bucket）、按段名取其他 bucket（client_buckets）；
     /// 一次取几个其他客户端的默认 bucket（clients_default_buckets）、几个 bucket（clients_buckets），结果里都没有默认客户端、默认 bucket

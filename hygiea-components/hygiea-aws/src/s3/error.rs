@@ -168,7 +168,6 @@ pub(super) fn bucket_admin_disabled(client: &str, bucket: &str) -> HyErr {
     err!(S3Err::BucketAdminDisabled, { "client": client, "bucket": bucket })
 }
 
-#[cfg_attr(not(feature = "s3-bucket-admin"), allow(dead_code))]
 pub(super) fn invalid_response(op: &str, bucket: &str, field: &str) -> HyErr {
     err!(S3Err::InvalidResponse, { "op": op, "bucket": bucket, "key": "", "field": field })
 }
