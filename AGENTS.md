@@ -15,7 +15,7 @@
 - `test-support`（不带 hygiea 前缀，表示仓库内部用）、`hygiea-examples`、`playground`：不发布
   - `test-support` 不单独建 `tests/`：它在各 crate 的测试里被用到，出问题那些测试就会失败；有独立逻辑时在对应文件里写单元测试
   - `playground` 不在 workspace 里（根 `Cargo.toml` 的 `exclude`），有自己的 `Cargo.lock`（不提交）和 `target/`，在它的目录里单独 `cargo test`。
-    只有 `tests/`，`src/lib.rs` 是空的（Cargo 要求至少有一个 lib 或 bin），里面的代码不保证一直能编译
+    只有 `tests/`，一个领域一个目录（`tests/<领域>/main.rs`），`src/lib.rs` 是空的（Cargo 要求至少有一个 lib 或 bin），里面的代码不保证一直能编译
 
 项目还在早期，公开 API 可以直接改，不用考虑兼容性。
 
@@ -89,7 +89,7 @@
 | 单元测试：纯逻辑（配置默认值、解析、builder、`provides()` 这类） | 源文件里的 `#[cfg(test)] mod tests` |
 | crate 的集成测试：要把组件跑起来、起本地服务或容器的；给使用方看的示范写法 | `<crate>/tests/` |
 | 给使用方看的示例 | `hygiea-examples/examples/<主题>/`，每个示例一个文件、只讲一件事，在 `Cargo.toml` 里用 `[[example]]` 声明（Cargo 只自动发现 `examples/*.rs` 和 `examples/*/main.rs`），名字 `<目录>_<文件>`；读配置文件的示例各用 `config/<示例名>/` 一个目录 |
-| 调查、速查、暂存代码 | `playground/tests/` |
+| 调查、速查、暂存代码 | `playground/tests/<领域>/main.rs`，一个领域一个目录 |
 
 - 测试分层见 `hygiea-test` 的 crate 文档。HTTP 客户端的测试在进程里起本地服务（`test_support::http_server`），测建连超时用 `hygiea_test::tcp::silent()`，默认就跑。
   有 container、live 层的测试文件，文件头写明运行命令和需要的环境变量。
