@@ -67,8 +67,12 @@ dispatch(cfg, client)                                   两条路共用
 
 非 2xx 算不算失败由 `RequestConfig::rejects_non_success()` 决定（request.rs）：开了 feature `verbatim` 时是字段 `non_success_as_err`，
 没开时没有这个字段，恒为 true。两条路判断非 2xx 的地方都调它，cfg 只写在这一个函数里。
-`verbatim` 下的东西（这个开关、`ContentType::Json`）只给接口调试、测试工具这类要原样发、原样收的调用方用，普通用法里看不到；
-`ContentType` 标了 `#[non_exhaustive]`，变体随 feature 增加时外部的 `match` 不会因为 feature 被合并打开而编译不过。
+`verbatim` 下的东西（这个开关、`VerbatimRaw`）只给接口调试、测试工具这类要原样发、原样收的调用方用，普通用法里看不到。
+
+Content-Type 任意写用单独的类型 `VerbatimRaw`（body.rs），不在 `ContentType` 上加变体：`ContentType` 是 `Copy`、`as_str()` 返回 `&'static str`，
+任意的字符串放不进去；只在 feature 开着时去掉 `Copy` 也不行，feature 只能加东西，同一次编译里别处一开 `verbatim`，
+依赖 `Copy` 的代码就编译不过。`Raw` 的字段是公开的，改它的形状要改所有用到的地方，所以也不动它。
+`VerbatimRaw` 构造时就把 Content-Type 转成 `HeaderValue`，不合法的当场报错，不留到发送时。
 
 ## 3. 日志里的文本和打码
 
@@ -92,7 +96,7 @@ dispatch(cfg, client)                                   两条路共用
     ├─ params → redact::to_redacted_json（打码）
     └─ body   → IntoBody::preview()                      (body.rs)
           ├─ Json / Form → redact::to_redacted_json（打码）
-          └─ Raw → is_text_content_type(ContentType::as_str())
+          └─ Raw / RawStream / VerbatimRaw → is_text_content_type(Content-Type 的文本)
                 ├─ 文本   → to_one_line(decode_charset(..))
                 └─ 二进制 → "<N bytes type>"
 

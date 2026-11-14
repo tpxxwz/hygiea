@@ -71,7 +71,7 @@
 | `http-axum` | `hygiea-http`（`axum`） | `hygiea::http::AxumComponent` |
 | `http-client-reqwest` | `hygiea-http-client`（`reqwest`） | `hygiea::http_client::reqwest_client`：`ReqwestComponent`，在 `Resources` 中提供 `ReqwestClient`，见下文「HTTP 客户端与日志打码」 |
 | `http-client-reqwest-debug-log` | `hygiea-http-client`（`debug-log`，带上 `reqwest`） | 带原文和请求头、响应头的 debug 日志，只在 dev-dependencies 里开 |
-| `http-client-reqwest-verbatim` | `hygiea-http-client`（`verbatim`，带上 `reqwest`） | 原样发、原样收：编码好的 JSON 原样发出，非 2xx 按正常响应返回，给接口调试、测试工具这类调用方用 |
+| `http-client-reqwest-verbatim` | `hygiea-http-client`（`verbatim`，带上 `reqwest`） | 原样发、原样收：Content-Type 任意写、内容原样发出（`VerbatimRaw`），非 2xx 按正常响应返回，给接口调试、测试工具这类调用方用 |
 | `grpc-tonic` | `hygiea-grpc`（`tonic`） | `hygiea::grpc::TonicComponent` |
 | `aws-s3` | `hygiea-aws`（`s3`） | `hygiea::aws::AwsS3Component`，在 `Resources` 中提供 `AwsS3Store` |
 | `aws-sdk-env` | `hygiea-aws`（`sdk-env`） | 客户端可以设 `use_sdk_env`：没写的项由 SDK 从环境加载（`AWS_*` 环境变量、`~/.aws`、实例凭证），连 AWS 时用。引入 aws-config |

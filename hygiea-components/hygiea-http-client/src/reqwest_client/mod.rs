@@ -140,6 +140,8 @@ mod retry;
 mod send;
 mod text;
 
+#[cfg(feature = "verbatim")]
+pub use body::VerbatimRaw;
 pub use body::{ContentType, Form, IntoBody, Json, Multipart, MultipartPart, Raw, RawStream};
 pub use client::{ReqwestClient, ReqwestComponent, ReqwestConfig};
 pub use config::{

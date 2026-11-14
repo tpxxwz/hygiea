@@ -1,9 +1,11 @@
 //! 请求体：[`IntoBody`] 和现成的实现。内存里的 `()` / [`Json`] / [`Form`] / [`Raw`] / [`Multipart`] 是 `Clone`，可以重试；
-//! 流式的 [`RawStream`] / `multipart::Form` 不能
+//! 流式的 [`RawStream`] / `multipart::Form` 不能。开了 feature `verbatim` 时另有 `VerbatimRaw`：Content-Type 任意写，内容原样发出
 
 use std::fmt;
 
 use reqwest::header::CONTENT_TYPE;
+#[cfg(feature = "verbatim")]
+use reqwest::header::HeaderValue;
 
 use hygiea_core::{BaseErr, Result, ResultExt, err, redact};
 
@@ -13,20 +15,11 @@ use super::{Body, Bytes, RequestBuilder, multipart};
 
 /// 裸 body 支持的 content-type。不开放任意字符串，要加类型就在这里加变体。
 ///
-/// 要把一个值序列化后发出去，用 [`Json`] / [`Form`] / `multipart::Form`，content-type 由 reqwest 自动设；
-/// 开了 feature `verbatim` 时，这里的 `ContentType::Json` 给已经编码好的 JSON 文本用，字节原样发出
-/// （比如按这段文本签名，发出去的必须一字不差），`ContentType::Form` 给已经编码好的表单文本用。`multipart` 不在这里。
-///
-/// 变体会随 feature 增加，所以标了 `#[non_exhaustive]`，外部 `match` 要写 `_ =>`
+/// `json` / `form` / `multipart` 不在这里——它们不只是换个头，body 的编码方式也不同，
+/// 由 [`Json`] / [`Form`] / `multipart::Form` 表示，content-type 由 reqwest 自动设。
+/// 要任意的 content-type、已经编码好的内容原样发出（接口调试、测试工具这类），开 feature `verbatim` 用 `VerbatimRaw`
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum ContentType {
-    /// （feature `verbatim`）`application/json`，body 是已经编码好的 JSON 文本，原样发出，不重新序列化
-    #[cfg(feature = "verbatim")]
-    Json,
-    /// （feature `verbatim`）`application/x-www-form-urlencoded`，body 是已经编码好的表单文本（`a=1&b=2`），原样发出
-    #[cfg(feature = "verbatim")]
-    Form,
     /// `application/x-ndjson`，一行一个 JSON 对象的流式格式
     Ndjson,
     /// `application/xml`，RFC 7303 里机器处理 XML 的首选，默认 UTF-8
@@ -47,10 +40,6 @@ impl ContentType {
     /// 对应的 MIME 字符串，就是请求头里 `Content-Type` 的值
     pub fn as_str(self) -> &'static str {
         match self {
-            #[cfg(feature = "verbatim")]
-            Self::Json => "application/json",
-            #[cfg(feature = "verbatim")]
-            Self::Form => "application/x-www-form-urlencoded",
             Self::Ndjson => "application/x-ndjson",
             Self::Xml => "application/xml",
             Self::XmlText => "text/xml",
@@ -124,6 +113,43 @@ impl RawStream {
     /// `RawStream(content_type, body.into())` 的简写
     pub fn new(content_type: ContentType, body: impl Into<Body>) -> Self {
         Self(content_type, body.into())
+    }
+}
+
+/// （feature `verbatim`）Content-Type 任意写的原始 body，对应 `.body()`：Content-Type 头写成给的原样，内容原样发出，
+/// 不重新编码。给接口调试、测试工具这类调用方用：已经编码好的 JSON、表单文本按原文发（比如按这段文本签名，发出去的必须一字不差），
+/// 带 charset、厂商自定义的类型（`application/json; charset=utf-8`、`application/vnd.xxx+json`）也能写。
+/// 内容在内存里，`Clone`，可以重试。日志摘要同 [`Raw`]：按 Content-Type 判断是文本就打原文，否则只报字节数
+#[cfg(feature = "verbatim")]
+#[derive(Debug, Clone)]
+pub struct VerbatimRaw {
+    content_type: HeaderValue,
+    /// 和 `content_type` 是同一个值，日志摘要用；构造时确认过是合法的头值
+    content_type_text: String,
+    body: Bytes,
+}
+
+#[cfg(feature = "verbatim")]
+impl VerbatimRaw {
+    /// `content_type` 不是合法的头值（有换行、控制字符这类）时报 [`InvalidHeader`](super::HttpClientErr::InvalidHeader)
+    pub fn new(content_type: &str, body: impl Into<Bytes>) -> Result<Self> {
+        let value = HeaderValue::from_str(content_type).map_err(|e| {
+            invalid_header(format!("invalid content-type: {content_type:?}")).with_source(e)
+        })?;
+        Ok(Self {
+            content_type: value,
+            content_type_text: content_type.to_owned(),
+            body: body.into(),
+        })
+    }
+
+    /// 构造时给的 Content-Type
+    pub fn content_type(&self) -> &str {
+        &self.content_type_text
+    }
+
+    pub fn body(&self) -> &Bytes {
+        &self.body
     }
 }
 
@@ -255,7 +281,18 @@ impl IntoBody for Raw {
     }
 
     fn preview(&self) -> Result<Option<String>> {
-        Ok(Some(raw_preview(self.0, &self.1)))
+        Ok(Some(raw_preview(self.0.as_str(), &self.1)))
+    }
+}
+
+#[cfg(feature = "verbatim")]
+impl IntoBody for VerbatimRaw {
+    fn apply(self, req: RequestBuilder) -> Result<RequestBuilder> {
+        Ok(req.header(CONTENT_TYPE, self.content_type).body(self.body))
+    }
+
+    fn preview(&self) -> Result<Option<String>> {
+        Ok(Some(raw_preview(&self.content_type_text, &self.body)))
     }
 }
 
@@ -267,7 +304,7 @@ impl IntoBody for RawStream {
     /// 流读一次就消费掉，拿不到内容，只给一个标记；`Body` 其实是内存字节时和 [`Raw`] 一样打
     fn preview(&self) -> Result<Option<String>> {
         Ok(Some(match self.1.as_bytes() {
-            Some(bytes) => raw_preview(self.0, bytes),
+            Some(bytes) => raw_preview(self.0.as_str(), bytes),
             None => "<stream>".to_string(),
         }))
     }
@@ -275,11 +312,11 @@ impl IntoBody for RawStream {
 
 /// 原始字节的日志摘要：文本打原文（控制字符转义后，和响应日志一样，避免一条日志被拆成多行）；
 /// 二进制（protobuf、octet-stream）打出来是乱码，只报字节数
-fn raw_preview(content_type: ContentType, bytes: &[u8]) -> String {
-    if is_text_content_type(content_type.as_str()) {
-        to_one_line(decode_charset(content_type.as_str(), bytes)).into_owned()
+fn raw_preview(content_type: &str, bytes: &[u8]) -> String {
+    if is_text_content_type(content_type) {
+        to_one_line(decode_charset(content_type, bytes)).into_owned()
     } else {
-        format!("<{} bytes {}>", bytes.len(), content_type.as_str())
+        format!("<{} bytes {content_type}>", bytes.len())
     }
 }
 
@@ -379,10 +416,6 @@ mod tests {
         #[test]
         fn as_str_maps_every_variant() {
             let expected = [
-                #[cfg(feature = "verbatim")]
-                (ContentType::Json, "application/json"),
-                #[cfg(feature = "verbatim")]
-                (ContentType::Form, "application/x-www-form-urlencoded"),
                 (Ndjson, "application/x-ndjson"),
                 (Xml, "application/xml"),
                 (XmlText, "text/xml"),
@@ -453,14 +486,33 @@ mod tests {
             }
         }
 
-        /// `ContentType::Json`：已经编码好的 JSON 文本原样发出，空格、key 的顺序、数字的写法都不变
+        /// `VerbatimRaw`：Content-Type 头原样写出（带 charset、厂商自定义的也行），已经编码好的文本原样发出，
+        /// 空格、key 的顺序、数字的写法都不变
         #[cfg(feature = "verbatim")]
         #[test]
-        fn raw_json_text_sent_as_is() {
+        fn verbatim_raw_sends_as_is() {
             let text = r#"{"b": 2,  "a": 1.50, "c": "\u00e9"}"#;
-            let req = build(Raw::new(ContentType::Json, text));
-            assert_eq!(content_type(&req), Some("application/json"));
-            assert_eq!(body_bytes(&req), text.as_bytes());
+            for ct in [
+                "application/json",
+                "application/json; charset=utf-8",
+                "application/vnd.example+json",
+                "application/x-www-form-urlencoded",
+            ] {
+                let req = build(VerbatimRaw::new(ct, text).unwrap());
+                assert_eq!(content_type(&req), Some(ct));
+                assert_eq!(body_bytes(&req), text.as_bytes());
+            }
+        }
+
+        /// `VerbatimRaw`：不合法的头值在构造时就报 InvalidHeader
+        #[cfg(feature = "verbatim")]
+        #[test]
+        fn verbatim_raw_rejects_invalid_content_type() {
+            let err = VerbatimRaw::new("text/plain\r\nx-evil: 1", "a").unwrap_err();
+            assert!(
+                err.is(crate::reqwest_client::HttpClientErr::InvalidHeader),
+                "{err}"
+            );
         }
 
         /// multipart 的 boundary 由 reqwest 生成
@@ -543,6 +595,23 @@ mod tests {
                 .preview()
                 .unwrap();
             assert_eq!(preview.as_deref(), Some("<3 bytes application/x-protobuf>"));
+        }
+
+        /// `VerbatimRaw` 按给的 Content-Type 判断：文本类（带参数、`+json` 的也算）打原文，二进制类只打字节数和类型
+        #[cfg(feature = "verbatim")]
+        #[test]
+        fn verbatim_raw_preview_follows_content_type() {
+            let text =
+                VerbatimRaw::new("application/vnd.example+json; charset=utf-8", "{\"a\":\n1}")
+                    .unwrap()
+                    .preview()
+                    .unwrap();
+            assert_eq!(text.as_deref(), Some("{\"a\": 1}"));
+            let binary = VerbatimRaw::new("image/png", vec![1u8, 2])
+                .unwrap()
+                .preview()
+                .unwrap();
+            assert_eq!(binary.as_deref(), Some("<2 bytes image/png>"));
         }
 
         /// 流式 body 读一次就没了，只打一个标记
