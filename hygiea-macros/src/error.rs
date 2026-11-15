@@ -66,6 +66,7 @@ pub(crate) trait VariantBuilder: Sized {
     fn err_code_span(&self) -> proc_macro2::Span;
     fn match_arm(&self, enum_name: &syn::Ident, krate: &syn::Path) -> proc_macro2::TokenStream;
     fn code_arm(&self, enum_name: &syn::Ident) -> proc_macro2::TokenStream;
+    fn code_to_variant_arm(&self, enum_name: &syn::Ident) -> proc_macro2::TokenStream;
     fn vars_arm(&self, enum_name: &syn::Ident) -> proc_macro2::TokenStream;
     fn generated_items(
         &self,
@@ -77,6 +78,7 @@ pub(crate) trait VariantBuilder: Sized {
         krate: &syn::Path,
         match_arms: &[proc_macro2::TokenStream],
         code_arms: &[proc_macro2::TokenStream],
+        from_code_arms: &[proc_macro2::TokenStream],
         vars_arms: &[proc_macro2::TokenStream],
         generated_items: &[proc_macro2::TokenStream],
     ) -> proc_macro2::TokenStream;
@@ -86,6 +88,7 @@ pub(crate) trait VariantBuilder: Sized {
 // 它不关心具体的 VariantBuilder，只保存两类生成片段：
 // - match_arms：to_err 方法里的 match 分支。
 // - code_arms：ErrKind::err_code 里的 match 分支，直接返回错误码。
+// - from_code_arms：ErrKind::from_err_code 里的 match 分支，按错误码找回变体。
 // - vars_arms：__hygiea_tpl_vars 里的 match 分支，返回模板需要的变量名。
 // - generated_items：错误码保护符号、linkme 注册项等额外 item。
 //
@@ -96,6 +99,7 @@ struct ErrContext<V> {
     krate: syn::Path,
     match_arms: Vec<proc_macro2::TokenStream>,
     code_arms: Vec<proc_macro2::TokenStream>,
+    from_code_arms: Vec<proc_macro2::TokenStream>,
     vars_arms: Vec<proc_macro2::TokenStream>,
     generated_items: Vec<proc_macro2::TokenStream>,
     _marker: PhantomData<V>,
@@ -107,6 +111,7 @@ impl<V: VariantBuilder> ErrContext<V> {
             krate: syn::parse_quote!(::hygiea),
             match_arms: Vec::new(),
             code_arms: Vec::new(),
+            from_code_arms: Vec::new(),
             vars_arms: Vec::new(),
             generated_items: Vec::new(),
             _marker: PhantomData,
@@ -117,6 +122,8 @@ impl<V: VariantBuilder> ErrContext<V> {
         self.match_arms
             .push(variant.match_arm(enum_name, &self.krate));
         self.code_arms.push(variant.code_arm(enum_name));
+        self.from_code_arms
+            .push(variant.code_to_variant_arm(enum_name));
         self.vars_arms.push(variant.vars_arm(enum_name));
         self.generated_items
             .extend(variant.generated_items(enum_name, &self.krate));
@@ -128,6 +135,7 @@ impl<V: VariantBuilder> ErrContext<V> {
             &self.krate,
             &self.match_arms,
             &self.code_arms,
+            &self.from_code_arms,
             &self.vars_arms,
             &self.generated_items,
         )
@@ -309,6 +317,13 @@ impl VariantBuilder for HyVariant {
         quote! { #enum_name::#var_name => #err_code }
     }
 
+    fn code_to_variant_arm(&self, enum_name: &syn::Ident) -> proc_macro2::TokenStream {
+        let err_code = &self.err_code;
+        let var_name = &self.var_name;
+        // "00100001" => Some(MyErrors::UserNotFound)
+        quote! { #err_code => ::core::option::Option::Some(#enum_name::#var_name) }
+    }
+
     fn vars_arm(&self, enum_name: &syn::Ident) -> proc_macro2::TokenStream {
         let vars = &self.vars;
         let var_name = &self.var_name;
@@ -344,6 +359,7 @@ impl VariantBuilder for HyVariant {
         krate: &syn::Path,
         match_arms: &[proc_macro2::TokenStream],
         code_arms: &[proc_macro2::TokenStream],
+        from_code_arms: &[proc_macro2::TokenStream],
         vars_arms: &[proc_macro2::TokenStream],
         generated_items: &[proc_macro2::TokenStream],
     ) -> proc_macro2::TokenStream {
@@ -377,11 +393,18 @@ impl VariantBuilder for HyVariant {
                     }
                 }
             }
-            // 给 HyErr::is 用，按变体直接返回错误码，不构造 HyErr
+            // 给 HyErr::is、HyErr::variant 用：变体和错误码互相转，不构造 HyErr
             impl #krate::ErrKind for #enum_name {
                 fn err_code(&self) -> &'static str {
                     match self {
                         #(#code_arms),*
+                    }
+                }
+
+                fn from_err_code(err_code: &str) -> ::core::option::Option<Self> {
+                    match err_code {
+                        #(#from_code_arms,)*
+                        _ => ::core::option::Option::None,
                     }
                 }
             }

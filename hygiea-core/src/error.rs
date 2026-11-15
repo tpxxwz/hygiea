@@ -164,11 +164,24 @@ impl HyErr {
     pub fn is(&self, kind: impl ErrKind) -> bool {
         self.err_code == kind.err_code()
     }
+
+    /// 取回构造它的那个变体：错误是 `E` 的某个变体时返回它，否则是 `None`。
+    /// 要对一个 enum 的全部变体分别处理时用（`match` 能穷尽，新加的变体编译器会提醒），只判断一两个变体用 [`HyErr::is`]：
+    /// `match e.variant::<MyErr>() { Some(MyErr::NotFound) => .., Some(MyErr::Conflict) => .., None => .. }`
+    pub fn variant<E: ErrKind>(&self) -> Option<E> {
+        E::from_err_code(self.err_code)
+    }
 }
 
-/// 错误 enum 的变体，由 `#[derive(hy_err)]` 自动实现，给 [`HyErr::is`] 用
+/// 错误 enum 的变体，由 `#[derive(hy_err)]` 自动实现，给 [`HyErr::is`]、[`HyErr::variant`] 用
 pub trait ErrKind {
+    /// 这个变体的错误码
     fn err_code(&self) -> &'static str;
+
+    /// 按错误码找回变体；不是这个 enum 的错误码时是 `None`
+    fn from_err_code(err_code: &str) -> Option<Self>
+    where
+        Self: Sized;
 }
 
 impl HyErr {
@@ -590,6 +603,21 @@ mod tests {
         fn source(&self) -> Option<&(dyn Error + 'static)> {
             Some(&self.0)
         }
+    }
+
+    /// variant 取回构造它的变体；别的 enum 的错误是 None
+    #[test]
+    fn variant_finds_the_constructing_variant() {
+        let e = err!(TestErr::NotFound, "bob");
+        assert!(matches!(e.variant::<TestErr>(), Some(TestErr::NotFound)));
+        assert!(matches!(
+            err!(TestErr::Wrapped).variant::<TestErr>(),
+            Some(TestErr::Wrapped)
+        ));
+        assert!(e.variant::<BaseErr>().is_none());
+        let base = err!(BaseErr::SysErr);
+        assert!(matches!(base.variant::<BaseErr>(), Some(BaseErr::SysErr)));
+        assert!(base.variant::<TestErr>().is_none());
     }
 
     /// Display 只给渲染结果，{:#} 把 source 链逐层拼上
