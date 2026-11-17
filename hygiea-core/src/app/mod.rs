@@ -13,10 +13,10 @@
 //!
 //! 环境名 `<env>` 按这个顺序取：命令行 `--env prod` → 环境变量 `HYGIEA_ENV=prod` → 默认 `dev`。
 //! 配置文件名固定的应用（一份配置的本机工具）用 [`ConfigArgs::fixed`]：环境名由应用定死，不看 `--env`、不读 `HYGIEA_ENV`；
-//! 命令行合进 [`ConfigSourceArgs`]（只有 `-f`、`-d`、`--set`，`--help` 里没有 `--env`）。要生成配置文件、或者启动前检查它在不在，
+//! 命令行合进 [`ConfigSourceArgs`]（只有 `-f`、`-C`、`--set`，`--help` 里没有 `--env`）。要生成配置文件、或者启动前检查它在不在，
 //! 用 [`ConfigArgs::config_file`] 取主配置文件的路径，和加载时读的是同一个。
 //!
-//! 配置文件目录按这个顺序取：命令行 `-d /etc/myapp`（`--config-dir`）→ 代码里
+//! 配置文件目录按这个顺序取：命令行 `-C /etc/myapp`（`--config-dir`）→ 代码里
 //! `ConfigArgs::from_cli().default_config_dir("/etc/myapp")` → 默认相对当前目录的 `config`。
 //!
 //! 配置项的层级就是应用顶层配置类型的字段层级。框架的配置（[`RegistryConfig`]）建议放在 `registry` 字段下，
@@ -49,7 +49,7 @@
 //!
 //! ## 命令行由应用自己管
 //!
-//! 框架不解析命令行，只提供 [`ConfigArgs`]（`--env`、`-f` / `--config`、`-d` / `--config-dir`、`--set`）。没有自己参数的应用直接用
+//! 框架不解析命令行，只提供 [`ConfigArgs`]（`--env`、`-f` / `--config`、`-C` / `--config-dir`、`--set`）。没有自己参数的应用直接用
 //! [`ConfigArgs::from_cli`]；有自己参数的应用把它合进自己的 CLI，这样自定义参数、`--help`、
 //! `--version` 都正常：
 //!
@@ -60,7 +60,7 @@
 //! #[command(version, about)]          // 应用自己的版本号、描述
 //! struct Cli {
 //!     #[command(flatten)]
-//!     config: ConfigArgs,             // 框架的 --env / -f / -d / --set
+//!     config: ConfigArgs,             // 框架的 --env / -f / -C / --set
 //!     #[arg(long)]
 //!     dry_run: bool,                  // 应用自己的参数
 //! }
@@ -155,6 +155,8 @@ use std::borrow::Cow;
 mod component;
 mod config;
 mod error;
+#[cfg(feature = "app-daemon")]
+pub mod daemon;
 mod registry;
 mod resource_component;
 mod resources;

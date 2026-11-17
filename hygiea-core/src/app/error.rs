@@ -73,8 +73,21 @@ pub enum AppErr {
     #[error(err_code = "23", err_tpl = "Component init failed: {{ cause }}")]
     InitFailed,
 
+    /// 配了 `pid_file`（feature `app-daemon`），文件里的进程还在：同一个应用已经在跑。`pid` 是它的进程号、`path` 是 pid 文件
+    #[error(
+        err_code = "24",
+        err_tpl = "Already running (pid {{ pid }}, pid file {{ path }})"
+    )]
+    AlreadyRunning,
+    /// 进程控制失败（feature `app-daemon`）：读写 pid 文件、后台启动、发信号。cause 写清楚是哪一步
+    #[error(err_code = "25", err_tpl = "Process control failed: {{ cause }}")]
+    ProcessFailed,
+
     // ---- 关闭 ----
     /// 组件 `stop` 收尾失败，比如关连接出错；只打 WARN，不影响关后面的组件
     #[error(err_code = "31", err_tpl = "Component stop failed: {{ cause }}")]
     StopFailed,
+    /// 停掉另一个进程时（feature `app-daemon` 的 `daemon::stop`）等它退出超时。`pid`、`secs`
+    #[error(err_code = "32", err_tpl = "Process {{ pid }} did not exit in {{ secs }}s")]
+    StopTimeout,
 }

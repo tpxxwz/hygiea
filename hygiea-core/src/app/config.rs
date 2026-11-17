@@ -12,7 +12,7 @@ use crate::log::TracingConfig;
 /// 没有自己参数的应用用 [`ConfigArgs::from_cli`]；有的话用 `#[command(flatten)]` 合进自己的 CLI。
 /// 测试里可以直接构造，不用伪造命令行。
 ///
-/// 占用的参数：`--env`、`-f` / `--config`、`-d` / `--config-dir`、`--set`。合进自己的 CLI 时不要再定义
+/// 占用的参数：`--env`、`-f` / `--config`、`-C` / `--config-dir`、`--set`。合进自己的 CLI 时不要再定义
 /// 同名的参数：clap 只在 debug 构建里检查重名（启动时 panic），release 构建不检查
 #[derive(clap::Args, Debug, Clone, Default)]
 // 上面的 rustdoc 是给看代码的人的，不要让 clap 拿去当 --help 里的程序说明
@@ -35,7 +35,7 @@ pub struct ConfigArgs {
     fixed_env: bool,
 }
 
-/// 不带 `--env` 的命令行参数：`-f` / `--config`、`-d` / `--config-dir`、`--set`。
+/// 不带 `--env` 的命令行参数：`-f` / `--config`、`-C` / `--config-dir`、`--set`。
 ///
 /// 给配置文件名固定的应用用：`#[command(flatten)]` 合进自己的 CLI（`--help` 里没有 `--env`），
 /// 再用 [`ConfigArgs::fixed`] 定下环境名，转成 [`ConfigArgs`] 交给 [`Registry::load_config`]。
@@ -52,7 +52,7 @@ pub struct ConfigSourceArgs {
     )]
     pub configs: Vec<String>,
     /// 配置文件目录，覆盖代码里设的默认目录；都没有时是当前目录下的 config
-    #[arg(short = 'd', long = "config-dir", value_name = "DIR")]
+    #[arg(short = 'C', long = "config-dir", value_name = "DIR")]
     pub config_dir: Option<String>,
     /// 覆盖单个配置项，优先级最高，可以写多次：--set registry.tracing.root_env_filter=debug
     #[arg(long = "set", value_name = "KEY=VALUE", value_parser = parse_override)]
@@ -102,7 +102,7 @@ impl ConfigArgs {
         self
     }
 
-    /// 设默认的配置文件目录，命令行 `-d` / `--config-dir` 传了时以命令行为准。
+    /// 设默认的配置文件目录，命令行 `-C` / `--config-dir` 传了时以命令行为准。
     /// 最终取值：`-d` → 这里设的 → [`DEFAULT_CONFIG_DIR`](Self::DEFAULT_CONFIG_DIR)。
     /// 相对路径按当前目录解析，不想依赖从哪里启动时传绝对路径，比如 `concat!(env!("CARGO_MANIFEST_DIR"), "/config")`
     pub fn default_config_dir(mut self, dir: impl Into<String>) -> Self {
@@ -187,6 +187,10 @@ pub struct RegistryConfig {
     /// 和 k8s 的 `preStop: sleep 5` 作用一样，二选一即可。本地开发保持 0
     #[serde(with = "crate::datetime::duration_secs")]
     pub shutdown_delay_secs: Duration,
+    /// pid 文件（feature `app-daemon`）：写了时 [`Registry::run`] 启动时写进进程号、正常退出时删掉，文件里的进程还在就不启动
+    /// （[`AppErr::AlreadyRunning`](super::AppErr::AlreadyRunning)）。相对路径按启动时的当前目录解析。不写就不用 pid 文件
+    #[cfg(feature = "app-daemon")]
+    pub pid_file: Option<String>,
 }
 
 impl RegistryConfig {
@@ -202,6 +206,8 @@ impl Default for RegistryConfig {
             tracing: TracingConfig::default(),
             shutdown_timeout_secs: Self::DEFAULT_SHUTDOWN_TIMEOUT,
             shutdown_delay_secs: Duration::ZERO,
+            #[cfg(feature = "app-daemon")]
+            pid_file: None,
         }
     }
 }
@@ -429,7 +435,7 @@ mod tests {
                 "/etc/myapp/secret.toml"
             ]
         );
-        // 命令行 -d 覆盖代码里设的默认目录
+        // 命令行 -C 覆盖代码里设的默认目录
         let mut args = args;
         args.source.config_dir = Some("./cfg".to_string());
         assert_eq!(ConfigPlan::new(&args).files[0], "./cfg/prod.toml");
@@ -514,7 +520,7 @@ mod tests {
         }
         .default_config_dir("/srv/app/config");
         assert_eq!(args.config_file(), "/srv/app/config/prod.toml");
-        // -d 优先于代码里设的默认目录
+        // -C 优先于代码里设的默认目录
         let args = ConfigArgs {
             env: Some("prod".to_string()),
             source: ConfigSourceArgs {

@@ -27,6 +27,7 @@ default = []  # 用户明确选择需要的功能
 
 # ---- core 的功能：一对一转发，feature 之间的依赖关系只在 core 里写 ----
 app = ["hygiea-core/app"]
+app-daemon = ["hygiea-core/app-daemon"]
 log = ["hygiea-core/log"]
 ws-client = ["hygiea-core/ws-client"]
 redact = ["hygiea-core/redact"]

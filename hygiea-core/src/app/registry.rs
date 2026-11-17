@@ -31,6 +31,9 @@ pub struct Registry {
     /// 组件没单独指定时，关闭每个组件最多等多久
     shutdown_timeout: Duration,
     shutdown_delay: Duration,
+    /// 配置的 pid 文件（feature `app-daemon`），`run` 时写、结束时删
+    #[cfg(feature = "app-daemon")]
+    pid_file: Option<std::path::PathBuf>,
     /// 日志的 guard：它活着时后台线程负责把日志写进文件，drop 时把缓冲里剩下的刷出去。
     /// `run` 结束时交给调用方，让 `run` 之后的日志也能写进文件。放在最后一个字段，
     /// 字段按声明顺序 drop，没走到 `run` 就被丢弃时，组件在 `Drop` 里打的日志也能写进去。
@@ -67,6 +70,8 @@ impl Registry {
         };
         let shutdown_timeout = config.shutdown_timeout_secs;
         let shutdown_delay = config.shutdown_delay_secs;
+        #[cfg(feature = "app-daemon")]
+        let pid_file = config.pid_file.clone().map(std::path::PathBuf::from);
         // 框架配置交给 Resources，组件各阶段都能取（ImmediateResourceComponent 交给 from_config）
         let state = Resources::new(config);
         Self {
@@ -77,6 +82,8 @@ impl Registry {
             started: 0,
             shutdown_timeout,
             shutdown_delay,
+            #[cfg(feature = "app-daemon")]
+            pid_file,
             log_guard,
         }
     }
@@ -219,6 +226,18 @@ impl Registry {
     async fn run_until_shutdown(&mut self) -> Result<()> {
         // 最先装好信号监听：之后组件启动期间收到的信号会留着，不会按系统默认行为直接杀掉进程
         let mut signals = ShutdownSignals::install();
+        // pid 文件：同一个应用已经在跑时这里就退出，什么组件都还没启动；函数返回时 drop、删掉文件
+        #[cfg(feature = "app-daemon")]
+        let _pid_file = match &self.pid_file {
+            Some(path) => match super::daemon::PidFile::acquire(path) {
+                Ok(guard) => Some(guard),
+                Err(e) => {
+                    tracing::error!("{e:#}");
+                    return Err(e);
+                }
+            },
+            None => None,
+        };
 
         // 先按依赖关系排好启动顺序，缺依赖、成环、重复提供都在这里报，这时还没有组件启动，不用关
         if let Err(e) = self.sort_by_dependencies() {

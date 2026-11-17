@@ -22,6 +22,9 @@ default = []
 # Application framework module
 app = ["log", "hygiea-macros/component", "dep:async-trait", "dep:dashmap", "dep:clap", "dep:config", "dep:tokio", "dep:tokio-util", "tokio/rt", "tokio/sync", "tokio/macros", "tokio/signal", "tokio/time"]
 
+# 守护进程：pid 文件（[registry] pid_file）、后台运行（DaemonArgs -d）、停掉在跑的、查状态。Linux、macOS、Windows（Windows 上停是强制结束）
+app-daemon = ["app", "dep:process-wrap", "dep:sysinfo", "dep:windows"]
+
 # 日志配置和初始化，可脱离 app 单独用
 log = ["datetime-iana", "dep:tracing", "dep:tracing-subscriber", "dep:tracing-log", "dep:tracing-appender", "serde/derive"]
 
@@ -49,7 +52,7 @@ json = []
 ws-client = ["dep:tokio-tungstenite"]
 
 # All features
-full = ["app", "log", "json", "ws-client", "datetime-chrono", "datetime-iana", "redact", "lock", "lock-tokio"]
+full = ["app", "app-daemon", "log", "json", "ws-client", "datetime-chrono", "datetime-iana", "redact", "lock", "lock-tokio"]
 
 [dependencies]
 # Error handling (always on)
@@ -70,6 +73,8 @@ lru = { workspace = true }
 
 # Optional dependencies for app feature
 clap   = { workspace = true, optional = true }
+process-wrap = { workspace = true, optional = true }
+sysinfo = { workspace = true, optional = true }
 config = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 tokio-util = { workspace = true, optional = true }
@@ -103,3 +108,7 @@ tempfile = { workspace = true }
 
 [package.metadata.docs.rs]
 all-features = true
+
+# app-daemon 在 Windows 上设起进程的标志（process-wrap 的 CreationFlags 用的类型）
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, optional = true }

@@ -45,6 +45,7 @@
 | Feature | 开启什么 |
 |---|---|
 | `app` | 应用框架，见上文（会带上 `log`） |
+| `app-daemon` | 守护进程：pid 文件（`[registry] pid_file`，同一个应用不起两份）、后台运行（`hygiea::app::daemon::DaemonArgs` 的 `-d` / `--detach`）、停掉在跑的（`daemon::stop`）、查状态（`daemon::status`）；Linux、macOS、Windows，Windows 上停是强制结束（会带上 `app`） |
 | `log` | tracing 初始化：控制台和按时间滚动的文件输出、过滤，可以脱离 `app` 单独用（会带上 `datetime-iana`） |
 | `lock` | 分布式锁的 trait（`hygiea::lock::DistributedLock`）和 key 的注册（`#[derive(hy_lock_type)]`、`#[derive(hy_lock_key)]`、`lock_key!`），后端由组件实现（见 `db-lock`），见下文「分布式锁」 |
 | `lock-tokio` | 进程内的锁 `hygiea::lock::TokioLock`：tokio 的 Mutex 实现 `DistributedLock`，不跨进程（会带上 `lock`） |
@@ -206,7 +207,7 @@ async fn main() -> Result<()> {
   | `S3Config`（`aws-s3`） | [hygiea-components/hygiea-aws/config/aws.toml](hygiea-components/hygiea-aws/config/aws.toml) |
 
 - 配置的通用规则：所有配置项都可以不写，不写用默认值；写了不存在的配置项（拼错也算）启动加载配置时报错，不会被静默忽略。
-- 配置目录默认是相对当前目录的 `config/`，可以用命令行 `-d <目录>`（`--config-dir`）或代码里 `ConfigArgs::from_cli().default_config_dir(..)` 换，命令行优先。
+- 配置目录默认是相对当前目录的 `config/`，可以用命令行 `-C <目录>`（`--config-dir`）或代码里 `ConfigArgs::from_cli().default_config_dir(..)` 换，命令行优先。
 
 这段就是 `app_basic` 示例（示例里用 `default_config_dir` 指向 `hygiea-examples/config/app_basic/`）。自己实现组件、依赖排序、多实例、全局状态、后台任务、配置加载、两阶段启动各有一个单独的示例，见下文「示例」。
 
@@ -405,7 +406,10 @@ pub enum LegacyErrors {
 | `99900121` | `AppErr::BindFailed` | Bind failed: {{ addr }} |
 | `99900122` | `AppErr::ConnectFailed` | Connect failed: {{ target }} |
 | `99900123` | `AppErr::InitFailed` | Component init failed: {{ cause }} |
+| `99900124` | `AppErr::AlreadyRunning` | Already running (pid {{ pid }}, pid file {{ path }}) |
+| `99900125` | `AppErr::ProcessFailed` | Process control failed: {{ cause }} |
 | `99900131` | `AppErr::StopFailed` | Component stop failed: {{ cause }} |
+| `99900132` | `AppErr::StopTimeout` | Process {{ pid }} did not exit in {{ secs }}s |
 | `99900199` | `AppErr::ComponentError` | Component error: {{ cause }} |
 | `99900202` | `BaseLogErr::AppenderFailed` | Create log file appender failed: {{ dir }} |
 | `99900203` | `BaseLogErr::InstallFailed` | Install global logger failed |
