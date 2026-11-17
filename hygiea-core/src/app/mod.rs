@@ -12,6 +12,9 @@
 //! | 4 | 命令行 | `--set registry.tracing.root_env_filter=debug`（可重复） | 临时改一两项 |
 //!
 //! 环境名 `<env>` 按这个顺序取：命令行 `--env prod` → 环境变量 `HYGIEA_ENV=prod` → 默认 `dev`。
+//! 配置文件名固定的应用（一份配置的本机工具）用 [`ConfigArgs::fixed`]：环境名由应用定死，不看 `--env`、不读 `HYGIEA_ENV`；
+//! 命令行合进 [`ConfigSourceArgs`]（只有 `-f`、`-d`、`--set`，`--help` 里没有 `--env`）。要生成配置文件、或者启动前检查它在不在，
+//! 用 [`ConfigArgs::config_file`] 取主配置文件的路径，和加载时读的是同一个。
 //!
 //! 配置文件目录按这个顺序取：命令行 `-d /etc/myapp`（`--config-dir`）→ 代码里
 //! `ConfigArgs::from_cli().default_config_dir("/etc/myapp")` → 默认相对当前目录的 `config`。
@@ -158,7 +161,7 @@ mod resources;
 mod signal;
 
 pub use component::{Component, Deferred, DeferredComponent, Immediate, ImmediateComponent};
-pub use config::{ConfigArgs, IntoRegistryConfig, RegistryConfig};
+pub use config::{ConfigArgs, ConfigSourceArgs, IntoRegistryConfig, RegistryConfig};
 pub use error::AppErr;
 /// 标在 `impl ImmediateComponent for ..` / `impl DeferredComponent for ..` 上，把 [`Component`] 的项
 /// （`Config`、`build`、`provides`、`depends_on`、`stop`、`shutdown_timeout`）和启动方法写在一个 impl 块里，

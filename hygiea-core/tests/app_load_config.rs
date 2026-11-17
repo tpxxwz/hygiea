@@ -1,5 +1,6 @@
 //! `Registry::load_config` 的配置分层加载：环境文件 < `-f` 额外文件 < 环境变量 < `--set`，
-//! `<PREFIX>_ENV` 选择环境，`-d` / `default_config_dir` 决定去哪个目录读文件。
+//! `<PREFIX>_ENV` 选择环境，`-d` / `default_config_dir` 决定去哪个目录读文件；`ConfigArgs::fixed` 定死环境名，
+//! `ConfigSourceArgs` 是不带 `--env` 的命令行参数。
 //!
 //! `load_config` 内部会调用 `Registry::with_config` 装全局日志：本文件里第一个成功的装上，
 //! 其余的走 `InstallFailed` 静默沿用（见 `app_registry_log.rs`），不影响这里只关心配置本身的断言。
@@ -9,7 +10,10 @@
 
 #![cfg(feature = "app")]
 
-use hygiea_core::app::{ConfigArgs, IntoRegistryConfig, Registry, RegistryConfig};
+use hygiea_core::app::clap::{self, Parser};
+use hygiea_core::app::{
+    ConfigArgs, ConfigSourceArgs, IntoRegistryConfig, Registry, RegistryConfig,
+};
 use serde::Deserialize;
 
 /// 测试用的顶层配置：`registry` 段省略时用默认值，顶层 `deny_unknown_fields` 用来测未知字段报错
@@ -66,7 +70,7 @@ fn config_layers_override_in_order() {
 
     // -f local：覆盖环境文件
     let mut with_extra_file = base.clone();
-    with_extra_file.configs = vec!["local".to_string()];
+    with_extra_file.source.configs = vec!["local".to_string()];
     let (_registry, config) = Registry::load_config::<AppConfig>(&with_extra_file);
     assert_eq!(config.name, "from-local");
 
@@ -81,7 +85,7 @@ fn config_layers_override_in_order() {
 
     // --set：覆盖环境变量，优先级最高
     let mut with_override = with_extra_file.clone();
-    with_override.overrides = vec![("name".to_string(), "from-set".to_string())];
+    with_override.source.overrides = vec![("name".to_string(), "from-set".to_string())];
     let (_registry, config) = Registry::load_config::<AppConfig>(&with_override);
     assert_eq!(config.name, "from-set");
 
@@ -152,7 +156,7 @@ fn config_dir_field_overrides_default_config_dir() {
 
     // 命令行 -d（config_dir 字段）覆盖代码里设的默认目录
     let mut with_cli_dir = args.clone();
-    with_cli_dir.config_dir = Some(cli_dir.path().to_str().unwrap().to_string());
+    with_cli_dir.source.config_dir = Some(cli_dir.path().to_str().unwrap().to_string());
     let (_registry, config) = Registry::load_config::<AppConfig>(&with_cli_dir);
     assert_eq!(config.name, "from-cli-dir");
 }
@@ -265,4 +269,92 @@ fn unknown_field_panics() {
         .env_prefix("HYGIEA_TEST_UNKNOWN_FIELD")
         .default_config_dir(dir.path().to_str().unwrap());
     let _ = Registry::load_config::<AppConfig>(&args);
+}
+
+// ---- 6. 环境名固定（ConfigArgs::fixed）、不带 --env 的命令行参数 ---------------
+
+#[test]
+fn fixed_env_reads_fixed_file_and_ignores_env_var() {
+    let dir = tempfile::tempdir().unwrap();
+    let prefix = "HYGIEA_TEST_FIXED";
+    write(dir.path(), "myapp.toml", "name = \"from-fixed\"\n", prefix);
+    write(dir.path(), "prod.toml", "name = \"from-prod\"\n", prefix);
+    write(dir.path(), "local.toml", "name = \"from-local\"\n", prefix);
+    let dir_text = dir.path().to_str().unwrap().to_string();
+    let args = |source: ConfigSourceArgs| {
+        ConfigArgs::fixed(source, "myapp")
+            .env_prefix(prefix)
+            .default_config_dir(dir_text.clone())
+    };
+    // 选环境的环境变量指向 prod：fixed 时不读它
+    let env_key = format!("{prefix}_ENV");
+    // SAFETY: 测试代码，env_key 带独有前缀，不会跟其他测试冲突
+    unsafe {
+        std::env::set_var(&env_key, "prod");
+    }
+
+    let only_fixed = args(ConfigSourceArgs::default());
+    assert_eq!(only_fixed.config_file(), format!("{dir_text}/myapp.toml"));
+    let (_registry, config) = Registry::load_config::<AppConfig>(&only_fixed);
+    assert_eq!(config.name, "from-fixed");
+
+    // -f 叠加、--set 覆盖照常
+    let layered = args(ConfigSourceArgs {
+        configs: vec!["local".to_string()],
+        overrides: vec![("count".to_string(), "7".to_string())],
+        ..Default::default()
+    });
+    let (_registry, config) = Registry::load_config::<AppConfig>(&layered);
+    assert_eq!(config.name, "from-local");
+    assert_eq!(config.count, 7);
+
+    // SAFETY: 同上
+    unsafe {
+        std::env::remove_var(&env_key);
+    }
+}
+
+#[test]
+fn source_args_cli_has_no_env_flag() {
+    #[derive(clap::Parser)]
+    struct Cli {
+        #[command(flatten)]
+        source: ConfigSourceArgs,
+    }
+    let cli = Cli::try_parse_from([
+        "app",
+        "-f",
+        "local,secret",
+        "-d",
+        "/etc/app",
+        "--set",
+        "a.b=1",
+    ])
+    .unwrap();
+    assert_eq!(cli.source.configs, ["local", "secret"]);
+    assert_eq!(cli.source.config_dir.as_deref(), Some("/etc/app"));
+    assert_eq!(cli.source.overrides, [("a.b".to_string(), "1".to_string())]);
+    assert!(Cli::try_parse_from(["app", "--env", "prod"]).is_err());
+}
+
+#[test]
+fn config_args_cli_still_parses_all_flags() {
+    // ConfigArgs 把 ConfigSourceArgs flatten 进来之后，命令行的写法和原来一样
+    #[derive(clap::Parser)]
+    struct Cli {
+        #[command(flatten)]
+        config: ConfigArgs,
+    }
+    let cli = Cli::try_parse_from([
+        "app", "--env", "prod", "-f", "local", "-d", "/etc/app", "--set", "a.b=1",
+    ])
+    .unwrap();
+    assert_eq!(cli.config.env.as_deref(), Some("prod"));
+    assert_eq!(cli.config.source.configs, ["local"]);
+    assert_eq!(cli.config.source.config_dir.as_deref(), Some("/etc/app"));
+    assert_eq!(
+        cli.config.source.overrides,
+        [("a.b".to_string(), "1".to_string())]
+    );
+    assert_eq!(cli.config.config_file(), "/etc/app/prod.toml");
 }

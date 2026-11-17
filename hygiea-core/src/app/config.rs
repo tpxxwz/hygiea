@@ -21,6 +21,28 @@ pub struct ConfigArgs {
     /// 环境名，读 <配置目录>/{ENV}.toml；不传时读环境变量 {PREFIX}_ENV（默认 HYGIEA_ENV），再没有就是 dev
     #[arg(long)]
     pub env: Option<String>,
+    /// `-f`、`-d`、`--set`
+    #[command(flatten)]
+    pub source: ConfigSourceArgs,
+    /// 环境变量前缀，不是命令行参数，用 [`ConfigArgs::env_prefix`] 设置
+    #[arg(skip)]
+    env_prefix: Option<String>,
+    /// 代码里设的默认配置目录，不是命令行参数，用 [`ConfigArgs::default_config_dir`] 设置
+    #[arg(skip)]
+    default_config_dir: Option<String>,
+    /// 环境名是应用定死的（[`ConfigArgs::fixed`]）：不读 `{PREFIX}_ENV`
+    #[arg(skip)]
+    fixed_env: bool,
+}
+
+/// 不带 `--env` 的命令行参数：`-f` / `--config`、`-d` / `--config-dir`、`--set`。
+///
+/// 给配置文件名固定的应用用：`#[command(flatten)]` 合进自己的 CLI（`--help` 里没有 `--env`），
+/// 再用 [`ConfigArgs::fixed`] 定下环境名，转成 [`ConfigArgs`] 交给 [`Registry::load_config`]。
+/// [`ConfigArgs`] 也是把它 flatten 进去、再加上 `--env`
+#[derive(clap::Args, Debug, Clone, Default)]
+#[command(about = None, long_about = None)]
+pub struct ConfigSourceArgs {
     /// 额外的配置文件名，逗号分隔，按顺序覆盖：-f local,secret 读 <配置目录>/local.toml、<配置目录>/secret.toml
     #[arg(
         short = 'f',
@@ -35,12 +57,6 @@ pub struct ConfigArgs {
     /// 覆盖单个配置项，优先级最高，可以写多次：--set registry.tracing.root_env_filter=debug
     #[arg(long = "set", value_name = "KEY=VALUE", value_parser = parse_override)]
     pub overrides: Vec<(String, String)>,
-    /// 环境变量前缀，不是命令行参数，用 [`ConfigArgs::env_prefix`] 设置
-    #[arg(skip)]
-    env_prefix: Option<String>,
-    /// 代码里设的默认配置目录，不是命令行参数，用 [`ConfigArgs::default_config_dir`] 设置
-    #[arg(skip)]
-    default_config_dir: Option<String>,
 }
 
 impl ConfigArgs {
@@ -62,6 +78,24 @@ impl ConfigArgs {
         <Cli as clap::Parser>::parse().args
     }
 
+    /// 环境名由应用定死：主配置文件固定读 `<配置目录>/{env}.toml`，不看 `--env`（[`ConfigSourceArgs`] 里没有）、
+    /// 也不读 `{PREFIX}_ENV`。适合一份配置的本机工具，换一套配置用 `-d`、`-f`
+    pub fn fixed(source: ConfigSourceArgs, env: impl Into<String>) -> Self {
+        Self {
+            env: Some(env.into()),
+            source,
+            fixed_env: true,
+            ..Default::default()
+        }
+    }
+
+    /// 主配置文件的路径 `<配置目录>/<环境名>.toml`，和 [`Registry::load_config`] 读的是同一个：
+    /// 应用要生成配置文件、或者启动前检查它在不在时用，不要自己拼
+    pub fn config_file(&self) -> String {
+        let (env, _) = self.resolve_env();
+        format!("{}/{env}.toml", self.dir())
+    }
+
     /// 换成应用自己的环境变量前缀，比如 `"MYAPP"`：配置项读 `MYAPP__...`，环境名读 `MYAPP_ENV`
     pub fn env_prefix(mut self, prefix: impl Into<String>) -> Self {
         self.env_prefix = Some(prefix.into());
@@ -77,7 +111,8 @@ impl ConfigArgs {
     }
 
     fn dir(&self) -> &str {
-        self.config_dir
+        self.source
+            .config_dir
             .as_deref()
             .or(self.default_config_dir.as_deref())
             .unwrap_or(Self::DEFAULT_CONFIG_DIR)
@@ -92,7 +127,8 @@ impl ConfigArgs {
     /// 环境名和它从哪来的，启动时打出来方便确认
     fn resolve_env(&self) -> (String, String) {
         if let Some(env) = &self.env {
-            return (env.clone(), "--env".to_string());
+            let source = if self.fixed_env { "fixed" } else { "--env" };
+            return (env.clone(), source.to_string());
         }
         let var = format!("{}_ENV", self.prefix());
         match std::env::var(&var) {
@@ -202,7 +238,7 @@ impl Registry {
                 .separator("__")
                 .try_parsing(true),
         );
-        for (key, value) in &args.overrides {
+        for (key, value) in &args.source.overrides {
             builder = builder
                 .set_override(key, value.as_str())
                 .unwrap_or_else(|e| plan.fail("apply --set", &e));
@@ -260,13 +296,13 @@ impl ConfigPlan {
     fn new(args: &ConfigArgs) -> Self {
         let (env, env_source) = args.resolve_env();
         let dir = args.dir();
-        let files = std::iter::once(env.as_str())
+        let files = std::iter::once(args.config_file())
             .chain(
-                args.configs
+                args.source
+                    .configs
                     .iter()
-                    .map(|name| name.trim_end_matches(".toml")),
+                    .map(|name| format!("{dir}/{}.toml", name.trim_end_matches(".toml"))),
             )
-            .map(|name| format!("{dir}/{name}.toml"))
             .collect();
         let env_prefix = args.prefix().to_string();
         // 和 config 库一样不区分大小写
@@ -282,7 +318,12 @@ impl ConfigPlan {
             files,
             env_prefix,
             env_vars,
-            override_keys: args.overrides.iter().map(|(key, _)| key.clone()).collect(),
+            override_keys: args
+                .source
+                .overrides
+                .iter()
+                .map(|(key, _)| key.clone())
+                .collect(),
         }
     }
 
@@ -361,7 +402,10 @@ mod tests {
     fn test_config_dir() {
         let args = ConfigArgs {
             env: Some("prod".to_string()),
-            configs: vec!["local".to_string(), "secret.toml".to_string()],
+            source: ConfigSourceArgs {
+                configs: vec!["local".to_string(), "secret.toml".to_string()],
+                ..Default::default()
+            },
             ..Default::default()
         };
         // 默认相对当前目录的 config
@@ -386,10 +430,8 @@ mod tests {
             ]
         );
         // 命令行 -d 覆盖代码里设的默认目录
-        let args = ConfigArgs {
-            config_dir: Some("./cfg".to_string()),
-            ..args
-        };
+        let mut args = args;
+        args.source.config_dir = Some("./cfg".to_string());
         assert_eq!(ConfigPlan::new(&args).files[0], "./cfg/prod.toml");
     }
 
@@ -441,6 +483,48 @@ mod tests {
             args.resolve_env(),
             ("staging".to_string(), "--env".to_string())
         );
+    }
+
+    #[test]
+    fn fixed_env_ignores_env_var_and_keeps_sources() {
+        // fixed 时环境名就是给的，来源标成 fixed；有没有设 HYGIEA_ENV 都一样（这个分支不去读它）
+        let source = ConfigSourceArgs {
+            configs: vec!["local".to_string()],
+            config_dir: Some("/etc/app".to_string()),
+            overrides: vec![("a.b".to_string(), "1".to_string())],
+        };
+        let args = ConfigArgs::fixed(source, "myapp");
+        assert_eq!(
+            args.resolve_env(),
+            ("myapp".to_string(), "fixed".to_string())
+        );
+        assert_eq!(args.source.configs, vec!["local".to_string()]);
+        assert_eq!(
+            args.source.overrides,
+            vec![("a.b".to_string(), "1".to_string())]
+        );
+        assert_eq!(args.config_file(), "/etc/app/myapp.toml");
+    }
+
+    #[test]
+    fn config_file_follows_dir_and_env() {
+        let args = ConfigArgs {
+            env: Some("prod".to_string()),
+            ..Default::default()
+        }
+        .default_config_dir("/srv/app/config");
+        assert_eq!(args.config_file(), "/srv/app/config/prod.toml");
+        // -d 优先于代码里设的默认目录
+        let args = ConfigArgs {
+            env: Some("prod".to_string()),
+            source: ConfigSourceArgs {
+                config_dir: Some("other".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+        .default_config_dir("/srv/app/config");
+        assert_eq!(args.config_file(), "other/prod.toml");
     }
 
     #[test]
