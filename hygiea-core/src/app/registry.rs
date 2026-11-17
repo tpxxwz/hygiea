@@ -298,8 +298,8 @@ impl Registry {
         // 谁提供哪个资源
         let mut provider: std::collections::HashMap<ResourceId, usize> =
             std::collections::HashMap::new();
-        for idx in 0..n {
-            for id in self.components[idx].provides.iter().cloned() {
+        for (idx, entry) in self.components.iter().enumerate() {
+            for id in entry.provides.iter().cloned() {
                 if let Some(&first) = provider.get(&id) {
                     return Err(err!(AppErr::DuplicateProvider, {
                         "resource": id.to_string(),

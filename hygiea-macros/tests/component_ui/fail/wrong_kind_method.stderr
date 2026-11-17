@@ -17,4 +17,4 @@ error[E0046]: not all trait items implemented, missing: `startup`
   | ^^^^^^^^^^^^ missing `startup` in implementation
   |
   = note: this error originates in the attribute macro `component` (in Nightly builds, run with -Z macro-backtrace for more info)
-  = help: implement the missing item: `fn startup<'life0: 'async_trait, 'life1: 'async_trait, 'async_trait>(&'life0 mut self, _: &'life1 Resources, _: CancellationToken) -> Pin<Box<(dyn Future<Output = Result<Option<tokio::task::JoinHandle<()>>, HyErr>> + Send + 'async_trait)>> { todo!() }`
+  = help: implement the missing item: `fn startup<'life0: 'async_trait, 'life1: 'async_trait, 'async_trait>(&'life0 mut self, _: &'life1 Resources, _: CancellationToken) -> Pin<Box<(dyn Future<Output = Result<std::option::Option<tokio::task::JoinHandle<()>>, HyErr>> + Send + 'async_trait)>> { todo!() }`
