@@ -105,19 +105,19 @@ db 的三个维度各自独立、只增加功能，同时打开的组合才有�
 ```toml
 [dependencies]
 # 错误处理、日期时间、环境变量、字符串不需要 feature
-hygiea = "0.1.2"
+hygiea = "0.1.3"
 
 # 应用框架，加上需要的组件
-hygiea = { version = "0.1.2", features = ["app", "db-sqlx", "db-postgres", "http-axum"] }
+hygiea = { version = "0.1.3", features = ["app", "db-sqlx", "db-postgres", "http-axum"] }
 
 # 全部
-hygiea = { version = "0.1.2", features = ["full"] }
+hygiea = { version = "0.1.3", features = ["full"] }
 ```
 
 或者用 `cargo add`：
 
 ```bash
-cargo add hygiea@0.1.2 --features app,db-sqlx,db-postgres,http-axum
+cargo add hygiea@0.1.3 --features app,db-sqlx,db-postgres,http-axum
 ```
 
 ### 应用框架
