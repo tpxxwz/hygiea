@@ -17,8 +17,6 @@
   - `playground` 不在 workspace 里（根 `Cargo.toml` 的 `exclude`），有自己的 `Cargo.lock`（不提交）和 `target/`，在它的目录里单独 `cargo test`。
     只有 `tests/`，一个领域一个目录（`tests/<领域>/main.rs`），`src/lib.rs` 是空的（Cargo 要求至少有一个 lib 或 bin），里面的代码不保证一直能编译
 
-项目还在早期，公开 API 可以直接改，不用考虑兼容性。
-
 ## 从哪里开始看
 
 | 主题 | 先读 | 内部机制 |
@@ -123,6 +121,11 @@
 ## 怎么验证
 
 - 只跑改动涉及的 crate（`-p <crate>`），收尾也一样；clippy、rustdoc 同样按 crate 跑。`--workspace` 的全量只在用户要求时跑。
+- 跑得久的（全量、container 层、要从头编译的）一律主动汇报进度，不让用户自己去看：
+  - 开跑前说清楚跑什么、大概多久，输出写进日志文件（`> /tmp/<名字>.log 2>&1`），放到后台跑；
+  - 跑的过程中每隔一分钟左右告诉用户一次：编译中还是在跑测试、跑到第几个 / 总数（nextest 每行的 `(n/total)`）、已经失败几个；
+    有失败马上说是哪个、为什么，不等跑完；
+  - 跑完给汇总（通过、失败、跳过的数量），失败的分清是环境问题（容器起不来、磁盘满、端口）还是代码问题。
 - 测试用 nextest，配置在 `.config/nextest.toml`，默认不跑 trybuild（`_ui` 结尾的测试二进制）和 live 层：
   - 改了的 crate：`cargo nextest run -p <crate> <测试文件头写的 feature> --run-ignored all`（普通测试加 container 层；本机有 Docker，不用问）
   - 改了宏：只跑改到的那个 trybuild（见下面重新生成快照的命令，去掉 `TRYBUILD=overwrite` 就是只跑不改）
