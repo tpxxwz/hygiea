@@ -417,8 +417,27 @@ impl RunningRedis {
 // ---- S3（RustFS） -------------------------------------------------------------
 
 const S3_PORT: u16 = 9000;
+/// 等 RustFS 的服务上下文初始化完、管理接口遇到 503 重试，各最多等这么久（秒）
+pub const S3_READY_TIMEOUT_SECS: u32 = 30;
+/// 上面两种等待每次间隔（秒）
+const S3_RETRY_INTERVAL_SECS: &str = "0.2";
 
-/// S3 兼容的对象存储容器，用 RustFS：默认 `rustfs/rustfs:1.0.3`，access key、secret key 随机，`/health` 返回 200 算就绪。
+/// 在容器里反复执行 `curl "$@"`（参数从 `sh -c` 后面传进来，不拼进脚本）：成功退出 0；
+/// 返回 503（RustFS 还没初始化完，说法有好几种：`server context is not ready`、`waiting for storage_quorum`……，只看状态码）就隔一会儿再试，到时间还不行、或者别的失败，打出最后一次的输出退出非 0
+const CURL_RETRY_ON_503: &str = r#"tries=$(( TIMEOUT * 5 ))
+for i in $(seq 1 "$tries"); do
+  out=$(curl "$@" 2>&1); rc=$?
+  [ "$rc" = 0 ] && exit 0
+  case "$out" in
+    *"returned error: 503"*) sleep "$INTERVAL" ;;
+    *) echo "$out"; exit "$rc" ;;
+  esac
+done
+echo "$out"; exit "$rc""#;
+
+/// S3 兼容的对象存储容器，用 RustFS：默认 `rustfs/rustfs:1.0.3`，access key、secret key 随机。
+/// 就绪：`/health` 返回 200 之后，再用管理员身份列 bucket 返回 200 才算（`/health` 先好，服务上下文还要再过一会儿才初始化完，
+/// 这段时间里的 S3、管理接口请求都返回 503 `server context is not ready`），最多等 [`S3_READY_TIMEOUT_SECS`] 秒。
 /// 不建 bucket，测试自己用 S3 客户端建；客户端用 path-style、region 随便填
 pub struct S3Spec {
     tag: String,
@@ -479,11 +498,17 @@ impl S3Spec {
             .env("RUSTFS_SECRET_KEY", &secret_key)
             .port(S3_PORT)
             .wait_http(S3_PORT, "/health", 200);
-        RunningS3 {
+        let running = RunningS3 {
             container: apply(spec, self.customizes).start().await,
             access_key,
             secret_key,
-        }
+        };
+        // 管理员列 bucket（GET /）成功才算就绪
+        let url = format!("http://127.0.0.1:{S3_PORT}/");
+        running
+            .curl_retrying("list buckets", &["-X", "GET", &url])
+            .await;
+        running
     }
 }
 
@@ -540,28 +565,40 @@ impl RunningS3 {
         .await;
     }
 
-    /// 在容器里用管理员身份 PUT 管理接口，不是 2xx 就 panic
+    /// 在容器里用管理员身份 PUT 管理接口，不是 2xx 就 panic（还没初始化完的 503 先重试）
     async fn admin_put(&self, url: &str, body: Option<&str>) {
+        let mut args = vec!["-X", "PUT", url];
+        if let Some(body) = body {
+            args.extend(["-d", body]);
+        }
+        self.curl_retrying(&format!("rustfs admin PUT {url}"), &args)
+            .await;
+    }
+
+    /// 在容器里用管理员身份（SigV4 签名）调 curl，`args` 是方法、URL、body 这些；遇到 RustFS 还没初始化完的 503 隔一会儿重试，
+    /// 最多 [`S3_READY_TIMEOUT_SECS`] 秒。到时间还不行、或者别的失败（不是 2xx）就 panic，带上最后一次的输出
+    async fn curl_retrying(&self, what: &str, args: &[&str]) {
         let user = format!("{}:{}", self.access_key, self.secret_key);
+        let script = format!(
+            "TIMEOUT={S3_READY_TIMEOUT_SECS}; INTERVAL={S3_RETRY_INTERVAL_SECS}\n{CURL_RETRY_ON_503}"
+        );
         let mut cmd = vec![
-            "curl",
+            "sh",
+            "-c",
+            &script,
+            "sh",
             "-sS",
             "--fail-with-body",
             "--aws-sigv4",
             "aws:amz:us-east-1:s3",
             "--user",
             &user,
-            "-X",
-            "PUT",
-            url,
         ];
-        if let Some(body) = body {
-            cmd.extend(["-d", body]);
-        }
+        cmd.extend_from_slice(args);
         let output = self.container.exec(cmd).await;
         if output.exit_code != 0 {
             panic!(
-                "rustfs admin PUT {url}: exit {} stdout {:?} stderr {:?}",
+                "{what}: exit {} stdout {:?} stderr {:?}",
                 output.exit_code, output.stdout, output.stderr
             );
         }
