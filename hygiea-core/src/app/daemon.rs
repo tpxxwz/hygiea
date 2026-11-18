@@ -1,13 +1,19 @@
 //! 进程控制（feature `app-daemon`）：pid 文件、后台运行、停掉在跑的、查状态。Linux、macOS、Windows 都支持：
-//! 后台起用 process-wrap，判断进程在不在、结束进程用 sysinfo。Windows 没有 SIGTERM，[`stop`] 在 Windows 上是强制结束。
+//! 后台起用 process-wrap，判断进程在不在用 sysinfo。停在各平台上都走正常关闭，见下面的「停」。
 //!
 //! - pid 文件：框架配置 `[registry] pid_file` 写了路径时，[`Registry::run`](super::Registry::run) 启动时写进自己的进程号，
 //!   正常退出时删掉（只删自己写的）。启动时文件里的进程还在，报 [`AppErr::AlreadyRunning`]，同一个应用不会起两份；
 //!   进程已经没了（上次被强杀）的旧文件直接覆盖。
 //! - 后台运行：命令行合进 [`DaemonArgs`]（`-d` / `--detach`）。带了它时应用调 [`spawn_detached`]：用同样的命令行
 //!   （去掉 `-d` / `--detach`）再起一个自己，新会话、脱离终端、输入输出丢掉（日志写文件），等它写出 pid 文件、活过一会儿才返回。
-//! - 停：[`stop`] 结束 pid 文件里的进程、等它退出。Unix 发 SIGTERM，和 Ctrl-C 一样走正常关闭
-//!   （[`Registry::run`](super::Registry::run) 的信号处理）；Windows 没有 SIGTERM，强制结束，组件来不及收尾。
+//!   Windows 上新进程有一个看不见的控制台（它再起的命令行子进程不弹窗口），并且尽量脱离父进程的作业对象
+//!   （关掉 Windows Terminal、VS Code 的终端时不跟着结束）；父进程的作业不允许脱离时就留在作业里。
+//!   后台进程挂在当前登录用户下：Windows 上用户注销时会被结束，要长期运行、开机自启要装成服务。
+//! - 停：[`stop`] 让 pid 文件里的进程正常关闭、等它退出，和 Ctrl-C 一样走 [`Registry::run`](super::Registry::run) 的信号处理：
+//!   - Unix：发 SIGTERM
+//!   - Windows：没有 SIGTERM。[`Registry::run`](super::Registry::run) 监听命名管道 `\\.\pipe\hygiea-stop-<进程号>`，
+//!     [`stop`] 连上它就是让它关闭。管道不分登录会话，从 ssh、另一个远程桌面会话里也能停；只有同一个用户、管理员能连上。
+//!     对方没有这个管道（不是 hygiea 的应用）时才强制结束，组件来不及收尾
 //! - 查：[`status`] 返回在跑的进程号。
 //!
 //! ```ignore
@@ -81,12 +87,17 @@ pub fn status(pid_file: &Path) -> Option<u32> {
     (pid != std::process::id() && exists(pid)).then_some(pid)
 }
 
-/// 结束 pid 文件里的进程（Unix 发 SIGTERM 正常关闭，Windows 强制结束），等它退出，最多 `timeout`。没在跑返回 `Ok(None)`，停了返回它的进程号；
-/// 超时报 [`AppErr::StopTimeout`]
+/// 让 pid 文件里的进程正常关闭（Unix 发 SIGTERM；Windows 连它的停止管道，对方没有管道时强制结束），等它退出，最多 `timeout`。
+/// 没在跑返回 `Ok(None)`，停了返回它的进程号；超时报 [`AppErr::StopTimeout`]
 pub fn stop(pid_file: &Path, timeout: Duration) -> Result<Option<u32>> {
     let Some(pid) = status(pid_file) else {
         return Ok(None);
     };
+    #[cfg(windows)]
+    if !request_stop(pid)? {
+        terminate(pid)?;
+    }
+    #[cfg(not(windows))]
     terminate(pid)?;
     let started = Instant::now();
     while exists(pid) {
@@ -102,12 +113,16 @@ pub fn stop(pid_file: &Path, timeout: Duration) -> Result<Option<u32>> {
 /// 等它把自己的进程号写进 `pid_file`、再活过 `settle` 才返回它的进程号；中途退出、`timeout` 内没写出 pid 文件报 [`AppErr::ProcessFailed`]
 pub fn spawn_detached(pid_file: &Path, settle: Duration, timeout: Duration) -> Result<u32> {
     let exe = std::env::current_exe().map_err(|e| failed(format!("current exe: {e}")))?;
-    let mut command = std::process::Command::new(exe);
-    command
-        .args(detach_args(std::env::args_os().skip(1)))
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+    let args = detach_args(std::env::args_os().skip(1));
+    let command = || {
+        let mut command = std::process::Command::new(&exe);
+        command
+            .args(&args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        command
+    };
     let mut child = spawn_wrapped(command).map_err(|e| failed(format!("spawn: {e}")))?;
     let pid = child.id();
     let started = Instant::now();
@@ -158,7 +173,7 @@ fn process_of(pid: u32) -> Option<sysinfo::System> {
     system.process(pid).is_some().then_some(system)
 }
 
-/// 结束进程（sysinfo）：Unix 发 SIGTERM，应用按 Ctrl-C 一样正常关闭；Windows 没有 SIGTERM，强制结束（组件来不及收尾）
+/// 结束进程（sysinfo）：Unix 发 SIGTERM，应用按 Ctrl-C 一样正常关闭；Windows 上是强制结束（组件来不及收尾），只在对方没有停止管道时用
 fn terminate(pid: u32) -> Result<()> {
     let Some(system) = process_of(pid) else {
         return Ok(());
@@ -176,21 +191,127 @@ fn terminate(pid: u32) -> Result<()> {
     Ok(())
 }
 
-/// 用 process-wrap 起后台进程：Unix 新会话（脱离终端），Windows 不挂在当前控制台上、自己一个进程组
-fn spawn_wrapped(command: std::process::Command) -> std::io::Result<Box<dyn process_wrap::std::ChildWrapper>> {
-    let mut command = process_wrap::std::CommandWrap::from(command);
-    #[cfg(unix)]
-    command.wrap(process_wrap::std::ProcessSession);
-    #[cfg(windows)]
-    command.wrap(process_wrap::std::CreationFlags(
-        windows::Win32::System::Threading::DETACHED_PROCESS | windows::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP,
-    ));
-    command.spawn()
+/// 用 process-wrap 起后台进程：新会话，脱离终端
+#[cfg(unix)]
+fn spawn_wrapped(
+    command: impl Fn() -> std::process::Command,
+) -> std::io::Result<Box<dyn process_wrap::std::ChildWrapper>> {
+    let mut wrapped = process_wrap::std::CommandWrap::from(command());
+    wrapped.wrap(process_wrap::std::ProcessSession);
+    wrapped.spawn()
+}
+
+/// 用 process-wrap 起后台进程：看不见的控制台、自己一个进程组、脱离父进程的作业对象；
+/// 作业不允许脱离（拒绝访问）时不带脱离再起一次
+#[cfg(windows)]
+fn spawn_wrapped(
+    command: impl Fn() -> std::process::Command,
+) -> std::io::Result<Box<dyn process_wrap::std::ChildWrapper>> {
+    use windows::Win32::System::Threading::{CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW};
+    const ERROR_ACCESS_DENIED: i32 = 5;
+    let spawn = |flags| {
+        let mut wrapped = process_wrap::std::CommandWrap::from(command());
+        wrapped.wrap(process_wrap::std::CreationFlags(flags));
+        wrapped.spawn()
+    };
+    let flags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP;
+    match spawn(flags | CREATE_BREAKAWAY_FROM_JOB) {
+        Err(e) if e.raw_os_error() == Some(ERROR_ACCESS_DENIED) => spawn(flags),
+        result => result,
+    }
+}
+
+/// Windows 上让进程正常关闭用的命名管道：[`Registry::run`](super::Registry::run) 监听，[`stop`] 连
+#[cfg(windows)]
+fn stop_pipe_name(pid: u32) -> String {
+    format!(r"\\.\pipe\hygiea-stop-{pid}")
+}
+
+/// 连 `pid` 的停止管道，让它正常关闭。连上了返回 `true`；管道不存在（不是 hygiea 的应用）返回 `false`；
+/// 连不上（没权限等）报 [`AppErr::ProcessFailed`]。所有实例都忙时等一下再连，最多 5 秒
+#[cfg(windows)]
+fn request_stop(pid: u32) -> Result<bool> {
+    const ERROR_PIPE_BUSY: i32 = 231;
+    let name = stop_pipe_name(pid);
+    let started = Instant::now();
+    loop {
+        match std::fs::OpenOptions::new().write(true).open(&name) {
+            Ok(_pipe) => return Ok(true),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY) && started.elapsed() < Duration::from_secs(5) => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => bail!(AppErr::ProcessFailed, format!("connect {name}: {e}")),
+        }
+    }
+}
+
+/// Windows 上 [`Registry::run`](super::Registry::run) 监听的停止管道：有连接进来就是 [`stop`] 要它正常关闭
+#[cfg(windows)]
+pub(crate) struct StopPipe {
+    name: String,
+    /// 等下一个连接的实例；建不出新实例后是 `None`，之后不再收到
+    server: Option<tokio::net::windows::named_pipe::NamedPipeServer>,
+}
+
+#[cfg(windows)]
+impl StopPipe {
+    /// 建自己进程号的管道。要求是第一个实例：同名的已经被别的进程建了就报错，不和它共用
+    pub(crate) fn listen() -> std::io::Result<StopPipe> {
+        let name = stop_pipe_name(std::process::id());
+        let server = tokio::net::windows::named_pipe::ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&name)?;
+        Ok(StopPipe { name, server: Some(server) })
+    }
+
+    /// 等下一个连接。每来一个连接换一个新实例，后面的请求（关闭过程中再停一次）照样收得到
+    pub(crate) async fn recv(&mut self) {
+        // 客户端连上又马上断开、服务端还没开始等时，ConnectNamedPipe 报这个，也算来过一个连接
+        const ERROR_NO_DATA: i32 = 232;
+        loop {
+            let Some(server) = self.server.as_mut() else {
+                return std::future::pending().await;
+            };
+            let connected = match server.connect().await {
+                Ok(()) => true,
+                Err(e) if e.raw_os_error() == Some(ERROR_NO_DATA) => true,
+                Err(e) => {
+                    tracing::warn!("stop pipe {} accept failed: {e}", self.name);
+                    false
+                }
+            };
+            self.server = tokio::net::windows::named_pipe::ServerOptions::new()
+                .create(&self.name)
+                .inspect_err(|e| tracing::error!("stop pipe {}: create next instance failed: {e}", self.name))
+                .ok();
+            if connected {
+                return;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 停止管道：连上就收到请求；收到后换了新实例，第二次也收得到；没有这个管道的进程号返回 false
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn stop_pipe_receives_requests() {
+        let mut pipe = StopPipe::listen().unwrap();
+        let pid = std::process::id();
+        for _ in 0..2 {
+            let client = tokio::task::spawn_blocking(move || request_stop(pid));
+            tokio::time::timeout(Duration::from_secs(5), pipe.recv()).await.unwrap();
+            assert!(client.await.unwrap().unwrap());
+        }
+        // 同一个进程号再建一个：不是第一个实例，报错
+        assert!(StopPipe::listen().is_err());
+        // 进程号不会是 u32::MAX（Windows 的进程号是 4 的倍数），没有这个管道
+        assert!(!request_stop(u32::MAX).unwrap());
+    }
 
     #[test]
     fn detach_args_drops_detach_flags() {

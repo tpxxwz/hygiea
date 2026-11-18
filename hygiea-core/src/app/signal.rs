@@ -3,7 +3,8 @@
 /// 进程的退出信号监听，`run` 一开始装好，整个运行期间用同一个。
 ///
 /// - Linux / macOS：SIGINT（Ctrl+C）、SIGTERM（`docker stop`、k8s 删 Pod 发的都是它）
-/// - Windows：Ctrl+C、Ctrl+Break、关闭控制台窗口、系统关机（Windows 没有 SIGTERM）
+/// - Windows：Ctrl+C、Ctrl+Break、关闭控制台窗口、系统关机（Windows 没有 SIGTERM）；开了 `app-daemon` 时还有
+///   `daemon::stop` 发来的停止请求（命名管道，见 [`daemon`](super::daemon) 模块文档）
 ///
 /// 装好之后这些信号不再按系统默认行为直接结束进程，而是交给框架走优雅关闭。
 /// 某个信号装不上（极少见）只打 ERROR，不影响其他信号
@@ -20,6 +21,8 @@ pub(super) struct ShutdownSignals {
     ctrl_close: Option<tokio::signal::windows::CtrlClose>,
     #[cfg(windows)]
     ctrl_shutdown: Option<tokio::signal::windows::CtrlShutdown>,
+    #[cfg(all(windows, feature = "app-daemon"))]
+    stop_pipe: Option<super::daemon::StopPipe>,
 }
 
 impl ShutdownSignals {
@@ -45,6 +48,8 @@ impl ShutdownSignals {
                 ctrl_break: ok_or_log("Ctrl+Break", windows::ctrl_break()),
                 ctrl_close: ok_or_log("console close", windows::ctrl_close()),
                 ctrl_shutdown: ok_or_log("system shutdown", windows::ctrl_shutdown()),
+                #[cfg(feature = "app-daemon")]
+                stop_pipe: ok_or_log("daemon stop pipe", super::daemon::StopPipe::listen()),
             }
         }
     }
@@ -71,6 +76,19 @@ impl ShutdownSignals {
                 () = wait!(self.terminate) => "SIGTERM",
             }
         }
+        // 没开 app-daemon 时没有停止管道，这一项永远等不到
+        #[cfg(all(windows, feature = "app-daemon"))]
+        macro_rules! wait_stop_pipe {
+            () => {
+                wait!(self.stop_pipe)
+            };
+        }
+        #[cfg(all(windows, not(feature = "app-daemon")))]
+        macro_rules! wait_stop_pipe {
+            () => {
+                std::future::pending::<()>()
+            };
+        }
         #[cfg(windows)]
         {
             tokio::select! {
@@ -78,6 +96,7 @@ impl ShutdownSignals {
                 () = wait!(self.ctrl_break) => "Ctrl+Break",
                 () = wait!(self.ctrl_close) => "console close",
                 () = wait!(self.ctrl_shutdown) => "system shutdown",
+                () = wait_stop_pipe!() => "stop request (daemon::stop)",
             }
         }
     }

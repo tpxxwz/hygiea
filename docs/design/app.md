@@ -189,3 +189,11 @@ pub type RedisComponent = ImmediateResourceComponent<FredRedisPool>;
 - 信号监听在 `run` 一开始就装好：组件启动期间收到的信号会留着，启动完成后马上走优雅关闭，不会被系统默认行为直接杀掉
 - 关闭途中再收到信号走 `signal.rs` 的 `force_exit`：`process::exit(130)`，不跑析构函数，文件日志缓冲里最后几行可能写不进去，
   所以这条同时打到 stderr
+
+## 8. 后台运行和停（app-daemon）
+
+用法见 `hygiea-core/src/app/daemon.rs` 的模块文档。Windows 上：
+
+- 停：`Registry::run` 监听命名管道 `\\.\pipe\hygiea-stop-<进程号>`（`signal.rs` 的 `ShutdownSignals` 里和 Ctrl-C 一起等），
+  `stop` 连上它就是让它正常关闭。管道建成第一个实例（`first_pipe_instance`），名字被占了就不监听
+- 后台起：`CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB`，不允许脱离作业时去掉 `CREATE_BREAKAWAY_FROM_JOB` 再起
