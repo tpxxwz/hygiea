@@ -133,7 +133,10 @@ aws-sdk-s3 = { version = "1.159", default-features = false, features = ["rt-toki
 # Time
 chrono = { version = "0.4", features = ["serde"] }
 time = { version = "0.3", features = ["formatting", "parsing", "macros", "serde"] }
-time-tz = { version = "2.0", features = ["system"] }
+# 只用 IANA 数据库；系统时区由 iana-time-zone 取。time-tz 的 system feature 依赖 windows-sys 0.32，
+# Rust 1.100 起会把 std 的 WaitOnAddress 链接到 vertdll.dll，Windows 上一 park 线程就崩
+time-tz = "2.0"
+iana-time-zone = "0.1"
 
 # 测试依赖
 serial_test = "4.0"

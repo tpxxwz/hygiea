@@ -34,7 +34,7 @@ datetime-chrono = ["dep:chrono"]
 # Simulation clock; enables replacing the UTC clock source
 
 # IANA timezone and system-local datetime support
-datetime-iana = ["dep:time-tz"]
+datetime-iana = ["dep:time-tz", "dep:iana-time-zone"]
 
 # 分布式锁的 trait（DistributedLock），后端在 db / redis 组件里实现
 lock = ["hygiea-macros/lock", "dep:async-trait", "dep:tokio", "tokio/rt", "tokio/time", "dep:tracing"]
@@ -91,6 +91,8 @@ tracing-appender = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
 time = { workspace = true }
 time-tz = { workspace = true, optional = true }
+# 取系统时区的 IANA 名，再到 time-tz 的数据库里查
+iana-time-zone = { workspace = true, optional = true }
 regex = { workspace = true }
 tokio-tungstenite = { workspace = true, optional = true }
 

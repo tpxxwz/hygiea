@@ -6,7 +6,7 @@
 //! 这些方法先把输入换算到系统时区再计算，**结果只取决于时刻，和输入带什么 offset 无关**，
 //! 所以 `now()` 的结果、解析来的带 offset 的时间都可以直接调用。
 //!
-//! 系统时区在第一次使用时确定并缓存：`TZ` 环境变量 → 系统设置（unix 上是 `/etc/localtime`）→ UTC。
+//! 系统时区在第一次使用时确定并缓存：`TZ` 环境变量 → 系统设置（unix 上是 `/etc/localtime`，Windows 上是系统的时区设置）→ UTC。
 //! 按系统时区读写的 serde 模块（`ymdhms_utc_range_local` 等）在 `serde_ext.rs`。
 
 use std::sync::OnceLock;
@@ -49,14 +49,21 @@ fn local_timezone() -> &'static Tz {
 
 /// 顺序同 C 库的 localtime()：TZ 环境变量 → 系统设置（unix 上是 /etc/localtime 符号链接）→ UTC。
 /// TZ 的值交给 time-tz 的 IANA 数据库查，开头的 `:` 先去掉（glibc 的写法，比如 `:Asia/Shanghai`、
-/// `:/etc/localtime`）；查不到（拼错、文件路径、POSIX 规则串等）就往下走
+/// `:/etc/localtime`）；查不到（拼错、文件路径、POSIX 规则串等）就往下走。
+/// 系统设置由 iana-time-zone 取成 IANA 名，同样到 time-tz 的数据库里查
 fn detect_timezone(tz_env: Option<String>) -> &'static Tz {
     if let Some(tz) = tz_env
         .and_then(|name| time_tz::timezones::get_by_name(name.strip_prefix(':').unwrap_or(&name)))
     {
         return tz;
     }
-    time_tz::system::get_timezone().unwrap_or_else(|error| {
+    let system = iana_time_zone::get_timezone()
+        .map_err(|error| error.to_string())
+        .and_then(|name| {
+            time_tz::timezones::get_by_name(&name)
+                .ok_or_else(|| format!("{name} not in the IANA database"))
+        });
+    system.unwrap_or_else(|error| {
         eprintln!(
             "ERROR hygiea: failed to determine local timezone (TZ unset or unknown, system: {error}); falling back to UTC"
         );
