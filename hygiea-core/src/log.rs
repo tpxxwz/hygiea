@@ -718,20 +718,22 @@ mod tests {
 
     #[test]
     fn test_layer_name_format() {
+        // 期望值里的路径按平台的分隔符拼（Windows 上是 `\`）
         let dir = Path::new("/var/log/app");
+        let path = |name: &str| dir.join(name).display().to_string();
         assert_eq!(
             layer_name(2, dir, &layer("ignored", "app-error")),
-            "#2(/var/log/app/app-error*log)"
+            format!("#2({}*log)", path("app-error"))
         );
-        // 前缀为空：`Path::join("")` 会带一个尾部斜杠
+        // 前缀为空：`Path::join("")` 会带一个尾部分隔符
         assert_eq!(
             layer_name(0, dir, &layer("ignored", "")),
-            "#0(/var/log/app/*log)"
+            format!("#0({}*log)", path(""))
         );
         // 后缀为空：星号后面没有内容
         let mut no_suffix = layer("ignored", "app");
         no_suffix.filename_suffix = String::new();
-        assert_eq!(layer_name(1, dir, &no_suffix), "#1(/var/log/app/app*)");
+        assert_eq!(layer_name(1, dir, &no_suffix), format!("#1({}*)", path("app")));
     }
 
     #[test]

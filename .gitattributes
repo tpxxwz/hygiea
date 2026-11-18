@@ -1,0 +1,3 @@
+# 检出时统一用 LF：include_str! 读进来的 SQL 按换行拆语句、生成的 README 段落按 LF 比对，
+# Windows 上开了 core.autocrlf 也不转成 CRLF
+* text=auto eol=lf

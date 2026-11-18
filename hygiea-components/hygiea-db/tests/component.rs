@@ -168,13 +168,13 @@ poll_interval_secs = 1
 
 # SQLite 本地缓存库：只当业务池
 [db.cache.connect]
-database = "{cache}"
+database = '{cache}'
 
 # SQLite 本地配置（SeaORM）：只给动态配置用
 [db.local]
 uses = 2
 [db.local.connect]
-database = "{local}"
+database = '{local}'
 "#
         )
     }
