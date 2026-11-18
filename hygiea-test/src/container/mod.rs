@@ -161,6 +161,9 @@ impl ContainerSpec {
             .await
             .unwrap_or_else(|e| panic!("container {name} host: {e}"))
             .to_string();
+        // 端口取的是 IPv4 的映射（get_host_port_ipv4），容器只绑在 0.0.0.0 上。`localhost` 会先解析成 ::1，
+        // Windows 上连被拒的地址要重试约 2 秒才换下一个地址，每条连接都慢 2 秒，所以直接给 IPv4 地址
+        let host = if host == "localhost" { "127.0.0.1".to_string() } else { host };
         let mut ports = HashMap::new();
         for port in self.ports {
             let mapped = container
@@ -195,7 +198,8 @@ pub struct ExecOutput {
 }
 
 impl RunningContainer {
-    /// 从宿主机访问容器用的主机名，一般是 `localhost`
+    /// 从宿主机访问容器用的主机名。本机 Docker 是 `127.0.0.1`（不给 `localhost`：映射的端口只在 IPv4 上），
+    /// 远程 Docker 是它的主机名
     pub fn host(&self) -> &str {
         &self.host
     }

@@ -3,7 +3,7 @@
 //!
 //! ```ignore
 //! let pg = PostgresSpec::new().start().await;                  // postgres:18.6，用户、库都是 postgres，密码随机
-//! let url = pg.url();                                          // postgres://postgres:..@localhost:<端口>/postgres
+//! let url = pg.url();                                          // postgres://postgres:..@127.0.0.1:<端口>/postgres
 //!
 //! let pg = PostgresSpec::new()
 //!     .tag("17.11")
